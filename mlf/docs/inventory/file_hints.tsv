@@ -1,0 +1,28 @@
+script	writes_or_mentions
+inventory_dependency_map.py	raw/[^\s\
+inventory_dependency_map.py	raw/curated)
+inventory_dependency_map.py	curated/[^\s\
+inventory_dependency_map.py	[write_text/write_bytes used]
+inventory_repo_tree.py	curated/postgres/pgdata
+inventory_repo_tree.py	[write_text/write_bytes used]
+inventory_scripts.py	[write_text/write_bytes used]
+load_roster_players_to_postgres.py	raw/yahoo/team_458_l_11506_t_1_roster.json
+load_yahoo_transactions.py	raw/yahoo/league_{}_transactions_types_drop_start*_count25.json
+load_yahoo_transactions.py	raw/yahoo/league_{}_transactions_types_add_drop_trade_start*_count25.json
+load_yahoo_transactions.py	raw/yahoo/league_{}_transactions_types_drop_start*_count25.json
+yahoo_game_leagues.py	raw/yahoo/
+yahoo_game_leagues.py	[write_text/write_bytes used]
+yahoo_league_settings.py	raw/yahoo/
+yahoo_league_settings.py	[write_text/write_bytes used]
+yahoo_league_teams.py	raw/yahoo/
+yahoo_league_teams.py	[write_text/write_bytes used]
+yahoo_league_transactions.py	raw/yahoo/
+yahoo_league_transactions.py	[write_text/write_bytes used]
+yahoo_league_transactions_snapshot_full_season.py	raw/yahoo
+yahoo_league_transactions_snapshot_full_season.py	[write_text/write_bytes used]
+yahoo_league_transactions_snapshot_full_season_drop.py	raw/yahoo
+yahoo_league_transactions_snapshot_full_season_drop.py	[write_text/write_bytes used]
+yahoo_team_roster.py	raw/yahoo/
+yahoo_team_roster.py	[write_text/write_bytes used]
+yahoo_users_games.py	raw/yahoo/
+yahoo_users_games.py	[write_text/write_bytes used]

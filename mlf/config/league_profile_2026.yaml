@@ -1,0 +1,71 @@
+league:
+  league_key: "469.l.41640"
+  name: "Major League Fantasy"
+  platform: "yahoo"
+  sport: "baseball"
+  season_year: 2026
+  manager_count: 16
+
+draft:
+  type: "standard"
+  order_mode: "straight"
+  mode: "offline"
+  rounds_total: 25
+  pick_trades_allowed: true
+
+scoring:
+  format: "h2h_categories"
+
+features:
+  keeper: true
+  keeper_type: "contract"
+  keepers_count: 4
+  contract_lengths: [5, 4, 3, 2]
+  contracts: true
+  qualifying_offers: true
+  franchise_tags: true
+  prospect_tags: true
+  commissioner_tools: true
+
+roster:
+  positions:
+    - C
+    - 1B
+    - 2B
+    - 3B
+    - SS
+    - OF
+    - OF
+    - OF
+    - Util
+    - SP
+    - SP
+    - SP
+    - RP
+    - RP
+    - RP
+    - P
+    - P
+    - P
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - IL
+    - IL
+    - IL
+    - IL
+    - IL
+    - NA
+    - NA
+
+categories:
+  batting: [R, HR, RBI, SB, BB, K, AVG]
+  pitching: [W, K, TB, ERA, WHIP, QS, SV+H]
+
+runtime:
+  db_scope_mode: "league_key"
+  unsupported_options_fail_startup: true

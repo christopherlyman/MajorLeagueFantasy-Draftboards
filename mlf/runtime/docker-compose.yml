@@ -1,0 +1,77 @@
+name: mlf
+services:
+  postgres:
+    image: postgres:16
+    container_name: mlf_postgres
+    environment:
+      POSTGRES_USER: mlf
+      POSTGRES_PASSWORD: Buccan33rs
+      POSTGRES_DB: mlf
+    volumes:
+      - /Volume1/Bots/fantasy/mlf/runtime/postgres/pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+  draftboard:
+    image: mlf_tools:latest
+    container_name: mlf_draftboard
+    env_file:
+      - /Volume1/Bots/fantasy/mlf/.env
+    environment:
+      PYTHONPATH: /app/app/src
+    working_dir: /app
+    command:
+      - streamlit
+      - run
+      - app/app.py
+      - --server.address
+      - 0.0.0.0
+      - --server.port
+      - "8501"
+    ports:
+      - "8501:8501"
+    volumes:
+      - /Volume1/Bots/fantasy/mlf:/app
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+  auth_bridge:
+    image: mlf_tools:latest
+    container_name: mlf_auth_bridge
+    env_file:
+      - /Volume1/Bots/fantasy/mlf/.env
+    working_dir: /app
+    command:
+      - python
+      - /shared/runtime/auth_bridge.py
+    volumes:
+      - /Volume1/Bots/fantasy/mlf:/app
+      - /Volume1/Bots/fantasy/shared:/shared:ro
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+  caddy:
+    image: caddy:2
+    container_name: mlf_caddy
+    depends_on:
+      - draftboard
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - /Volume1/Bots/fantasy/mlf/runtime/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /Volume1/Bots/fantasy/mlf/runtime/caddy_data:/data
+      - /Volume1/Bots/fantasy/mlf/runtime/caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+networks:
+  mlf_net:
+    external: true
+    name: mlf_net

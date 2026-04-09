@@ -1,0 +1,31 @@
+name: milf
+services:
+  draftboard:
+    image: mlf_tools:latest
+    container_name: milf_draftboard
+    env_file:
+      - /Volume1/Bots/fantasy/milf/.env
+    environment:
+      PYTHONPATH: /app/app/src
+    working_dir: /app
+    command:
+      - streamlit
+      - run
+      - app/app.py
+      - --server.address
+      - 0.0.0.0
+      - --server.port
+      - "8501"
+    ports:
+      - "8502:8501"
+    volumes:
+      - /Volume1/Bots/fantasy/shared:/app
+      - /Volume1/Bots/fantasy/milf:/league_runtime
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
+networks:
+  mlf_net:
+    external: true
+    name: mlf_net

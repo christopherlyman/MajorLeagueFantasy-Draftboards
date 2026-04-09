@@ -1,0 +1,68 @@
+# secrets / env
+**/.env
+**/.env.*
+!.env.example
+
+# python / local runtime
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+
+# local editors / OS
+**/.DS_Store
+**/Thumbs.db
+**/.vscode/
+**/.idea/
+
+# runtime/generated state
+**/outputs/**
+**/reset_outputs/**
+**/autosave*.json
+**/*autosave*
+**/tmp/**
+**/logs/**
+
+# large/raw/environment-specific data
+**/data/raw/yahoo/**
+**/raw/yahoo/**
+**/*.sqlite
+**/*.db
+
+# backup sediment
+**/backups/**
+**/*.bak*
+
+# operational password/reset artifacts
+**/*temp_password*.csv
+**/*temp-password*.csv
+**/reset_passwords_*.csv
+**/reset_passwords_*.txt
+**/reset_passwords_*.sql
+
+# auth/session/cookies/secrets
+**/*cookie*
+**/*token*
+**/*secret*
+**/session/**
+
+# live runtime state / secrets
+**/runtime/caddy_data/**
+**/runtime/postgres/pgdata/**
+
+# local working artifacts / unverified config
+**/*.UNVERIFIED.yaml
+**/tmp_*.py
+
+# private operational targeting artifacts
+**/reset_targets_*.txt
+
+# private raw contract source snapshots
+mlf/data/raw/contracts/**
+
+# archived docs may contain private historical content
+mlf/docs/archive/**
+
+# live caddy config contains operator email; keep out of repo
+mlf/runtime/Caddyfile

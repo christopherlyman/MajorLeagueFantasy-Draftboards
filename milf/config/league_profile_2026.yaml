@@ -1,0 +1,68 @@
+league:
+  league_key: "469.l.60688"
+  name: "MiLF - AAA"
+  platform: "yahoo"
+  sport: "baseball"
+  season_year: 2026
+  manager_count: 16
+
+draft:
+  type: "standard"
+  order_mode: "snake"
+  mode: "offline"
+  rounds_total: 25
+  pick_trades_allowed: true
+
+scoring:
+  format: "h2h_categories"
+
+features:
+  keeper: false
+  contracts: false
+  qualifying_offers: false
+  franchise_tags: false
+  prospect_tags: false
+  commissioner_tools: true
+
+roster:
+  positions:
+    - C
+    - 1B
+    - 2B
+    - 3B
+    - SS
+    - OF
+    - OF
+    - OF
+    - Util
+    - SP
+    - SP
+    - SP
+    - RP
+    - RP
+    - RP
+    - P
+    - P
+    - P
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - BN
+    - IL
+    - IL
+    - IL
+    - IL
+    - IL
+    - NA
+    - NA
+
+categories:
+  batting: [R, HR, RBI, SB, BB, K, AVG]
+  pitching: [W, K, TB, ERA, WHIP, QS, SV+H]
+
+runtime:
+  db_scope_mode: "league_key"
+  unsupported_options_fail_startup: true

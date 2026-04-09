@@ -1,0 +1,351 @@
+path	type	size_bytes
+.	DIR	
+.env	FILE	268
+Dockerfile	FILE	309
+create_env.sh	FILE	416
+mlf_ingest_contracts.yml	FILE	648
+mlf_ingest_debug.yml	FILE	919
+requirements.txt	FILE	40
+curated	DIR	
+curated/docker-compose.yml	FILE	347
+curated/inventory	DIR	
+curated/postgres	DIR	
+curated/postgres/mlf_postgres.yml	FILE	345
+curated/postgres/pgdata	DIR	
+curated/postgres/pgdata/PG_VERSION	FILE	3
+curated/postgres/pgdata/pg_hba.conf	FILE	5743
+curated/postgres/pgdata/pg_ident.conf	FILE	2640
+curated/postgres/pgdata/postgresql.auto.conf	FILE	88
+curated/postgres/pgdata/postgresql.conf	FILE	29762
+curated/postgres/pgdata/postmaster.opts	FILE	36
+curated/postgres/pgdata/postmaster.pid	FILE	94
+curated/postgres/pgdata/base	DIR	
+curated/postgres/pgdata/global	DIR	
+curated/postgres/pgdata/global/1213	FILE	8192
+curated/postgres/pgdata/global/1213_fsm	FILE	24576
+curated/postgres/pgdata/global/1213_vm	FILE	8192
+curated/postgres/pgdata/global/1214	FILE	0
+curated/postgres/pgdata/global/1232	FILE	8192
+curated/postgres/pgdata/global/1233	FILE	8192
+curated/postgres/pgdata/global/1260	FILE	8192
+curated/postgres/pgdata/global/1260_fsm	FILE	24576
+curated/postgres/pgdata/global/1260_vm	FILE	8192
+curated/postgres/pgdata/global/1261	FILE	8192
+curated/postgres/pgdata/global/1261_fsm	FILE	24576
+curated/postgres/pgdata/global/1261_vm	FILE	8192
+curated/postgres/pgdata/global/1262	FILE	8192
+curated/postgres/pgdata/global/1262_fsm	FILE	24576
+curated/postgres/pgdata/global/1262_vm	FILE	8192
+curated/postgres/pgdata/global/2396	FILE	8192
+curated/postgres/pgdata/global/2396_fsm	FILE	24576
+curated/postgres/pgdata/global/2396_vm	FILE	8192
+curated/postgres/pgdata/global/2397	FILE	16384
+curated/postgres/pgdata/global/2671	FILE	16384
+curated/postgres/pgdata/global/2672	FILE	16384
+curated/postgres/pgdata/global/2676	FILE	16384
+curated/postgres/pgdata/global/2677	FILE	16384
+curated/postgres/pgdata/global/2694	FILE	16384
+curated/postgres/pgdata/global/2695	FILE	16384
+curated/postgres/pgdata/global/2697	FILE	16384
+curated/postgres/pgdata/global/2698	FILE	16384
+curated/postgres/pgdata/global/2846	FILE	0
+curated/postgres/pgdata/global/2847	FILE	8192
+curated/postgres/pgdata/global/2964	FILE	0
+curated/postgres/pgdata/global/2965	FILE	8192
+curated/postgres/pgdata/global/2966	FILE	0
+curated/postgres/pgdata/global/2967	FILE	8192
+curated/postgres/pgdata/global/3592	FILE	0
+curated/postgres/pgdata/global/3593	FILE	8192
+curated/postgres/pgdata/global/4060	FILE	0
+curated/postgres/pgdata/global/4061	FILE	8192
+curated/postgres/pgdata/global/4175	FILE	0
+curated/postgres/pgdata/global/4176	FILE	8192
+curated/postgres/pgdata/global/4177	FILE	0
+curated/postgres/pgdata/global/4178	FILE	8192
+curated/postgres/pgdata/global/4181	FILE	0
+curated/postgres/pgdata/global/4182	FILE	8192
+curated/postgres/pgdata/global/4183	FILE	0
+curated/postgres/pgdata/global/4184	FILE	8192
+curated/postgres/pgdata/global/4185	FILE	0
+curated/postgres/pgdata/global/4186	FILE	8192
+curated/postgres/pgdata/global/6000	FILE	0
+curated/postgres/pgdata/global/6001	FILE	8192
+curated/postgres/pgdata/global/6002	FILE	8192
+curated/postgres/pgdata/global/6100	FILE	0
+curated/postgres/pgdata/global/6114	FILE	8192
+curated/postgres/pgdata/global/6115	FILE	8192
+curated/postgres/pgdata/global/6243	FILE	0
+curated/postgres/pgdata/global/6244	FILE	0
+curated/postgres/pgdata/global/6245	FILE	8192
+curated/postgres/pgdata/global/6246	FILE	8192
+curated/postgres/pgdata/global/6247	FILE	8192
+curated/postgres/pgdata/global/6302	FILE	16384
+curated/postgres/pgdata/global/6303	FILE	16384
+curated/postgres/pgdata/global/pg_control	FILE	8192
+curated/postgres/pgdata/global/pg_filenode.map	FILE	524
+curated/postgres/pgdata/global/pg_internal.init	FILE	28676
+curated/postgres/pgdata/pg_commit_ts	DIR	
+curated/postgres/pgdata/pg_dynshmem	DIR	
+curated/postgres/pgdata/pg_logical	DIR	
+curated/postgres/pgdata/pg_logical/replorigin_checkpoint	FILE	8
+curated/postgres/pgdata/pg_multixact	DIR	
+curated/postgres/pgdata/pg_notify	DIR	
+curated/postgres/pgdata/pg_replslot	DIR	
+curated/postgres/pgdata/pg_serial	DIR	
+curated/postgres/pgdata/pg_snapshots	DIR	
+curated/postgres/pgdata/pg_stat	DIR	
+curated/postgres/pgdata/pg_stat_tmp	DIR	
+curated/postgres/pgdata/pg_subtrans	DIR	
+curated/postgres/pgdata/pg_subtrans/0000	FILE	8192
+curated/postgres/pgdata/pg_tblspc	DIR	
+curated/postgres/pgdata/pg_twophase	DIR	
+curated/postgres/pgdata/pg_wal	DIR	
+curated/postgres/pgdata/pg_wal/000000010000000000000001	FILE	16777216
+curated/postgres/pgdata/pg_wal/000000010000000000000002	FILE	16777216
+curated/postgres/pgdata/pg_xact	DIR	
+curated/postgres/pgdata/pg_xact/0000	FILE	8192
+raw	DIR	
+raw/contracts	DIR	
+raw/contracts/2026-02-02__post-renewal	DIR	
+raw/contracts/2026-02-02__post-renewal/All contracts.csv	FILE	4557
+raw/contracts/2026-02-02__post-renewal/Brent.csv	FILE	2866
+raw/contracts/2026-02-02__post-renewal/Chris L.csv	FILE	1909
+raw/contracts/2026-02-02__post-renewal/Cole.csv	FILE	1903
+raw/contracts/2026-02-02__post-renewal/Color key.csv	FILE	65
+raw/contracts/2026-02-02__post-renewal/Contracts 2024.csv	FILE	1247
+raw/contracts/2026-02-02__post-renewal/Contracts 2025.csv	FILE	7929
+raw/contracts/2026-02-02__post-renewal/Dearns.csv	FILE	2000
+raw/contracts/2026-02-02__post-renewal/Draft 2024.csv	FILE	34908
+raw/contracts/2026-02-02__post-renewal/Draft 2025.csv	FILE	40554
+raw/contracts/2026-02-02__post-renewal/Draft 2026.csv	FILE	24886
+raw/contracts/2026-02-02__post-renewal/Home.csv	FILE	1448
+raw/contracts/2026-02-02__post-renewal/James.csv	FILE	1817
+raw/contracts/2026-02-02__post-renewal/Justin C.csv	FILE	1905
+raw/contracts/2026-02-02__post-renewal/Justin S.csv	FILE	1885
+raw/contracts/2026-02-02__post-renewal/Justin V.csv	FILE	1979
+raw/contracts/2026-02-02__post-renewal/Keepers 2025.csv	FILE	3033
+raw/contracts/2026-02-02__post-renewal/Managers.csv	FILE	2144
+raw/contracts/2026-02-02__post-renewal/Nate.csv	FILE	2007
+raw/contracts/2026-02-02__post-renewal/Nico.csv	FILE	1834
+raw/contracts/2026-02-02__post-renewal/Past rule votes.csv	FILE	3593
+raw/contracts/2026-02-02__post-renewal/Proposed Schedule.csv	FILE	7925
+raw/contracts/2026-02-02__post-renewal/Proposed rule votes.csv	FILE	300
+raw/contracts/2026-02-02__post-renewal/QOs 2024.csv	FILE	3270
+raw/contracts/2026-02-02__post-renewal/QOs 2025.csv	FILE	3145
+raw/contracts/2026-02-02__post-renewal/Sean.csv	FILE	1895
+raw/contracts/2026-02-02__post-renewal/Stephen.csv	FILE	1948
+raw/contracts/2026-02-02__post-renewal/TBD.csv	FILE	1867
+raw/contracts/2026-02-02__post-renewal/Victor.csv	FILE	1840
+raw/contracts/2026-02-02__post-renewal/Waite.csv	FILE	1882
+raw/contracts/2026-02-02__post-renewal/Zac.csv	FILE	1913
+raw/contracts/2026-02-02__post-renewal/_Contracts 2026.csv	FILE	7910
+raw/contracts/2026-02-02__post-renewal/_QOs 2026.csv	FILE	997
+raw/contracts/2026-02-02__post-renewal/_player_eligibilities_import.csv	FILE	71240
+raw/yahoo	DIR	
+raw/yahoo/game_458_leagues.json	FILE	7483
+raw/yahoo/game_469_leagues.json	FILE	5029
+raw/yahoo/league_458_l_11506_teams.json	FILE	39700
+raw/yahoo/league_458_l_11506_transactions_start0_count25.json	FILE	74434
+raw/yahoo/league_458_l_11506_transactions_start1000_count25.json	FILE	74131
+raw/yahoo/league_458_l_11506_transactions_start100_count25.json	FILE	66935
+raw/yahoo/league_458_l_11506_transactions_start1025_count25.json	FILE	71476
+raw/yahoo/league_458_l_11506_transactions_start1050_count25.json	FILE	65653
+raw/yahoo/league_458_l_11506_transactions_start1075_count25.json	FILE	77234
+raw/yahoo/league_458_l_11506_transactions_start1100_count25.json	FILE	68716
+raw/yahoo/league_458_l_11506_transactions_start1125_count25.json	FILE	57350
+raw/yahoo/league_458_l_11506_transactions_start1150_count25.json	FILE	64451
+raw/yahoo/league_458_l_11506_transactions_start1175_count25.json	FILE	63910
+raw/yahoo/league_458_l_11506_transactions_start1200_count25.json	FILE	54175
+raw/yahoo/league_458_l_11506_transactions_start1225_count25.json	FILE	46604
+raw/yahoo/league_458_l_11506_transactions_start1250_count25.json	FILE	48627
+raw/yahoo/league_458_l_11506_transactions_start125_count25.json	FILE	69834
+raw/yahoo/league_458_l_11506_transactions_start1275_count25.json	FILE	50180
+raw/yahoo/league_458_l_11506_transactions_start1300_count25.json	FILE	50144
+raw/yahoo/league_458_l_11506_transactions_start1325_count25.json	FILE	50165
+raw/yahoo/league_458_l_11506_transactions_start1350_count25.json	FILE	50190
+raw/yahoo/league_458_l_11506_transactions_start1375_count25.json	FILE	50096
+raw/yahoo/league_458_l_11506_transactions_start1400_count25.json	FILE	51977
+raw/yahoo/league_458_l_11506_transactions_start1425_count25.json	FILE	55267
+raw/yahoo/league_458_l_11506_transactions_start1450_count25.json	FILE	49993
+raw/yahoo/league_458_l_11506_transactions_start1475_count25.json	FILE	38834
+raw/yahoo/league_458_l_11506_transactions_start150_count25.json	FILE	62297
+raw/yahoo/league_458_l_11506_transactions_start175_count25.json	FILE	62567
+raw/yahoo/league_458_l_11506_transactions_start200_count25.json	FILE	66837
+raw/yahoo/league_458_l_11506_transactions_start225_count25.json	FILE	63962
+raw/yahoo/league_458_l_11506_transactions_start250_count25.json	FILE	81663
+raw/yahoo/league_458_l_11506_transactions_start25_count25.json	FILE	77231
+raw/yahoo/league_458_l_11506_transactions_start275_count25.json	FILE	69796
+raw/yahoo/league_458_l_11506_transactions_start300_count25.json	FILE	75661
+raw/yahoo/league_458_l_11506_transactions_start325_count25.json	FILE	65618
+raw/yahoo/league_458_l_11506_transactions_start350_count25.json	FILE	75749
+raw/yahoo/league_458_l_11506_transactions_start375_count25.json	FILE	69835
+raw/yahoo/league_458_l_11506_transactions_start400_count25.json	FILE	68346
+raw/yahoo/league_458_l_11506_transactions_start425_count25.json	FILE	69798
+raw/yahoo/league_458_l_11506_transactions_start450_count25.json	FILE	69547
+raw/yahoo/league_458_l_11506_transactions_start475_count25.json	FILE	69900
+raw/yahoo/league_458_l_11506_transactions_start500_count25.json	FILE	71191
+raw/yahoo/league_458_l_11506_transactions_start50_count25.json	FILE	74067
+raw/yahoo/league_458_l_11506_transactions_start525_count25.json	FILE	68398
+raw/yahoo/league_458_l_11506_transactions_start550_count25.json	FILE	71272
+raw/yahoo/league_458_l_11506_transactions_start575_count25.json	FILE	74173
+raw/yahoo/league_458_l_11506_transactions_start600_count25.json	FILE	61222
+raw/yahoo/league_458_l_11506_transactions_start625_count25.json	FILE	68330
+raw/yahoo/league_458_l_11506_transactions_start650_count25.json	FILE	71146
+raw/yahoo/league_458_l_11506_transactions_start675_count25.json	FILE	62486
+raw/yahoo/league_458_l_11506_transactions_start700_count25.json	FILE	63792
+raw/yahoo/league_458_l_11506_transactions_start725_count25.json	FILE	63941
+raw/yahoo/league_458_l_11506_transactions_start750_count25.json	FILE	66977
+raw/yahoo/league_458_l_11506_transactions_start75_count25.json	FILE	65449
+raw/yahoo/league_458_l_11506_transactions_start775_count25.json	FILE	69846
+raw/yahoo/league_458_l_11506_transactions_start800_count25.json	FILE	63832
+raw/yahoo/league_458_l_11506_transactions_start825_count25.json	FILE	68624
+raw/yahoo/league_458_l_11506_transactions_start850_count25.json	FILE	75807
+raw/yahoo/league_458_l_11506_transactions_start875_count25.json	FILE	67114
+raw/yahoo/league_458_l_11506_transactions_start900_count25.json	FILE	63994
+raw/yahoo/league_458_l_11506_transactions_start925_count25.json	FILE	71347
+raw/yahoo/league_458_l_11506_transactions_start950_count25.json	FILE	62526
+raw/yahoo/league_458_l_11506_transactions_start975_count25.json	FILE	72882
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start0_count25.json	FILE	74455
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1000_count25.json	FILE	74152
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start100_count25.json	FILE	66956
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1025_count25.json	FILE	71497
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1050_count25.json	FILE	65674
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1075_count25.json	FILE	77254
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1100_count25.json	FILE	68737
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1125_count25.json	FILE	57371
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1150_count25.json	FILE	64471
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1175_count25.json	FILE	67029
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1200_count25.json	FILE	57377
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1225_count25.json	FILE	50126
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1250_count25.json	FILE	50183
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start125_count25.json	FILE	69855
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1275_count25.json	FILE	50158
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1300_count25.json	FILE	50180
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1325_count25.json	FILE	50224
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1350_count25.json	FILE	50155
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1375_count25.json	FILE	50123
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1400_count25.json	FILE	57201
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1425_count25.json	FILE	50107
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1450_count25.json	FILE	50048
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start1475_count25.json	FILE	24961
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start150_count25.json	FILE	62318
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start175_count25.json	FILE	62588
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start200_count25.json	FILE	66858
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start225_count25.json	FILE	63983
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start250_count25.json	FILE	81684
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start25_count25.json	FILE	77252
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start275_count25.json	FILE	69817
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start300_count25.json	FILE	75682
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start325_count25.json	FILE	65639
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start350_count25.json	FILE	75770
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start375_count25.json	FILE	69856
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start400_count25.json	FILE	68367
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start425_count25.json	FILE	69819
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start450_count25.json	FILE	69568
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start475_count25.json	FILE	69921
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start500_count25.json	FILE	71213
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start50_count25.json	FILE	74088
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start525_count25.json	FILE	68419
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start550_count25.json	FILE	71292
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start575_count25.json	FILE	74194
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start600_count25.json	FILE	61243
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start625_count25.json	FILE	68351
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start650_count25.json	FILE	71168
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start675_count25.json	FILE	62507
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start700_count25.json	FILE	63813
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start725_count25.json	FILE	63962
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start750_count25.json	FILE	66998
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start75_count25.json	FILE	65470
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start775_count25.json	FILE	69867
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start800_count25.json	FILE	63853
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start825_count25.json	FILE	68644
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start850_count25.json	FILE	75828
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start875_count25.json	FILE	67135
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start900_count25.json	FILE	64015
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start925_count25.json	FILE	71368
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start950_count25.json	FILE	62547
+raw/yahoo/league_458_l_11506_transactions_types_add_drop_trade_start975_count25.json	FILE	72903
+raw/yahoo/league_458_l_11506_transactions_types_drop_start0_count25.json	FILE	74445
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1000_count25.json	FILE	74141
+raw/yahoo/league_458_l_11506_transactions_types_drop_start100_count25.json	FILE	66946
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1025_count25.json	FILE	71487
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1050_count25.json	FILE	65664
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1075_count25.json	FILE	77245
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1100_count25.json	FILE	68727
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1125_count25.json	FILE	57361
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1150_count25.json	FILE	64462
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1175_count25.json	FILE	67019
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1200_count25.json	FILE	57367
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1225_count25.json	FILE	50116
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1250_count25.json	FILE	50173
+raw/yahoo/league_458_l_11506_transactions_types_drop_start125_count25.json	FILE	69845
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1275_count25.json	FILE	50148
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1300_count25.json	FILE	50171
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1325_count25.json	FILE	50214
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1350_count25.json	FILE	50145
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1375_count25.json	FILE	50113
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1400_count25.json	FILE	49969
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1425_count25.json	FILE	50097
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1450_count25.json	FILE	50025
+raw/yahoo/league_458_l_11506_transactions_types_drop_start1475_count25.json	FILE	21103
+raw/yahoo/league_458_l_11506_transactions_types_drop_start150_count25.json	FILE	62308
+raw/yahoo/league_458_l_11506_transactions_types_drop_start175_count25.json	FILE	62578
+raw/yahoo/league_458_l_11506_transactions_types_drop_start200_count25.json	FILE	66848
+raw/yahoo/league_458_l_11506_transactions_types_drop_start225_count25.json	FILE	63973
+raw/yahoo/league_458_l_11506_transactions_types_drop_start250_count25.json	FILE	81674
+raw/yahoo/league_458_l_11506_transactions_types_drop_start25_count25.json	FILE	77242
+raw/yahoo/league_458_l_11506_transactions_types_drop_start275_count25.json	FILE	69806
+raw/yahoo/league_458_l_11506_transactions_types_drop_start300_count25.json	FILE	75672
+raw/yahoo/league_458_l_11506_transactions_types_drop_start325_count25.json	FILE	65629
+raw/yahoo/league_458_l_11506_transactions_types_drop_start350_count25.json	FILE	75759
+raw/yahoo/league_458_l_11506_transactions_types_drop_start375_count25.json	FILE	69845
+raw/yahoo/league_458_l_11506_transactions_types_drop_start400_count25.json	FILE	68357
+raw/yahoo/league_458_l_11506_transactions_types_drop_start425_count25.json	FILE	69808
+raw/yahoo/league_458_l_11506_transactions_types_drop_start450_count25.json	FILE	69558
+raw/yahoo/league_458_l_11506_transactions_types_drop_start475_count25.json	FILE	69911
+raw/yahoo/league_458_l_11506_transactions_types_drop_start500_count25.json	FILE	71203
+raw/yahoo/league_458_l_11506_transactions_types_drop_start50_count25.json	FILE	74077
+raw/yahoo/league_458_l_11506_transactions_types_drop_start525_count25.json	FILE	68409
+raw/yahoo/league_458_l_11506_transactions_types_drop_start550_count25.json	FILE	71283
+raw/yahoo/league_458_l_11506_transactions_types_drop_start575_count25.json	FILE	74184
+raw/yahoo/league_458_l_11506_transactions_types_drop_start600_count25.json	FILE	61233
+raw/yahoo/league_458_l_11506_transactions_types_drop_start625_count25.json	FILE	68341
+raw/yahoo/league_458_l_11506_transactions_types_drop_start650_count25.json	FILE	71158
+raw/yahoo/league_458_l_11506_transactions_types_drop_start675_count25.json	FILE	62497
+raw/yahoo/league_458_l_11506_transactions_types_drop_start700_count25.json	FILE	63801
+raw/yahoo/league_458_l_11506_transactions_types_drop_start725_count25.json	FILE	63952
+raw/yahoo/league_458_l_11506_transactions_types_drop_start750_count25.json	FILE	66988
+raw/yahoo/league_458_l_11506_transactions_types_drop_start75_count25.json	FILE	65459
+raw/yahoo/league_458_l_11506_transactions_types_drop_start775_count25.json	FILE	69857
+raw/yahoo/league_458_l_11506_transactions_types_drop_start800_count25.json	FILE	63843
+raw/yahoo/league_458_l_11506_transactions_types_drop_start825_count25.json	FILE	68635
+raw/yahoo/league_458_l_11506_transactions_types_drop_start850_count25.json	FILE	75818
+raw/yahoo/league_458_l_11506_transactions_types_drop_start875_count25.json	FILE	67124
+raw/yahoo/league_458_l_11506_transactions_types_drop_start900_count25.json	FILE	64005
+raw/yahoo/league_458_l_11506_transactions_types_drop_start925_count25.json	FILE	71358
+raw/yahoo/league_458_l_11506_transactions_types_drop_start950_count25.json	FILE	62537
+raw/yahoo/league_458_l_11506_transactions_types_drop_start975_count25.json	FILE	72893
+raw/yahoo/league_469_l_41640_settings.json	FILE	18400
+raw/yahoo/league_469_l_41640_teams.json	FILE	39105
+raw/yahoo/team_458_l_11506_t_1_roster.json	FILE	124691
+raw/yahoo/team_469_l_41640_t_1_roster.json	FILE	2475
+raw/yahoo/users_games.json	FILE	41019
+scripts	DIR	
+scripts/auth.py	FILE	3352
+scripts/ingest_contracts_snapshot.py	FILE	9038
+scripts/inventory_repo_tree.py	FILE	1750
+scripts/load_roster_players_to_postgres.py	FILE	2740
+scripts/load_yahoo_transactions.py	FILE	5201
+scripts/reconcile_contract_names.py	FILE	3468
+scripts/reconcile_contract_names_local.py	FILE	3614
+scripts/reconcile_contract_ownership.py	FILE	11074
+scripts/yahoo_game_leagues.py	FILE	906
+scripts/yahoo_league_settings.py	FILE	782
+scripts/yahoo_league_teams.py	FILE	930
+scripts/yahoo_league_transactions.py	FILE	1164
+scripts/yahoo_league_transactions_snapshot_full_season.py	FILE	1666
+scripts/yahoo_league_transactions_snapshot_full_season_drop.py	FILE	1515
+scripts/yahoo_team_roster.py	FILE	901
+scripts/yahoo_users_games.py	FILE	755
+sql	DIR	
+sql/01_schema.sql	FILE	2442
