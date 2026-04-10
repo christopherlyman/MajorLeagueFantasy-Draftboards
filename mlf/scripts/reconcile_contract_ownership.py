@@ -72,18 +72,30 @@ def main():
                 ON contract_reconcile (league_key, season_year, needs_review, contract_voided);
             """)
 
-            # Contract base for the season (per sheet) + authoritative team_key already attached
+            # Contract base for the season from raw/parsed contract sheet data + authoritative team mapping
             cur.execute("""
                 SELECT
-                  player_name,
-                  sheet_owner_name,
-                  team_key,
-                  years_remaining,
-                  COALESCE(raw_value, '') AS raw_value
-                FROM v_contracts_2025_with_team_key
-                WHERE snapshot_id = %s
-                  AND season_year = %s
-            """, (snapshot_id, season_year))
+                  r.player_name,
+                  r.owner_name AS sheet_owner_name,
+                  m.team_key,
+                  p.years_remaining,
+                  COALESCE(r.raw_value, '') AS raw_value
+                FROM contracts_cell_raw r
+                JOIN contracts_cell_parsed p
+                  ON p.snapshot_id = r.snapshot_id
+                 AND p.owner_name = r.owner_name
+                 AND p.sheet_name = r.sheet_name
+                 AND p.player_name = r.player_name
+                 AND p.season_year = r.season_year
+                JOIN yahoo_team_map m
+                  ON m.league_key = %s
+                 AND m.season_year = r.season_year
+                 AND m.owner_name = r.owner_name
+                WHERE r.snapshot_id = %s
+                  AND r.season_year = %s
+                  AND r.raw_value IS NOT NULL
+                  AND btrim(r.raw_value) <> ''
+            """, (league_key, snapshot_id, season_year))
             base_rows = cur.fetchall()
 
             # Load all events once
