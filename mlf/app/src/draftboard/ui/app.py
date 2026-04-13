@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 import os
 import hmac
@@ -147,25 +148,93 @@ def _load_predraft_qo_player_maps_canonical(
     return predraft_qo_keys, predraft_qo_level_by_player, predraft_qo_team_by_player
 
 
-def _compute_current_qos_from_log(predraft: dict[str, dict[int, str]], pick_log: list) -> dict[str, dict[int, str]]:
-    """
-    Starting from predraft QOs, remove any player that has already been selected
-    in the real pick log. Returns current effective QOs by team/level.
-    """
-    selected = set()
-    for ev in (pick_log or []):
-        pk = getattr(ev, "player_key", None)
-        if pk:
-            selected.add(str(pk))
+def _shift_qo_levels_up(lvls: dict[int, str], from_level: int) -> None:
+    for lvl in range(int(from_level), 5):
+        next_pk = str((lvls or {}).get(lvl + 1) or "").strip()
+        if next_pk:
+            lvls[int(lvl)] = next_pk
+        else:
+            lvls.pop(int(lvl), None)
+    lvls.pop(5, None)
 
-    out: dict[str, dict[int, str]] = {}
+
+def _remove_player_from_current_qos(current: dict[str, dict[int, str]], player_key: str) -> None:
+    spk = str(player_key or "").strip()
+    if not spk:
+        return
+
+    for team_key, lvls in list((current or {}).items()):
+        hit_level = None
+        for lvl in range(1, 6):
+            if str((lvls or {}).get(lvl) or "").strip() == spk:
+                hit_level = lvl
+                break
+
+        if hit_level is None:
+            continue
+
+        _shift_qo_levels_up(lvls, hit_level)
+
+        if not lvls:
+            current.pop(str(team_key), None)
+        return
+
+
+def _compute_current_qos_from_log(predraft: dict[str, dict[int, str]], pick_log: list) -> dict[str, dict[int, str]]:
+    '''
+    Starting from predraft QOs, replay real QO-round picks (rounds 1-5)
+    in pick_log order to derive current effective QOs by team/level.
+
+    Rules:
+    - each real QO-round pick consumes that pick owner's current slot for that round
+    - if the selected player is another team's current QO, that team's lower QOs shift up
+    - if the selected player is the pick owner's own lower-ranked QO, that lower slot is removed and lower QOs shift up
+    '''
+    current: dict[str, dict[int, str]] = {}
+
     for team_key, lvls in (predraft or {}).items():
+        team_out: dict[int, str] = {}
         for lvl, pkey in (lvls or {}).items():
+            ilvl = int(lvl)
             spk = str(pkey or "").strip()
-            if not spk or spk in selected:
-                continue
-            out.setdefault(str(team_key), {})[int(lvl)] = spk
-    return out
+            if 1 <= ilvl <= 5 and spk:
+                team_out[ilvl] = spk
+        if team_out:
+            current[str(team_key)] = team_out
+
+    for ev in (pick_log or []):
+        pick_id = str(getattr(ev, "pick_id", "") or "").strip()
+        m = re.match(r"^(?:R|QO)(\d+)-", pick_id, flags=re.IGNORECASE)
+        if not m:
+            continue
+        round_number = int(m.group(1))
+
+        if round_number < 1 or round_number > 5:
+            continue
+
+        owner_team_key = str(getattr(ev, "owner_team_key", "") or "").strip()
+        selected_player_key = str(getattr(ev, "player_key", "") or "").strip()
+
+        owner_lvls = current.get(owner_team_key) if owner_team_key else None
+        owner_current_slot_player = ""
+        if owner_lvls is not None:
+            owner_current_slot_player = str(owner_lvls.get(round_number) or "").strip()
+
+        # If the team used this round's slot on its own current-slot QO,
+        # keep that player visible in Current QOs for that slot.
+        if selected_player_key and owner_current_slot_player and selected_player_key == owner_current_slot_player:
+            continue
+
+        if owner_team_key:
+            if owner_lvls is not None:
+                owner_lvls.pop(round_number, None)
+                if not owner_lvls:
+                    current.pop(owner_team_key, None)
+
+        if selected_player_key:
+            _remove_player_from_current_qos(current, selected_player_key)
+
+    return current
 
 
 def _load_predraft_qo_player_maps_raw(dsn: str, league_key: str, season_year: int) -> tuple[set[str], dict[str, int], dict[str, str]]:
@@ -220,6 +289,47 @@ def _sync_qo_placeholders(state: DraftState, predraft: dict[str, dict[int, str]]
         pick.selected_ts_iso = None
 
 
+def _is_standard_keeper_placeholder_pick(pick: PickSlot) -> bool:
+    if pick is None:
+        return False
+    round_number = int(getattr(pick, "round_number", 0) or 0)
+    if round_number <= 5:
+        return False
+    selected_player_key = str(getattr(pick, "selected_player_key", "") or "").strip()
+    selected_ts_iso = getattr(pick, "selected_ts_iso", None)
+    return bool(selected_player_key) and selected_ts_iso is None
+
+
+def _is_pick_open_for_live_draft(pick: PickSlot) -> bool:
+    if pick is None:
+        return False
+    if getattr(pick, "selected_ts_iso", None) is not None:
+        return False
+    if _is_standard_keeper_placeholder_pick(pick):
+        return False
+    return True
+
+
+def _next_open_pick_id(state: DraftState, after_pick_id: str | None = None) -> str:
+    order = list(getattr(state, "pick_order", []) or [])
+    if not order:
+        return ""
+
+    start_idx = -1
+    if after_pick_id:
+        try:
+            start_idx = order.index(after_pick_id)
+        except Exception:
+            start_idx = -1
+
+    for pid in order[start_idx + 1:]:
+        pick = state.picks.get(pid)
+        if _is_pick_open_for_live_draft(pick):
+            return pid
+
+    return ""
+
+
 def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
     pick = state.picks[pick_id]
     ts = datetime.utcnow().isoformat()
@@ -241,9 +351,8 @@ def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str
         )
     )
 
-    idx = state.pick_order.index(pick.pick_id)
-    if idx + 1 < len(state.pick_order):
-        next_pick_id = state.pick_order[idx + 1]
+    next_pick_id = _next_open_pick_id(state, after_pick_id=pick.pick_id)
+    if next_pick_id:
         state.clock.current_pick_id = next_pick_id
 
         if bool(getattr(state.clock, "auto_advance", True)):
@@ -284,6 +393,37 @@ def render_pick_controls(state: DraftState) -> None:
         order=order,
         legacy_to_canon=legacy_to_canon,
     )
+
+    predraft_qos_raw = _load_predraft_qos(dsn, league_key, season_year)
+    predraft_qos_current: dict[str, dict[int, str]] = {}
+    for tk, lvls in (predraft_qos_raw or {}).items():
+        ntk = _canon_team_key_from_mixed_key(str(tk), order=order, legacy_to_canon=legacy_to_canon)
+        if not ntk:
+            continue
+        predraft_qos_current.setdefault(ntk, {})
+        for lvl, pk in (lvls or {}).items():
+            if pk:
+                predraft_qos_current[ntk][int(lvl)] = str(pk)
+
+    current_qos = _compute_current_qos_from_log(predraft_qos_current, state.pick_log)
+
+    current_pick_id = state.clock.current_pick_id
+    current_pick = state.picks[current_pick_id]
+
+    if not _is_pick_open_for_live_draft(current_pick):
+        next_pick_id = _next_open_pick_id(state, after_pick_id=current_pick_id)
+        if next_pick_id:
+            state.clock.current_pick_id = next_pick_id
+            save_autosave(state)
+            st.rerun()
+        else:
+            state.clock.is_running = False
+            state.clock.pick_started_ts_iso = None
+            state.clock.pick_paused_ts_iso = None
+            state.clock.elapsed_paused_seconds = 0
+            save_autosave(state)
+            st.info("Draft complete.")
+            return
 
     current_pick_id = state.clock.current_pick_id
     current_pick = state.picks[current_pick_id]
@@ -383,59 +523,47 @@ def render_pick_controls(state: DraftState) -> None:
                 return
             if chosen_player_key in drafted:
                 st.error("Player already drafted.")
-                return
-
-
-            # ---- QO / POACH / RELEASE LOGIC (pick-driven) ----
+                return            # ---- QO / POACH / RELEASE LOGIC (pick-driven) ----
             pick_kind = "FA"
 
-            # Identify current on-clock round/team
-            cur_pick = state.picks[state.clock.current_pick_id]
-            cur_round = int(cur_pick.round_number)
-            cur_team_key = str(cur_pick.owner_team_key)
+            current_round = int(getattr(current_pick, "round_number", 0) or 0)
+            current_team_key = str(getattr(current_pick, "owner_team_key", "") or "").strip()
 
-            # If chosen player is in predraft QO list, we may need to treat as QO, POACH, or FA (released)
-            if chosen_player_key in predraft_qo_level_by_player:
-                submitter_lvl = int(predraft_qo_level_by_player[chosen_player_key])
-                submitter_team_key = str(predraft_qo_team_by_player.get(chosen_player_key, ""))
+            owner_current_slot_player = str(
+                ((current_qos.get(current_team_key, {}) or {}).get(current_round) or "")
+            ).strip()
 
-                # Find the submitter's original QO slot pick (TEAM + level)
-                submitter_slot = None
-                for ps in state.picks.values():
-                    if int(ps.round_number) == submitter_lvl and str(ps.owner_team_key) == submitter_team_key:
-                        submitter_slot = ps
+            selected_current_qo_team_key = ""
+            selected_current_qo_level = 0
+
+            for tk, lvls in (current_qos or {}).items():
+                for lvl, pk in (lvls or {}).items():
+                    if str(pk or "").strip() == str(chosen_player_key or "").strip():
+                        selected_current_qo_team_key = str(tk)
+                        selected_current_qo_level = int(lvl)
                         break
+                if selected_current_qo_team_key:
+                    break
 
-                # If we can't find the slot, be defensive: treat as reserved (no guessing)
-                if submitter_slot is None:
-                    submitter_nm = state.teams.get(submitter_team_key).name if submitter_team_key in state.teams else submitter_team_key
-                    st.error(f"Cannot resolve submitter slot for this QO player. Reserved for {submitter_nm} at QO{submitter_lvl}.")
-                    return
+            if owner_current_slot_player and str(chosen_player_key or "").strip() == owner_current_slot_player:
+                pick_kind = "QO"
 
-                # PICK-DRIVEN RELEASE:
-                # If the submitter slot has been used as a real pick (ts exists) and they did NOT take this player,
-                # then the player is released immediately to the FA pool.
-                submitter_slot_used = (submitter_slot.selected_ts_iso is not None)
-                submitter_took_player = (submitter_slot_used and submitter_slot.selected_player_key == chosen_player_key)
-                released_to_fa = (submitter_slot_used and not submitter_took_player)
-                
-                # If it's the submitter team on its exact slot: it's a QO pick
-                if (cur_team_key == submitter_team_key) and (cur_round == submitter_lvl):
+            elif selected_current_qo_team_key:
+                submitter_nm = (
+                    state.teams[selected_current_qo_team_key].name
+                    if selected_current_qo_team_key in state.teams
+                    else selected_current_qo_team_key
+                )
+
+                if selected_current_qo_team_key == current_team_key:
                     pick_kind = "QO"
-
-                # If released, anyone can take as FA (even within same QO round)
-                elif released_to_fa:
-                    pick_kind = "FA"
-
-                # Otherwise still reserved; only poach-eligible if submitter_lvl > current round (QO rounds 1..5)
+                elif 1 <= current_round <= 5 and selected_current_qo_level > current_round:
+                    pick_kind = "POACH"
                 else:
-                    # Only meaningful during QO rounds
-                    if 1 <= cur_round <= 5 and submitter_lvl > cur_round:
-                        pick_kind = "POACH"
-                    else:
-                        submitter_nm = state.teams.get(submitter_team_key).name if submitter_team_key in state.teams else submitter_team_key
-                        st.error(f"Not poach-eligible yet. Reserved for {submitter_nm} at QO{submitter_lvl}.")
-                        return
+                    st.error(
+                        f"Not poach-eligible yet. Reserved for {submitter_nm} at QO{selected_current_qo_level}."
+                    )
+                    return
             # ---- END QO / POACH / RELEASE LOGIC ----
 
             _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
@@ -1639,7 +1767,7 @@ def render_qos_tab(state) -> None:
         predraft_levels[str(canon_tk)] = {int(lvl): str(pk) for lvl, pk in levels.items() if pk}
         predraft_updated_at[str(canon_tk)] = str((rec or {}).get("updated_at") or "")
 
-    # Current QO state = predraft + replayed POACH events.
+    # Current QO state = predraft + replayed real QO-round picks.
     # IMPORTANT: Do NOT use board pick slots to populate this table.
     current_levels = _compute_current_qos_from_log(predraft_levels, state.pick_log)
 
@@ -1700,7 +1828,7 @@ def render_qos_tab(state) -> None:
     predraft_df.insert(0, "#", range(1, len(predraft_df) + 1))
 
     st.subheader("Current QOs")
-    st.caption("Derived from Predraft QOs + replayed POACH events (not from draft picks).")
+    st.caption("Derived from Predraft QOs + replayed rounds 1-5 picks (not from current board slots).")
     st.markdown(current_df.to_html(index=False, escape=False), unsafe_allow_html=True)
 
     st.subheader("Predraft selections")
