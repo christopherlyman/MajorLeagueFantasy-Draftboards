@@ -66,3 +66,16 @@ mlf/docs/archive/**
 
 # live caddy config contains operator email; keep out of repo
 mlf/runtime/Caddyfile
+
+# Local/generated RMT and Yahoo artifacts
+mlf/scripts/yahoo/data/
+**/scripts/yahoo/data/
+
+# Local backup/admin files
+BackupJobsScripts.txt
+*.bak
+*.bak_*
+*.tmp
+
+# Sibling runtime/app folders when working from fantasy repo
+mlf_roster_manager/
