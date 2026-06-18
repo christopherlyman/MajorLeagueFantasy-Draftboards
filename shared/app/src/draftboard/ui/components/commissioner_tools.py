@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from draftboard.state.league_profile import get_active_qo_rounds
 import os
 import re
 import sys
@@ -563,10 +563,11 @@ def _parse_qo_lines(raw: str, state: DraftState) -> tuple[list[tuple[str, int, s
         notes = ""
 
         # Try extract QO group from patterns like "QO1:" or "QO2"
-        m = re.search(r"\bQO\s*([1-5])\b", s, flags=re.IGNORECASE)
+        qo_rounds_count = get_active_qo_rounds()
+        m = re.search(r"\bQO\s*(\d+)\b", s, flags=re.IGNORECASE)
         if m:
             qo_group = int(m.group(1))
-            s = re.sub(r"\bQO\s*[1-5]\b", "", s, flags=re.IGNORECASE).strip()
+            s = re.sub(r"\bQO\s*\d+\b", "", s, flags=re.IGNORECASE).strip()
             s = s.lstrip(":").strip()
 
         # If comma form, allow "thing, 2" or "thing, QO2"
@@ -574,13 +575,17 @@ def _parse_qo_lines(raw: str, state: DraftState) -> tuple[list[tuple[str, int, s
         if qo_group is None and len(parts) >= 2:
             # group is in last token
             last = parts[-1]
-            m2 = re.search(r"\b([1-5])\b", last)
+            m2 = re.search(r"\b(\d+)\b", last)
             if m2:
                 qo_group = int(m2.group(1))
                 parts = parts[:-1]
 
         if qo_group is None:
-            errors.append(f"Line {ln}: missing QO group (need QO1..QO5)")
+            errors.append(f"Line {ln}: missing QO group (need QO1..QO{qo_rounds_count})")
+            continue
+
+        if qo_group < 1 or qo_group > qo_rounds_count:
+            errors.append(f"Line {ln}: QO group must be between QO1 and QO{qo_rounds_count}")
             continue
 
         # remaining "thing" could be yahoo key or player name (+ optional trailing position)
@@ -786,18 +791,21 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
         st.subheader("Set Draft Order")
 
         TEAM_UNASSIGNED = ""
+        manager_count = len(getattr(state, "teams", {}) or {})
+        if manager_count <= 0:
+            manager_count = len(getattr(state, "draft_order_team_keys_by_slot", []) or []) or 16
 
         def _init_slot_map() -> dict[int, str]:
             """
-            Preferred source: state.draft_order_team_keys_by_slot (slot 1..16)
+            Preferred source: state.draft_order_team_keys_by_slot (slot 1..N)
             Fallback: derive from Round 1 picks original_team_key by slot.
             """
             slot_map: dict[int, str] = {}
 
             # 1) Prefer persisted slot-order list if present
             order = getattr(state, "draft_order_team_keys_by_slot", None)
-            if isinstance(order, list) and len(order) == 16:
-                for s in range(1, 17):
+            if isinstance(order, list) and len(order) == manager_count:
+                for s in range(1, manager_count + 1):
                     tk = str(order[s - 1] or "")
                     slot_map[s] = tk if tk else TEAM_UNASSIGNED
             else:
@@ -809,20 +817,28 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         slot = int(getattr(p, "slot", 0) or 0)
                     except Exception:
                         continue
-                    if 1 <= slot <= 16:
+                    if 1 <= slot <= manager_count:
                         orig = str(getattr(p, "original_team_key", "") or "").strip()
                         ow = str(getattr(p, "owner_team_key", "") or "").strip()
                         tk = orig or ow  # defensive fallback only
                         slot_map[slot] = tk if tk else TEAM_UNASSIGNED
 
-            # Ensure all 1..16 exist
-            for s in range(1, 17):
+            # Ensure all active slots exist
+            for s in range(1, manager_count + 1):
                 slot_map.setdefault(s, TEAM_UNASSIGNED)
 
             return slot_map
 
-        # Keep interactive mapping in session_state for snappy dropdown UX
-        if "draft_order_slot_to_team" not in st.session_state:
+        # Keep interactive mapping in session_state for snappy dropdown UX.
+        # Reset stale maps if switching between leagues with different manager counts.
+        _existing_slot_keys = sorted(
+            int(k) for k in dict(st.session_state.get("draft_order_slot_to_team", {}) or {}).keys()
+            if str(k).isdigit()
+        )
+        if (
+            "draft_order_slot_to_team" not in st.session_state
+            or _existing_slot_keys != list(range(1, manager_count + 1))
+        ):
             st.session_state["draft_order_slot_to_team"] = _init_slot_map()
 
         slot_to_team: dict[int, str] = dict(st.session_state["draft_order_slot_to_team"])
@@ -843,7 +859,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
         team_to_slot = _team_to_slot(slot_to_team)
 
         st.write(
-            "Assign each team a pick number (1–16). "
+            "Assign each team a pick number for this league. "
             "This controls BOARD COLUMN ORDER (slot order), not pick ownership."
         )
 
@@ -856,9 +872,9 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
 
         current_slot_for_team = team_to_slot.get(str(selected_team), 0)
 
-        pick_options = [TEAM_UNASSIGNED] + list(range(1, 17))
+        pick_options = [TEAM_UNASSIGNED] + list(range(1, manager_count + 1))
         pick_index = 0
-        if current_slot_for_team in range(1, 17):
+        if current_slot_for_team in range(1, manager_count + 1):
             pick_index = pick_options.index(current_slot_for_team)
 
         chosen_pick = st.selectbox(
@@ -867,12 +883,12 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             index=pick_index,
             key="draft_order_pick_select",
             format_func=lambda x: "" if x == TEAM_UNASSIGNED else f"Pick #{x}",
-            help="Choose Pick #1..#16 for the selected team. Blank means unassigned.",
+            help=f"Choose Pick #1..#{manager_count} for the selected team. Blank means unassigned.",
         )
 
         if st.button("Apply Assignment", type="primary", key="draft_order_apply_btn"):
             # Remove this team from any existing slot
-            for s in range(1, 17):
+            for s in range(1, manager_count + 1):
                 if slot_to_team.get(s, TEAM_UNASSIGNED) == selected_team:
                     slot_to_team[s] = TEAM_UNASSIGNED
 
@@ -897,7 +913,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
 
                 # Persist as list[str] where index 0 = slot 1 ... index 15 = slot 16
                 order: list[str] = []
-                for s in range(1, 17):
+                for s in range(1, manager_count + 1):
                     tk = slot_to_team.get(s, TEAM_UNASSIGNED)
                     order.append(str(tk) if tk else "")
 
@@ -922,7 +938,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                             rnd = int(ps.get("round_number", 0) or 0)
                         except Exception:
                             continue
-                        if slot < 1 or slot > 16:
+                        if slot < 1 or slot > manager_count:
                             continue
 
                         new_tk = str(new_slot_to_team.get(slot, "") or "").strip()
@@ -948,7 +964,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         rnd = int(getattr(ps, "round_number", 0) or 0)
                     except Exception:
                         continue
-                    if slot < 1 or slot > 16:
+                    if slot < 1 or slot > manager_count:
                         continue
 
                     new_tk = str(new_slot_to_team.get(slot, "") or "").strip()
@@ -974,7 +990,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             # Display current mapping as a table
             slot_to_team = dict(st.session_state["draft_order_slot_to_team"])
             table_rows = []
-            for s in range(1, 17):
+            for s in range(1, manager_count + 1):
                 tk = slot_to_team.get(s, TEAM_UNASSIGNED)
                 table_rows.append(
                     {
@@ -1625,10 +1641,10 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
 
                 existing = _load_team_qos(dsn, league_key, season_year, team_key)
 
-                st.write("Select QO1–QO5 using searchable dropdowns (type to search).")
+                st.write(f"Select QO1–QO{get_active_qo_rounds()} using searchable dropdowns (type to search).")
 
                 selected: dict[int, str] = {}
-                for lvl in range(1, 6):
+                for lvl in range(1, get_active_qo_rounds() + 1):
                     default_pk = existing.get(lvl)
                     opts = [""] + candidate_keys
                     idx = 0
@@ -1651,7 +1667,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     if st.button("Save Predraft QOs for Team", type="primary", key=f"qos_apply_btn_{team_key}"):
                         errs: list[str] = []
 
-                        missing = [lvl for lvl in range(1, 6) if lvl not in selected]
+                        missing = [lvl for lvl in range(1, get_active_qo_rounds() + 1) if lvl not in selected]
                         if missing:
                             errs.append("Missing: " + ", ".join([f"QO{x}" for x in missing]))
 
@@ -1668,7 +1684,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                             for e in errs:
                                 st.error(e)
                         else:
-                            to_save = [(selected[lvl], lvl, "") for lvl in range(1, 6)]
+                            to_save = [(selected[lvl], lvl, "") for lvl in range(1, get_active_qo_rounds() + 1)]
                             ok = _upsert_team_predraft_qos(
                                 dsn, league_key, season_year, team_key, to_save, created_by="commissioner"
                             )

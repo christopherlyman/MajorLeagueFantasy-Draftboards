@@ -1,0 +1,11 @@
+requests==2.32.5
+psycopg[binary]==3.3.2
+
+# --- DraftBoard UI ---
+streamlit==1.41.1
+
+bcrypt==4.2.1
+
+extra-streamlit-components==0.1.71
+streamlit-cookies-manager
+PyYAML==6.0.2

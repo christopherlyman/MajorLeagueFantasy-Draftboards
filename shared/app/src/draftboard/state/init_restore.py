@@ -8,7 +8,7 @@ from draftboard.domain.rules import QO_ROUNDS, ROUNDS_TOTAL
 from draftboard.domain.rules import DEFAULT_QO_ALLOWS_FREE_AGENTS
 from draftboard.state.autosave import try_load_autosave, save_autosave
 from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
-from draftboard.state.league_profile import get_active_draft_order_mode, get_active_first_standard_round, get_active_qualifying_offers_enabled, get_active_rounds_total
+from draftboard.state.league_profile import get_active_draft_order_mode, get_active_first_standard_round, get_active_qualifying_offers_enabled, get_active_rounds_total, get_active_manager_count, get_active_qo_rounds
 from draftboard.state.store import DraftClock, DraftState, has_state, init_state
 
 
@@ -18,7 +18,7 @@ def _team_to_slot_from_order(order: list[str] | None) -> dict[str, int]:
     returns: {team_key: slot_num}
     """
     out: dict[str, int] = {}
-    if isinstance(order, list) and len(order) == 16:
+    if isinstance(order, list):
         for i, tk in enumerate(order, start=1):
             if tk:
                 out[str(tk)] = int(i)
@@ -91,7 +91,7 @@ def _canon_team_key_from_mixed_key(
             n = int(tk.replace("TEAM_", "").strip())
         except Exception:
             return tk
-        if isinstance(order, list) and len(order) == 16 and 1 <= n <= 16:
+        if isinstance(order, list) and 1 <= n <= len(order):
             v = str(order[n - 1] or "").strip()
             return v if v else tk
 
@@ -109,7 +109,8 @@ def _build_draft_order_from_first_standard_round(
     Canonical draft slot order must be derived from the first standard round
     for the active league profile.
     """
-    out = [""] * 16
+    manager_count = get_active_manager_count()
+    out = [""] * manager_count
     for p in picks.values():
         if int(getattr(p, "round_number", 0) or 0) != int(first_standard_round):
             continue
@@ -117,7 +118,7 @@ def _build_draft_order_from_first_standard_round(
             slot = int(getattr(p, "slot", 0) or 0)
         except Exception:
             continue
-        if 1 <= slot <= 16:
+        if 1 <= slot <= manager_count:
             out[slot - 1] = str(getattr(p, "original_team_key", "") or "")
     return out
 
@@ -141,6 +142,8 @@ def _apply_mlf_contract_pt_prefill(
     restore-vs-fresh-boot drift by centralizing the shared algorithm.
     """
     team_to_slot = _team_to_slot_from_order(draft_order_team_keys_by_slot)
+    qo_rounds = get_active_qo_rounds()
+    rounds_total = get_active_rounds_total()
 
     def _normalize_team_key_via_order(tk: str) -> str:
         tk = str(tk or "").strip()
@@ -154,14 +157,14 @@ def _apply_mlf_contract_pt_prefill(
             except Exception:
                 return tk
             order = list(draft_order_team_keys_by_slot or [])
-            if 1 <= n <= 16 and isinstance(order, list) and len(order) == 16:
+            if isinstance(order, list) and 1 <= n <= len(order):
                 mapped = str(order[n - 1] or "")
                 return mapped if mapped else tk
         return tk
 
     # Clear placeholder selections in standard rounds before rebuilding.
     for ps in (picks or {}).values():
-        if int(getattr(ps, "round_number", 0) or 0) <= QO_ROUNDS:
+        if int(getattr(ps, "round_number", 0) or 0) <= qo_rounds:
             continue
         if getattr(ps, "selected_ts_iso", None) is not None:
             continue
@@ -207,8 +210,8 @@ def _apply_mlf_contract_pt_prefill(
 
     already_selected = {ps.selected_player_key for ps in picks.values() if ps.selected_player_key}
 
-    start_round = QO_ROUNDS + 1
-    end_round = ROUNDS_TOTAL
+    start_round = qo_rounds + 1
+    end_round = rounds_total
 
     all_team_keys = sorted(set(list(contracts_by_team.keys()) + list(pts_by_team.keys())))
 
@@ -383,6 +386,8 @@ def _restore_mlf_state_from_autosave(restored: DraftState) -> DraftState:
             first_standard_round=get_active_first_standard_round(),
             qualifying_offers=get_active_qualifying_offers_enabled(),
             rounds_total=get_active_rounds_total(),
+            manager_count=get_active_manager_count(),
+            qo_rounds=get_active_qo_rounds(),
         )
 
         # Replay saved selections by pick_id (preserve real picks + keeper placeholders)
@@ -425,7 +430,7 @@ def _restore_mlf_state_from_autosave(restored: DraftState) -> DraftState:
 
     # Ensure slot-based draft order exists on restore BEFORE contract prefill
     order = getattr(restored, "draft_order_team_keys_by_slot", None)
-    if not isinstance(order, list) or len(order) != 16:
+    if not isinstance(order, list) or len(order) != get_active_manager_count():
         restored.draft_order_team_keys_by_slot = _build_draft_order_from_profile(restored.picks)
 
     # Normalize PT map values using deterministic legacy->canonical mapping (do NOT depend on slot order)

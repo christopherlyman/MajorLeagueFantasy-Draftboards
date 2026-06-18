@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import os
 import hmac
 import hashlib
@@ -18,6 +17,7 @@ from draftboard.domain.models import Position, PickLogEntry, PickSlot, Team
 from draftboard.state.autosave import try_load_autosave, save_autosave
 from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
 from draftboard.state.store import DraftClock, DraftState, has_state, init_state, get_state, set_current_pick
+from draftboard.state.league_profile import get_active_first_standard_round, get_active_manager_count, get_active_qo_rounds
 from draftboard.state.init_restore import (
     _team_to_slot_from_order,
     _is_legacy_team_keyspace,
@@ -439,7 +439,7 @@ def render_pick_controls(state: DraftState) -> None:
                 # Otherwise still reserved; only poach-eligible if submitter_lvl > current round (QO rounds 1..5)
                 else:
                     # Only meaningful during QO rounds
-                    if 1 <= cur_round <= 5 and submitter_lvl > cur_round:
+                    if 1 <= cur_round <= get_active_qo_rounds() and submitter_lvl > cur_round:
                         pick_kind = "POACH"
                     else:
                         submitter_nm = state.teams.get(submitter_team_key).name if submitter_team_key in state.teams else submitter_team_key
@@ -874,7 +874,7 @@ def render_available_players(state: DraftState) -> None:
         if show_poach:
             cur_round = int(current_round or 0)
             # Only meaningful during QO rounds
-            if 1 <= cur_round <= 5:
+            if 1 <= cur_round <= get_active_qo_rounds():
                 lvl = predraft_qo_level_by_key.get(p.player_key)
                 # eligible means: player's predraft QO level is strictly greater than current round
                 if lvl is None or int(lvl) <= cur_round:
@@ -1676,31 +1676,23 @@ def render_qos_tab(state) -> None:
         cur_lvls = current_levels.get(tkey, {}) or {}
         pre_lvls = predraft_levels.get(tkey, {}) or {}
 
-        current_rows.append(
-            {
-                "Owner": owner_name_by_team_key.get(tkey, ""),
-                "Team": team_name,
-                "QO1": _fmt_qo_cell(state, cur_lvls.get(1, "")),
-                "QO2": _fmt_qo_cell(state, cur_lvls.get(2, "")),
-                "QO3": _fmt_qo_cell(state, cur_lvls.get(3, "")),
-                "QO4": _fmt_qo_cell(state, cur_lvls.get(4, "")),
-                "QO5": _fmt_qo_cell(state, cur_lvls.get(5, "")),
-                "Updated": _fmt_updated(_updated_ts_for_team(tkey)),
-            }
-        )
+        current_row = {
+            "Owner": owner_name_by_team_key.get(tkey, ""),
+            "Team": team_name,
+        }
+        for _lvl in range(1, get_active_qo_rounds() + 1):
+            current_row[f"QO{_lvl}"] = _fmt_qo_cell(state, cur_lvls.get(_lvl, ""))
+        current_row["Updated"] = _fmt_updated(_updated_ts_for_team(tkey))
+        current_rows.append(current_row)
 
-        predraft_rows.append(
-            {
-                "Owner": owner_name_by_team_key.get(tkey, ""),
-                "Team": team_name,
-                "QO1": _fmt_qo_cell(state, pre_lvls.get(1, "")),
-                "QO2": _fmt_qo_cell(state, pre_lvls.get(2, "")),
-                "QO3": _fmt_qo_cell(state, pre_lvls.get(3, "")),
-                "QO4": _fmt_qo_cell(state, pre_lvls.get(4, "")),
-                "QO5": _fmt_qo_cell(state, pre_lvls.get(5, "")),
-                "Updated": _fmt_updated(predraft_updated_at.get(tkey, "")),
-            }
-        )
+        predraft_row = {
+            "Owner": owner_name_by_team_key.get(tkey, ""),
+            "Team": team_name,
+        }
+        for _lvl in range(1, get_active_qo_rounds() + 1):
+            predraft_row[f"QO{_lvl}"] = _fmt_qo_cell(state, pre_lvls.get(_lvl, ""))
+        predraft_row["Updated"] = _fmt_updated(predraft_updated_at.get(tkey, ""))
+        predraft_rows.append(predraft_row)
 
     current_df = pd.DataFrame(current_rows)
     current_df.insert(0, "#", range(1, len(current_df) + 1))
@@ -1739,7 +1731,7 @@ def render_pick_tracker(state: DraftState, owner_name_by_team_key: dict[str, str
         pick = state.picks.get(entry.pick_id)
         team = state.teams.get(entry.owner_team_key)
 
-        if pick and pick.round_number <= 5:
+        if pick and pick.round_number <= get_active_qo_rounds():
             round_label = f"QO{pick.round_number}"
         else:
             round_label = str(pick.round_number) if pick else ""
@@ -2534,14 +2526,14 @@ def render_app() -> None:
     _sync_qo_placeholders(state, predraft_qos, current_qos)
     qo_ph = 0
     for ps in state.picks.values():
-        if ps.round_number <= 5 and ps.selected_ts_iso is None and ps.selected_player_key:
+        if ps.round_number <= get_active_qo_rounds() and ps.selected_ts_iso is None and ps.selected_player_key:
             qo_ph += 1
         # DEBUG sidebar is commissioner-only AND requires password unlock.
     is_commissioner_url = str(st.query_params.get("commissioner", "0")) == "1"
     debug_enabled = bool(is_commissioner_url and st.session_state.get("commissioner_authed"))
 
     if debug_enabled:
-        st.sidebar.write("qo_placeholders_rounds1_5_render:", qo_ph)
+        st.sidebar.write(f"qo_placeholders_rounds1_{get_active_qo_rounds()}_render:", qo_ph)
 
     owner_name_by_team_key: dict[str, str] = {}
     if dsn:
@@ -2765,13 +2757,15 @@ def render_app() -> None:
         debug_enabled = bool(is_commissioner_url and st.session_state.get("commissioner_authed"))
 
         if debug_enabled:
-            st.sidebar.write("keeper_placeholders_rounds6_25_render:", keeper_ph)
+            st.sidebar.write(f"keeper_placeholders_rounds{get_active_qo_rounds()+1}_25_render:", keeper_ph)
 
-        # Auto-heal order if missing/invalid (deterministic from Round 6 owners)
-        if len(order) != 16 or unknown:
+        # Auto-heal order if missing/invalid (deterministic from first standard round owners)
+        expected_slots = get_active_manager_count()
+        first_standard_round = get_active_first_standard_round()
+        if len(order) != expected_slots or unknown:
             healed = []
-            for slot in range(1, 17):
-                pid = f"R06-{slot:02d}"
+            for slot in range(1, expected_slots + 1):
+                pid = f"R{first_standard_round:02d}-{slot:02d}"
                 ps = state.picks.get(pid)
                 healed.append(str(getattr(ps, "owner_team_key", "") or "") if ps else "")
             state.draft_order_team_keys_by_slot = healed

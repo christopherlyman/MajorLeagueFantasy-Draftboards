@@ -79,3 +79,28 @@ BackupJobsScripts.txt
 
 # Sibling runtime/app folders when working from fantasy repo
 mlf_roster_manager/
+
+# NFFL local-only/generated artifacts
+nffl/app/app/src/draftboard/_nffl_patch_backups_*/
+shared/app/src/draftboard/_nffl_patch_backups_*/
+nffl/app/app/src/draftboard/ui/backups/
+nffl/app/app/src/draftboard/ui/components/backups/
+nffl/runtime/state_backups/
+nffl/docs/testing/
+nffl/scripts/testing/
+nffl/sql/testing/
+
+# NFFL generated credential/password exports
+nffl/app/outputs/
+nffl/app/output/
+nffl/outputs/
+nffl/*password*
+nffl/*credentials*
+nffl/*secrets*
+nffl/*tokens*
+
+# Local-only password export utility
+nffl/app/scripts/export_manager_temp_passwords.py
+
+# Local-only password reset utility
+nffl/app/scripts/reset_manager_passwords.py
