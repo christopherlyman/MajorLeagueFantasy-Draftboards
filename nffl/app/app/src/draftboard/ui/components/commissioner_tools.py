@@ -824,6 +824,200 @@ def _nffl_clear_franchise_tag(
 # NFFL_KEEPER_ROSTER_OVERRIDE_HELPERS_END
 
 
+# NFFL_PICK_OWNERSHIP_OVERRIDE_HELPERS_START
+
+def _nffl_load_pick_ownership_rows(
+    *,
+    dsn: str,
+    draft_key: str,
+    league_key: str,
+    season_year: int,
+) -> list[dict]:
+    """
+    Load pick ownership directly from nffl.draft_pick.
+    This is the DB source of truth for pick ownership.
+    """
+    sql = """
+        SELECT
+            dp.pick_id,
+            dp.round_number,
+            dp.slot_number,
+            dp.round_label,
+            dp.pick_type,
+            dp.column_team_key,
+            COALESCE(col_team.team_name, dp.column_team_key) AS column_team_name,
+            dp.current_owner_team_key,
+            COALESCE(owner_team.team_name, dp.current_owner_team_key) AS current_owner_team_name,
+            dp.traded_flag,
+            COALESCE(dp.ownership_note, '') AS ownership_note,
+            CASE WHEN ds.pick_id IS NULL THEN false ELSE true END AS is_selected
+        FROM nffl.draft_pick dp
+        LEFT JOIN nffl.team col_team
+          ON col_team.league_key=%s
+         AND col_team.season_year=%s
+         AND col_team.team_key=dp.column_team_key
+        LEFT JOIN nffl.team owner_team
+          ON owner_team.league_key=%s
+         AND owner_team.season_year=%s
+         AND owner_team.team_key=dp.current_owner_team_key
+        LEFT JOIN nffl.draft_selection ds
+          ON ds.draft_key=dp.draft_key
+         AND ds.pick_id=dp.pick_id
+        WHERE dp.draft_key=%s
+        ORDER BY dp.round_number, dp.slot_number
+    """
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                sql,
+                (
+                    str(league_key),
+                    int(season_year),
+                    str(league_key),
+                    int(season_year),
+                    str(draft_key),
+                ),
+            )
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def _nffl_update_pick_owner(
+    *,
+    dsn: str,
+    draft_key: str,
+    league_key: str,
+    season_year: int,
+    pick_id: str,
+    new_owner_team_key: str,
+    note: str = "",
+) -> dict:
+    """
+    Commissioner override for pick ownership.
+
+    Writes only nffl.draft_pick:
+    - current_owner_team_key
+    - traded_flag
+    - ownership_note
+    - updated_at_utc
+
+    Refuses to alter ownership after a pick has already been selected,
+    because nffl.draft_selection.selecting_team_key would then become inconsistent.
+    """
+    draft_key = str(draft_key or "").strip()
+    league_key = str(league_key or "").strip()
+    season_year = int(season_year)
+    pick_id = str(pick_id or "").strip()
+    new_owner_team_key = str(new_owner_team_key or "").strip()
+    note = str(note or "").strip()
+
+    if not draft_key:
+        raise ValueError("draft_key is required.")
+    if not league_key:
+        raise ValueError("league_key is required.")
+    if not pick_id:
+        raise ValueError("pick_id is required.")
+    if not new_owner_team_key:
+        raise ValueError("new_owner_team_key is required.")
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT count(*) AS n
+                FROM nffl.team
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND team_key=%s
+                """,
+                (league_key, season_year, new_owner_team_key),
+            )
+            team_n = int((cur.fetchone() or {}).get("n") or 0)
+            if team_n != 1:
+                raise RuntimeError(f"New owner team_key is not valid for this NFFL season: {new_owner_team_key}")
+
+            cur.execute(
+                """
+                SELECT
+                    draft_key,
+                    pick_id,
+                    column_team_key,
+                    current_owner_team_key,
+                    traded_flag,
+                    COALESCE(ownership_note, '') AS ownership_note
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                  AND pick_id=%s
+                FOR UPDATE
+                """,
+                (draft_key, pick_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise RuntimeError(f"Pick not found: {draft_key} / {pick_id}")
+
+            cur.execute(
+                """
+                SELECT count(*) AS n
+                FROM nffl.draft_selection
+                WHERE draft_key=%s
+                  AND pick_id=%s
+                """,
+                (draft_key, pick_id),
+            )
+            selected_n = int((cur.fetchone() or {}).get("n") or 0)
+            if selected_n > 0:
+                raise RuntimeError(
+                    f"Refusing to change ownership for selected pick {pick_id}. "
+                    "Delete/correct the draft selection first."
+                )
+
+            column_team_key = str(row["column_team_key"])
+            old_owner_team_key = str(row["current_owner_team_key"])
+            traded_flag = bool(new_owner_team_key != column_team_key)
+
+            final_note = note
+            if not final_note and traded_flag:
+                final_note = f"Commissioner ownership override: {old_owner_team_key} -> {new_owner_team_key}"
+            if not final_note and not traded_flag:
+                final_note = ""
+
+            cur.execute(
+                """
+                UPDATE nffl.draft_pick
+                   SET current_owner_team_key=%s,
+                       traded_flag=%s,
+                       ownership_note=NULLIF(%s, ''),
+                       updated_at_utc=now()
+                 WHERE draft_key=%s
+                   AND pick_id=%s
+                """,
+                (
+                    new_owner_team_key,
+                    traded_flag,
+                    final_note,
+                    draft_key,
+                    pick_id,
+                ),
+            )
+
+        conn.commit()
+
+    return {
+        "draft_key": draft_key,
+        "pick_id": pick_id,
+        "column_team_key": column_team_key,
+        "old_owner_team_key": old_owner_team_key,
+        "new_owner_team_key": new_owner_team_key,
+        "traded_flag": traded_flag,
+        "ownership_note": final_note,
+    }
+
+
+# NFFL_PICK_OWNERSHIP_OVERRIDE_HELPERS_END
+
+
+
 def _refresh_contract_cache_into_session_state() -> None:
     """
     Refreshes:
@@ -3114,6 +3308,131 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         st.rerun()
                     except Exception as e:
                         st.error(f"Clear Franchise Tag failed: {e}")
+
+
+
+    # -----------------------
+    # NFFL Pick Ownership Overrides
+    # -----------------------
+    with st.expander("NFFL Pick Ownership Overrides", expanded=False):
+        st.caption(
+            "Commissioner pick ownership correction. Writes to nffl.draft_pick only. "
+            "Selected picks are blocked here; correct selected picks through Draft Tools first."
+        )
+
+        try:
+            dsn = _get_dsn()
+            league_key = _get_league_key()
+            season_year = _get_season_year()
+            draft_key = _get_draft_key()
+        except Exception as e:
+            st.error(str(e))
+            dsn = ""
+
+        if not dsn:
+            st.warning("No Postgres DSN available.")
+        else:
+            try:
+                pick_rows = _nffl_load_pick_ownership_rows(
+                    dsn=dsn,
+                    draft_key=draft_key,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
+            except Exception as e:
+                pick_rows = []
+                st.error(f"Failed to load pick ownership rows: {e}")
+
+            if not pick_rows:
+                st.caption("No picks found for this draft.")
+            else:
+                team_keys = sorted([t.team_key for t in state.teams.values()])
+
+                def _nffl_team_label(k: str) -> str:
+                    return state.teams[k].name if k in state.teams else str(k)
+
+                def _pick_label(row: dict) -> str:
+                    selected = " | SELECTED" if bool(row.get("is_selected")) else ""
+                    traded = " | traded" if bool(row.get("traded_flag")) else ""
+                    return (
+                        f"{row.get('pick_id')} | "
+                        f"column={row.get('column_team_name')} | "
+                        f"owner={row.get('current_owner_team_name')}"
+                        f"{traded}{selected}"
+                    )
+
+                pick_ids = [str(r["pick_id"]) for r in pick_rows]
+                row_by_pick_id = {str(r["pick_id"]): r for r in pick_rows}
+
+                c1, c2 = st.columns([3, 2])
+                with c1:
+                    pick_id = st.selectbox(
+                        "Pick",
+                        options=pick_ids,
+                        format_func=lambda pid: _pick_label(row_by_pick_id[pid]),
+                        key="nffl_pick_owner_override_pick",
+                    )
+
+                selected_row = row_by_pick_id[pick_id]
+                current_owner = str(selected_row.get("current_owner_team_key") or "")
+                default_owner_idx = team_keys.index(current_owner) if current_owner in team_keys else 0
+
+                with c2:
+                    new_owner_team_key = st.selectbox(
+                        "New owner",
+                        options=team_keys,
+                        index=default_owner_idx,
+                        format_func=_nffl_team_label,
+                        key="nffl_pick_owner_override_new_owner",
+                    )
+
+                note = st.text_input(
+                    "Ownership note",
+                    value="commissioner pick ownership override",
+                    key="nffl_pick_owner_override_note",
+                )
+
+                is_selected = bool(selected_row.get("is_selected"))
+                if is_selected:
+                    st.warning(
+                        "This pick already has a draft selection. Ownership override is blocked here. "
+                        "Use Draft Tools to correct the selection first."
+                    )
+
+                confirm = st.checkbox(
+                    "Confirm pick ownership override",
+                    value=False,
+                    key="nffl_pick_owner_override_confirm",
+                )
+
+                disabled = bool(is_selected or not confirm or not pick_id or not new_owner_team_key)
+
+                if st.button(
+                    "Save Pick Ownership Override",
+                    type="primary",
+                    key="nffl_pick_owner_override_save",
+                    disabled=disabled,
+                ):
+                    try:
+                        result = _nffl_update_pick_owner(
+                            dsn=dsn,
+                            draft_key=draft_key,
+                            league_key=league_key,
+                            season_year=season_year,
+                            pick_id=pick_id,
+                            new_owner_team_key=new_owner_team_key,
+                            note=note,
+                        )
+                        st.success(
+                            "Pick ownership updated: "
+                            f"{result['pick_id']} | "
+                            f"{_nffl_team_label(result['old_owner_team_key'])} -> "
+                            f"{_nffl_team_label(result['new_owner_team_key'])} | "
+                            f"traded_flag={result['traded_flag']}"
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Pick ownership override failed: {e}")
 
 
     with st.expander("Draft Tools", expanded=False):
