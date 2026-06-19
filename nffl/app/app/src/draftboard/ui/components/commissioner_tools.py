@@ -1057,6 +1057,16 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     league_key = _get_league_key()
     is_milf = str(league_key) == "469.l.60688"
 
+    # Feature-gate league-specific commissioner tools.
+    # NFFL has prospect_tags=false, so Prospect Tag controls must not render there.
+    try:
+        from draftboard.state.league_profile import get_active_league_profile
+        _profile = get_active_league_profile()
+        _features = dict((_profile or {}).get("features") or {})
+    except Exception:
+        _features = {}
+    prospect_tags_enabled = bool(_features.get("prospect_tags", False))
+
     with st.expander("Admin Password Reset Tool", expanded=False):
         if not is_site_admin:
             st.info("Site admin access required.")
@@ -1351,7 +1361,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     with st.expander("Refresh Yahoo Player Universe", expanded=False):
         st.caption(
             "Refreshes player meta (rank, % rostered, prior-year stats) from Yahoo into Postgres, "
-            "then reloads players into DraftBoard. Does not change contracts/QOs/PT/picks."
+            "then reloads players into DraftBoard. Does not change contracts/QOs/picks."
         )
 
         # Show last refresh results (persisted across reruns)
@@ -2057,7 +2067,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         st.write(rows if rows else "No QOs saved for this team yet.")
 
     # -----------------------
-    if not is_milf:
+    if prospect_tags_enabled:
         # Prospect Tags
         # -----------------------
         with st.expander("Prospect Tags", expanded=False):
