@@ -327,14 +327,104 @@ def _sync_qo_placeholders(state: DraftState, predraft: dict[str, dict[int, str]]
         pick.selected_ts_iso = None
 
 
+# NFFL_DRAFT_SELECTION_DB_WRITE_HELPER_START
+
+def _record_draft_selection_to_db(
+    *,
+    pick_id: str,
+    selecting_team_key: str,
+    yahoo_player_key: str,
+    pick_kind: str,
+    selected_at_utc: str,
+) -> None:
+    """
+    Canonical write path for real draft picks.
+
+    Board rendering reads nffl.v_draft_board_current, which depends on
+    nffl.draft_selection. Therefore Make Pick must write here before
+    local Streamlit/autosave state is trusted.
+    """
+    import os
+    import psycopg
+
+    dsn = get_postgres_dsn()
+    if not dsn:
+        raise RuntimeError("Cannot record draft selection: POSTGRES_DSN / MLF_POSTGRES_DSN is not configured.")
+
+    draft_key = (
+        os.environ.get("DRAFTBOARD_DRAFT_KEY")
+        or "nffl_2026_preseason"
+    )
+
+    pk = str(pick_id or "").strip()
+    tk = str(selecting_team_key or "").strip()
+    ypk = str(yahoo_player_key or "").strip()
+    kind = str(pick_kind or "FA").strip().upper()
+    ts = str(selected_at_utc or "").strip()
+
+    if not pk or not tk or not ypk:
+        raise RuntimeError(
+            f"Cannot record draft selection: missing pick/team/player "
+            f"(pick_id={pk!r}, selecting_team_key={tk!r}, yahoo_player_key={ypk!r})."
+        )
+
+    if kind not in {"FA", "QO", "POACH"}:
+        kind = "FA"
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            # Avoid relying on an unknown unique constraint shape.
+            # UI guards already prevent overwriting a used pick.
+            cur.execute(
+                """
+                DELETE FROM nffl.draft_selection
+                WHERE draft_key = %s
+                  AND pick_id = %s
+                """,
+                (draft_key, pk),
+            )
+            cur.execute(
+                """
+                INSERT INTO nffl.draft_selection (
+                    draft_key,
+                    pick_id,
+                    selecting_team_key,
+                    yahoo_player_key,
+                    pick_kind,
+                    selected_at_utc,
+                    selected_by,
+                    note
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s::timestamp, NULL, NULL
+                )
+                """,
+                (draft_key, pk, tk, ypk, kind, ts),
+            )
+        conn.commit()
+
+# NFFL_DRAFT_SELECTION_DB_WRITE_HELPER_END
+
+
 def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
     pick = state.picks[pick_id]
     ts = datetime.utcnow().isoformat()
 
+    player = state.players[player_key]
+
+    # NFFL_DRAFT_SELECTION_DB_WRITE_CALL_START
+    # Write canonical DB truth before mutating local/autosave state.
+    _record_draft_selection_to_db(
+        pick_id=pick.pick_id,
+        selecting_team_key=pick.owner_team_key,
+        yahoo_player_key=player.player_key,
+        pick_kind=pick_kind,
+        selected_at_utc=ts,
+    )
+    # NFFL_DRAFT_SELECTION_DB_WRITE_CALL_END
+
     pick.selected_player_key = player_key
     pick.selected_ts_iso = ts
-
-    player = state.players[player_key]
     state.pick_log.append(
         PickLogEntry(
             event_id=str(uuid4()),
@@ -369,6 +459,36 @@ def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str
 
 
 def render_pick_controls(state: DraftState) -> None:
+    # NFFL_PICK_CONTROLS_PREDRAFT_QOS_SCOPE_FIX_START
+    import os
+    # render_pick_controls is called independently from render_app's main QO load.
+    # Keep the QO replay engine deterministic by loading predraft QOs in local scope.
+    dsn_for_qo_replay = get_postgres_dsn()
+    league_key_for_qo_replay = (
+        os.environ.get("LEAGUE_KEY")
+        or os.environ.get("MLF_LEAGUE_KEY")
+        or "470.l.84346"
+    )
+    try:
+        season_year_for_qo_replay = int(
+            os.environ.get("SEASON_YEAR")
+            or os.environ.get("MLF_SEASON_YEAR")
+            or 2026
+        )
+    except Exception:
+        season_year_for_qo_replay = 2026
+
+    predraft_qos = (
+        _load_predraft_qos(
+            dsn_for_qo_replay,
+            league_key_for_qo_replay,
+            season_year_for_qo_replay,
+        )
+        if dsn_for_qo_replay
+        else {}
+    )
+    # NFFL_PICK_CONTROLS_PREDRAFT_QOS_SCOPE_FIX_END
+
     drafted = {
         ps.selected_player_key
         for ps in state.picks.values()
@@ -1033,6 +1153,61 @@ def _fetch_available_players_keeper_status(
 # NFFL_AVAILABLE_PLAYERS_KEEPER_STATUS_HELPERS_END
 
 
+# NFFL_AVAILABLE_PLAYERS_DRAFT_SELECTION_STATUS_HELPERS_START
+
+def _fetch_available_players_draft_selection_status(
+    dsn: str,
+    draft_key: str,
+    league_key: str,
+    season_year: int,
+    player_keys: list[str],
+) -> dict[str, dict]:
+    """
+    Read canonical real draft selections for Available Players display/filtering.
+    This is separate from QO/contract/FT placeholders.
+    """
+    if not dsn or not player_keys:
+        return {}
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    keys = [str(k) for k in player_keys if k]
+    if not keys:
+        return {}
+
+    sql = """
+        WITH keys AS (
+            SELECT unnest(%s::text[]) AS yahoo_player_key
+        )
+        SELECT
+            ds.yahoo_player_key,
+            ds.pick_id,
+            ds.pick_kind,
+            ds.selecting_team_key,
+            t.team_name,
+            ds.selected_at_utc
+        FROM keys k
+        JOIN nffl.draft_selection ds
+          ON ds.yahoo_player_key = k.yahoo_player_key
+         AND ds.draft_key = %s
+        LEFT JOIN nffl.team t
+          ON t.league_key = %s
+         AND t.season_year = %s
+         AND t.team_key = ds.selecting_team_key
+    """
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (keys, draft_key, league_key, int(season_year)))
+            rows = list(cur.fetchall())
+
+    return {str(r["yahoo_player_key"]): dict(r) for r in rows}
+
+# NFFL_AVAILABLE_PLAYERS_DRAFT_SELECTION_STATUS_HELPERS_END
+
+
+
 
 
 def _format_players_df_for_display(df: "pd.DataFrame") -> "pd.DataFrame":
@@ -1110,6 +1285,24 @@ def render_available_players(state: DraftState) -> None:
 
     drafted = {ps.selected_player_key for ps in state.picks.values()
     if ps.selected_player_key and ps.selected_ts_iso is not None}
+
+    # NFFL_AVAILABLE_PLAYERS_DB_DRAFT_STATUS_START
+    import os as _nffl_available_os
+
+    all_available_tab_player_keys = [str(p.player_key) for p in state.players.values()]
+    draft_key_for_available_players = _nffl_available_os.environ.get(
+        "DRAFTBOARD_DRAFT_KEY",
+        "nffl_2026_preseason",
+    )
+    db_draft_status_by_player_key = _fetch_available_players_draft_selection_status(
+        get_postgres_dsn(),
+        draft_key_for_available_players,
+        get_league_key(),
+        get_season_year(),
+        all_available_tab_player_keys,
+    )
+    drafted |= set(db_draft_status_by_player_key.keys())
+    # NFFL_AVAILABLE_PLAYERS_DB_DRAFT_STATUS_END
 
     profile = get_active_league_profile()
     features = dict(profile.get("features") or {})
@@ -1190,13 +1383,13 @@ def render_available_players(state: DraftState) -> None:
         sort_cols.insert(2, "Contract Years")
 
     # Set defaults BEFORE widget creation (and only once)
-    default_sort = "Fan Pts"
-    # Default to Fan Pts DESC while Yahoo Actual Rank is not imported.
+    default_sort = "Actual Rank"
+    # Default to Actual Rank ASC; rank_value is now populated from 2025 actual fantasy points.
     if st.session_state.get("avail_sort_col") not in sort_cols:
         st.session_state["avail_sort_col"] = default_sort
-        st.session_state["avail_sort_desc"] = True
+        st.session_state["avail_sort_desc"] = False
     st.session_state.setdefault("avail_sort_col", default_sort)
-    st.session_state.setdefault("avail_sort_desc", True)
+    st.session_state.setdefault("avail_sort_desc", False)
 
     # Widget gets its value from session_state via the key
     sort_col = st.selectbox("Sort by", options=sort_cols, key="avail_sort_col")
@@ -1228,6 +1421,11 @@ def render_available_players(state: DraftState) -> None:
         if row.get("status_type") in {"CONTRACT", "FT", "QO"}
     }
 
+    canonical_contract_keys = {
+        str(pk) for pk, row in canonical_keeper_status_by_player_key.items()
+        if row.get("status_type") == "CONTRACT"
+    }
+
     contracted_keys = set() if not (contracts_enabled or pt_enabled or qo_enabled) else (
         set(st.session_state.get("contracted_keys", set()) or set()) | canonical_reserved_keys
     )
@@ -1239,19 +1437,18 @@ def render_available_players(state: DraftState) -> None:
     for p in state.players.values():
         pk = str(p.player_key)
 
-        # drafted filter:
-        # - default: hide drafted
-        # - show_all_players: include drafted
-        # - show_qo: can also include drafted QOs if you ever want that view
-        if pk in drafted and not show_all_players:
-            if not (show_qo and pk in predraft_qo_keys):
-                continue
+        # Toggle semantics:
+        # - Default view hides drafted/reserved players.
+        # - Show only QOs / Poach-eligible / Contracts operate from the full relevant source pool.
+        # - Therefore those toggles must bypass the default reserved-player exclusion.
+        bypass_drafted_filter = bool(show_all_players or show_qo or show_poach or show_contracts)
+        bypass_reserved_filter = bool(show_all_players or show_qo or show_poach or show_contracts)
 
-        # contracted/PT filter (unless show_all_players is enabled)
-        if (not show_all_players) and (pk in contracted_keys):
-            # if show_qo is ON and player is a predraft QO, let it through (QO view wants all QOs)
-            if not (show_qo and pk in predraft_qo_keys):
-                continue
+        if pk in drafted and not bypass_drafted_filter:
+            continue
+
+        if (pk in contracted_keys) and not bypass_reserved_filter:
+            continue
 
         # PT toggle
         if show_pt:
@@ -1259,11 +1456,10 @@ def render_available_players(state: DraftState) -> None:
             if pk not in pt_map:
                 continue
 
-        # Contracts toggle (contracts only; PT has its own toggle)
+        # Contracts toggle: canonical contracts only, regardless of Show all players.
         if show_contracts:
-            # contract_years_2026 is loaded later in your function; use session_state cached version if present
-            # We'll compute it later; for now we defer filter until after contract_years_2026 loads by using a placeholder.
-            pass
+            if pk not in canonical_contract_keys:
+                continue
 
         if not matches_name(p.name):
             continue
@@ -1303,7 +1499,7 @@ def render_available_players(state: DraftState) -> None:
             pk = str(p.player_key)
             if pk in pt_map:
                 continue
-            if pk not in (contract_years_map or {}):
+            if pk not in canonical_contract_keys:
                 continue
             filtered.append(p)
         available_players = filtered
@@ -1321,6 +1517,11 @@ def render_available_players(state: DraftState) -> None:
         label = str(row.get("status_label") or "")
         if label:
             status_by_player_key[str(pk)] = label
+
+    # DB draft selections override keeper/QO/FT display status when visible in show-all views.
+    for pk, row in (db_draft_status_by_player_key or {}).items():
+        kind = str(row.get("pick_kind") or "").upper()
+        status_by_player_key[str(pk)] = f"Drafted {kind}" if kind else "Drafted"
 
     # PT overrides
     for pk in pt_map.keys():
@@ -1371,6 +1572,15 @@ def render_available_players(state: DraftState) -> None:
     }
     draft_pick_label_by_player_key: dict[str, str] = {}
     draft_pick_sort_by_player_key: dict[str, int] = {}
+
+    # DB draft selections override Team Name and Draft Pick labels when visible in show-all views.
+    for pk, row in (db_draft_status_by_player_key or {}).items():
+        pk = str(pk)
+        if row.get("team_name"):
+            team_name_by_player_key[pk] = str(row.get("team_name") or "")
+        if row.get("pick_id"):
+            draft_pick_label_by_player_key[pk] = str(row.get("pick_id") or "")
+            draft_pick_sort_by_player_key[pk] = -1
 
     # A) Real picks -> Draft Pick + Team Name
     player_key_to_best_pick_id: dict[str, str] = {}
@@ -1476,73 +1686,88 @@ def render_available_players(state: DraftState) -> None:
             int((contract_years_map or {}).get(pk, 0) or 0) for pk in player_keys_in_df
         ]
 
-    # If Yahoo Actual Rank is not imported yet, do not fake it.
-    # Fall back to Fan Pts descending so the table is still draft-useful.
-    if sort_col == "Actual Rank" and "Actual Rank" in df.columns:
-        actual_rank_values = pd.to_numeric(df["Actual Rank"], errors="coerce")
-        if int(actual_rank_values.notna().sum()) == 0 and "Fan Pts" in df.columns:
-            sort_col = "Fan Pts"
-            sort_desc = True
-            st.session_state["avail_sort_col"] = "Fan Pts"
-            st.session_state["avail_sort_desc"] = True
-            st.info("Actual Rank is not populated in the Yahoo player universe yet. Temporarily sorting by Fan Pts descending.")
 
-    # Sort with blanks always last
-    if sort_col == "Draft Pick":
-        df = df.sort_values("_draft_pick_sort", ascending=(not sort_desc), na_position="last", kind="mergesort")
-    elif sort_col == "Contract Years":
-        df = df.sort_values("_contract_years_sort", ascending=(not sort_desc), na_position="last", kind="mergesort")
-    elif sort_col in df.columns:
-        df = df.sort_values(sort_col, ascending=(not sort_desc), na_position="last", kind="mergesort")
+    # NFFL_AVAILABLE_PLAYERS_TABLE_RENDER_START
+    # Final display stage. The prior code builds/filter/sorts data; this block renders it.
+    if df is None or df.empty:
+        st.caption("No players match the current Available Players filters.")
+        return
 
-    # Display formatting (without breaking sorting, since sorting already happened)
-    df_for_display = df.drop(columns=["_draft_pick_sort", "_contract_years_sort"], errors="ignore")
+    df = df.copy()
 
-    # Hide feature-specific columns when the active league does not use them.
-    cols_to_drop = []
-    if not (qo_enabled or pt_enabled or contracts_enabled):
-        cols_to_drop.append("Contract/PT/QO")
-    if not contracts_enabled:
-        cols_to_drop.append("Contract Years")
+    sort_col_effective = sort_col if sort_col in df.columns else "Actual Rank"
+    sort_desc_effective = bool(sort_desc)
 
-    if cols_to_drop:
-        df_for_display = df_for_display.drop(columns=cols_to_drop, errors="ignore")
+    sort_by = sort_col_effective
+    if sort_col_effective == "Draft Pick":
+        sort_by = "_draft_pick_sort"
+    elif sort_col_effective == "Contract Years":
+        sort_by = "_contract_years_sort"
 
-    df_disp = _format_players_df_for_display(df_for_display)
+    if sort_by in df.columns:
+        # Keep sort deterministic and stable.
+        if sort_by.startswith("_") or sort_col_effective in {
+            "Actual Rank", "% Ros", "Fan Pts", "GP",
+            "Pass Yds", "Pass TD", "Pass INT",
+            "Rush Att", "Rush Yds", "Rush TD",
+            "Rec", "Rec Yds", "Rec TD", "Targets", "Fum Lost",
+            "Contract Years",
+        }:
+            df[sort_by] = pd.to_numeric(df[sort_by], errors="coerce")
 
-    st.caption(f"Available: {len(df_disp)}")
+        secondary_cols = []
+        if "Player Name" in df.columns and sort_by != "Player Name":
+            secondary_cols.append("Player Name")
 
-    # Display-only cleanup: blank out literal "None" strings in object columns (don’t touch Int64, floats, etc.)
-    obj_cols = [c for c in df_disp.columns if str(df_disp[c].dtype) in ("object", "string")]
-    if obj_cols:
-        df_disp[obj_cols] = df_disp[obj_cols].replace(
-            {None: "", "None": "", "nan": "", "NaN": "", "<NA>": "", pd.NA: ""}
+        sort_cols_effective = [sort_by] + secondary_cols
+        ascending_flags = [not sort_desc_effective] + [True for _ in secondary_cols]
+
+        df = df.sort_values(
+            by=sort_cols_effective,
+            ascending=ascending_flags,
+            na_position="last",
+            kind="mergesort",
         )
+
+    df_disp = df.drop(
+        columns=["_draft_pick_sort", "_contract_years_sort"],
+        errors="ignore",
+    ).copy()
+
+    # Keep numeric columns numeric so manual Streamlit column sorting works.
+    numeric_cols = [
+        "Actual Rank", "% Ros", "Fan Pts", "GP",
+        "Pass Yds", "Pass TD", "Pass INT",
+        "Rush Att", "Rush Yds", "Rush TD",
+        "Rec", "Rec Yds", "Rec TD", "Targets", "Fum Lost",
+        "Contract Years",
+    ]
+    for c in numeric_cols:
+        if c in df_disp.columns:
+            df_disp[c] = pd.to_numeric(df_disp[c], errors="coerce")
+
+    if "Fan Pts" in df_disp.columns:
+        df_disp["Fan Pts"] = pd.to_numeric(df_disp["Fan Pts"], errors="coerce").round(1)
 
     column_config = {}
-    if "Fan Pts" in df_disp.columns:
-        column_config["Fan Pts"] = st.column_config.NumberColumn(
-            "Fan Pts",
-            format="%.1f",
-        )
-    if "% Ros" in df_disp.columns:
-        column_config["% Ros"] = st.column_config.NumberColumn(
-            "% Ros",
-            format="%d",
-        )
     if "Actual Rank" in df_disp.columns:
-        column_config["Actual Rank"] = st.column_config.NumberColumn(
-            "Actual Rank",
-            format="%d",
-        )
+        column_config["Actual Rank"] = st.column_config.NumberColumn("Actual Rank", format="%d")
+    if "% Ros" in df_disp.columns:
+        column_config["% Ros"] = st.column_config.NumberColumn("% Ros", format="%d")
+    if "Fan Pts" in df_disp.columns:
+        column_config["Fan Pts"] = st.column_config.NumberColumn("Fan Pts", format="%.1f")
+
+    st.caption(f"Showing {len(df_disp)} players")
+    table_height = min(2600, max(1200, int(len(df_disp) * 34) + 90))
 
     st.dataframe(
         df_disp,
         use_container_width=True,
-        height=720,
         hide_index=True,
         column_config=column_config,
+        height=table_height,
     )
+    # NFFL_AVAILABLE_PLAYERS_TABLE_RENDER_END
 
 
 def render_teams(state: DraftState, contract_years_2026: dict[str, int]) -> None:
