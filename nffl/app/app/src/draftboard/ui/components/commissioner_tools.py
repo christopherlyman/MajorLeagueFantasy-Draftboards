@@ -1067,6 +1067,11 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
         _features = {}
     prospect_tags_enabled = bool(_features.get("prospect_tags", False))
 
+    # NFFL commissioner page cleanup: hide stale/risky legacy tools without deleting shared code.
+    show_disabled_season_team_assignments = False
+    show_trade_builder = False
+    show_contract_overrides = False
+
     with st.expander("Admin Password Reset Tool", expanded=False):
         if not is_site_admin:
             st.info("Site admin access required.")
@@ -1131,13 +1136,14 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     # -----------------------
     # Season Team Assignments (Commissioner)
     # -----------------------
-    with st.expander("Season Team Assignments (Commissioner)", expanded=False):
-        st.warning(
-            "Temporarily disabled while multi-league scoping is repaired."
-        )
-        st.info(
-            "This tool currently assumes one league per season and can hide the rest of Commissioner Tools."
-        )
+    if show_disabled_season_team_assignments:
+        with st.expander("Season Team Assignments (Commissioner)", expanded=False):
+            st.warning(
+                "Temporarily disabled while multi-league scoping is repaired."
+            )
+            st.info(
+                "This tool currently assumes one league per season and can hide the rest of Commissioner Tools."
+            )
 
     # -----------------------
     # Set Draft Order
@@ -1505,399 +1511,400 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     # -----------------------
     # Trade Builder (UI ONLY — SAFE)
     # -----------------------
-    with st.expander("Trade (Builder)", expanded=False):
+    if show_trade_builder:
+        with st.expander("Trade (Builder)", expanded=False):
 
-        st.caption(
-            "Trade Builder writes trade receipts to DB. "
-            "On Submit: inserts trade + trade_asset rows. "
-            "For contracted players, it also updates canonical contract SSOT in public.contract. "
-            "Pick ownership is not yet rewired here."
-        )
-
-        # --------------------------------------------------
-        # Session State Container
-        # --------------------------------------------------
-        if "trade_builder_v1" not in st.session_state:
-            st.session_state["trade_builder_v1"] = {
-                "left":  {"team_key": "", "players": [], "picks": []},
-                "right": {"team_key": "", "players": [], "picks": []},
-                "finalize": False,
-            }
-
-        tb = st.session_state["trade_builder_v1"]
-
-        # --------------------------------------------------
-        # Helpers
-        # --------------------------------------------------
-        def team_name(k: str) -> str:
-            t = state.teams.get(k)
-            return t.name if t else k
-
-        team_keys = sorted([t.team_key for t in state.teams.values()])
-
-        # ---------- Player options ----------
-        player_keys_sorted = sorted(
-            state.players.keys(),
-            key=lambda pk: (
-                getattr(state.players[pk], "rank_value", None) is None,
-                getattr(state.players[pk], "rank_value", None) if getattr(state.players[pk], "rank_value", None) is not None else 999999,
-                state.players[pk].name or "",
-                pk,
-            ),
-        )
-
-        player_label_by_key = {
-            pk: f"{state.players[pk].name} ({pk})"
-            for pk in player_keys_sorted
-        }
-
-        player_options = [""] + list(player_label_by_key.values())
-        player_key_by_label = {v: k for k, v in player_label_by_key.items()}
-
-        # ---------- Pick options ----------
-        def _pick_label(ps):
-            r = int(getattr(ps, "round_number", 0) or 0)
-            s = int(getattr(ps, "slot", 0) or 0)
-
-            # UI label: show pick_id + (R#.slot) + current owner only
-            owner = str(getattr(ps, "owner_team_key", "") or "").strip()
-            owner_nm = team_name(owner) if owner else ""
-
-            return f"{ps.pick_id} (R{r}.{s})" + (f" | owner={owner_nm}" if owner_nm else "")
-
-        pick_ids_sorted = sorted(
-            state.picks.keys(),
-            key=lambda pid: (
-                state.picks[pid].round_number,
-                state.picks[pid].slot,
-                pid,
-            ),
-        )
-
-        pick_label_by_id = {
-            pid: _pick_label(state.picks[pid])
-            for pid in pick_ids_sorted
-        }
-
-        pick_options = [""] + list(pick_label_by_id.values())
-        pick_id_by_label = {v: k for k, v in pick_label_by_id.items()}
-
-        MAX_ITEMS = 10
-
-        # --------------------------------------------------
-        # Trade Pane Renderer
-        # --------------------------------------------------
-        def _pane(which: str):
-
-            pane = tb[which]
-            title = "Team A (gets)" if which == "left" else "Team B (gets)"
-
-            st.markdown(f"### {title}")
-
-            pane["team_key"] = st.selectbox(
-                "Select team",
-                options=[""] + team_keys,
-                index=([""] + team_keys).index(pane["team_key"])
-                if pane["team_key"] in ([""] + team_keys)
-                else 0,
-                key=f"trade_team_{which}",
-                format_func=lambda k: "" if k == "" else team_name(k),
+            st.caption(
+                "Trade Builder writes trade receipts to DB. "
+                "On Submit: inserts trade + trade_asset rows. "
+                "For contracted players, it also updates canonical contract SSOT in public.contract. "
+                "Pick ownership is not yet rewired here."
             )
 
-            # ---------------- PLAYER ADD ----------------
-            st.markdown("**Add player to get**")
-            st.caption("Add contract to player:")
-
-            c1, c2, c3 = st.columns([3, 1, 1])
-
-            with c1:
-                sel_player = st.selectbox(
-                    "Player",
-                    options=player_options,
-                    key=f"trade_player_sel_{which}",
-                    label_visibility="collapsed",
-                )
-
-            with c2:
-                contract_years = st.number_input(
-                    "Contract years (0–5)",
-                    min_value=0,
-                    max_value=5,
-                    value=0,
-                    step=1,
-                    key=f"trade_player_contract_{which}",
-                )
-
-            with c3:
-                if st.button("Add", key=f"trade_player_add_{which}", use_container_width=True):
-                    pk = player_key_by_label.get(sel_player, "")
-                    existing_keys = {str(x.get("player_key")) for x in pane["players"] if isinstance(x, dict)}
-                    if pk and pk not in existing_keys:
-                        if len(pane["players"]) < MAX_ITEMS:
-                            pane["players"].append({"player_key": pk, "contract_years": int(contract_years)})
-
-            # Display players
-            for i, rec in enumerate(list(pane["players"])):
-                pk = str(rec.get("player_key") or "")
-                yrs = int(rec.get("contract_years") or 0)
-
-                nm = state.players.get(pk).name if pk in state.players else pk
-                a, b = st.columns([6, 1])
-                with a:
-                    st.write(f"• {nm} ({pk}) — contract {yrs}y")
-                with b:
-                    if st.button("✕", key=f"trade_rm_player_{which}_{i}"):
-                        pane["players"].pop(i)
-                        st.rerun()
-
-            # ---------------- PICK ADD ----------------
-            st.markdown("**Add pick to get**")
-
-            c3, c4 = st.columns([3, 1])
-
-            with c3:
-                # Picks to get should come from the OTHER team (the team you're trading with)
-                other_team_key = tb["right"]["team_key"] if which == "left" else tb["left"]["team_key"]
-
-                if not other_team_key:
-                    st.info("First select a team to trade with.")
-                    sel_pick = ""  # no selection possible yet
-                    other_pick_id_by_label = {}
-                else:
-                    other_pick_ids = []
-                    for pid in pick_ids_sorted:
-                        ps = state.picks.get(pid)
-                        if not ps:
-                            continue
-                        ow = str(getattr(ps, "owner_team_key", "") or "").strip()
-                        if ow == str(other_team_key).strip():
-                            other_pick_ids.append(pid)
-
-                    other_pick_labels = [""] + [pick_label_by_id[pid] for pid in other_pick_ids]
-                    other_pick_id_by_label = {pick_label_by_id[pid]: pid for pid in other_pick_ids}
-
-                    sel_pick = st.selectbox(
-                        "Pick (from other team)",
-                        options=other_pick_labels,
-                        key=f"trade_pick_sel_{which}",
-                        label_visibility="collapsed",
-                    )
-
-            with c4:
-                if st.button("Add", key=f"trade_pick_add_{which}", use_container_width=True):
-                    pid = other_pick_id_by_label.get(sel_pick, "")
-                    if pid and pid not in pane["picks"]:
-                        if len(pane["picks"]) < MAX_ITEMS:
-                            pane["picks"].append(pid)
-
-            # Display picks
-            for i, pid in enumerate(list(pane["picks"])):
-                lbl = pick_label_by_id.get(pid, pid)
-                a, b = st.columns([6, 1])
-                with a:
-                    st.write(f"• {lbl}")
-                with b:
-                    if st.button("✕", key=f"trade_rm_pick_{which}_{i}"):
-                        pane["picks"].remove(pid)
-                        st.rerun()
-                        
-            # (Contracts are attached to players at add-time via the contract_years input above.)
-
-        # --------------------------------------------------
-        # Layout
-        # --------------------------------------------------
-        left_col, right_col = st.columns(2)
-
-        with left_col:
-            _pane("left")
-
-        with right_col:
-            _pane("right")
-
-        # --------------------------------------------------
-        # Preview (UI only)
-        # --------------------------------------------------
-        st.divider()
-        st.markdown("### Trade Preview")
-
-        left_ct = len(tb["left"]["players"]) + len(tb["left"]["picks"])
-        right_ct = len(tb["right"]["players"]) + len(tb["right"]["picks"])
-
-        st.write(
-            f"Team A items: {left_ct} "
-            f"(players={len(tb['left']['players'])}, picks={len(tb['left']['picks'])})"
-        )
-
-        st.write(
-            f"Team B items: {right_ct} "
-            f"(players={len(tb['right']['players'])}, picks={len(tb['right']['picks'])})"
-        )
-
-        st.caption("Preview of the trade to be written to DB on Submit.")
-
-        st.divider()
-
-        # -----------------------
-        # Finalize → Submit
-        # -----------------------
-        tb["finalize"] = st.checkbox(
-            "Finalize Trade (locks selections and enables Submit)",
-            value=bool(tb.get("finalize", False)),
-            key="trade_finalize_checkbox",
-        )
-
-        teams_ok = bool(tb["left"]["team_key"]) and bool(tb["right"]["team_key"])
-        teams_distinct = (tb["left"]["team_key"] != tb["right"]["team_key"]) if teams_ok else False
-        can_submit = bool(tb["finalize"]) and teams_ok and teams_distinct
-
-        submit = st.button(
-            "Submit Trade (writes DB rows)",
-            type="primary",
-            disabled=not can_submit,
-            key="trade_submit_btn",
-        )
-
-        if submit:
-            try:
-                dsn = _get_dsn()
-                league_key = _get_league_key()
-                season_year = _get_season_year()
-
-                team_a = str(tb["left"]["team_key"])
-                team_b = str(tb["right"]["team_key"])
-
-                asset_rows: list[dict] = []
-
-                # Team A gets: FROM Team B -> TO Team A
-                for rec in tb["left"]["players"]:
-                    pk = str(rec.get("player_key") or "").strip()
-                    yrs = int(rec.get("contract_years") or 0)
-                    if pk:
-                        asset_rows.append(
-                            {
-                                "asset_type": "PLAYER",
-                                "asset_id": pk,
-                                "from_team_key": team_b,
-                                "to_team_key": team_a,
-                                "snapshot": {"contract_years": yrs},
-                            }
-                        )
-
-                for pid in tb["left"]["picks"]:
-                    pid = str(pid or "").strip()
-                    if pid:
-                        asset_rows.append(
-                            {
-                                "asset_type": "PICK",
-                                "asset_id": pid,
-                                "from_team_key": team_b,
-                                "to_team_key": team_a,
-                                "snapshot": {},
-                            }
-                        )
-
-                # Team B gets: FROM Team A -> TO Team B
-                for rec in tb["right"]["players"]:
-                    pk = str(rec.get("player_key") or "").strip()
-                    yrs = int(rec.get("contract_years") or 0)
-                    if pk:
-                        asset_rows.append(
-                            {
-                                "asset_type": "PLAYER",
-                                "asset_id": pk,
-                                "from_team_key": team_a,
-                                "to_team_key": team_b,
-                                "snapshot": {"contract_years": yrs},
-                            }
-                        )
-
-                for pid in tb["right"]["picks"]:
-                    pid = str(pid or "").strip()
-                    if pid:
-                        asset_rows.append(
-                            {
-                                "asset_type": "PICK",
-                                "asset_id": pid,
-                                "from_team_key": team_a,
-                                "to_team_key": team_b,
-                                "snapshot": {},
-                            }
-                        )
-
-                trade_id = _insert_trade(
-                    dsn=dsn,
-                    league_key=league_key,
-                    season_year=season_year,
-                    created_by="commissioner",
-                    notes="",
-                )
-                n_assets = _insert_trade_assets(dsn=dsn, trade_id=trade_id, rows=asset_rows)
-
-                # Push ownership changes into existing canonical SSOT paths.
-                # - PLAYER with contract_years > 0 -> public.contract
-                # - PICK -> DraftBoard persisted state (owner_team_key only; columns remain fixed)
-                n_contract_updates = 0
-                n_pick_updates = 0
-                matched_pick_ids = []
-                missing_pick_ids = []
-
-                for row in asset_rows:
-                    asset_type = str(row.get("asset_type") or "").strip().upper()
-                    asset_id = str(row.get("asset_id") or "").strip()
-                    to_team_key = str(row.get("to_team_key") or "").strip()
-
-                    if not asset_id or not to_team_key:
-                        continue
-
-                    if asset_type == "PLAYER":
-                        snapshot = row.get("snapshot") or {}
-                        years_remaining = int(snapshot.get("contract_years") or 0)
-
-                        if years_remaining > 0:
-                            n_contract_updates += _update_contract_team_key(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=asset_id,
-                                to_team_key=to_team_key,
-                                note=f"trade:{trade_id}",
-                            )
-                        continue
-
-                    if asset_type == "PICK":
-                        ps = (getattr(state, "picks", {}) or {}).get(asset_id)
-                        if not ps:
-                            missing_pick_ids.append(asset_id)
-                            continue
-
-                        matched_pick_ids.append(asset_id)
-
-                        if isinstance(ps, dict):
-                            ps["owner_team_key"] = to_team_key
-                            n_pick_updates += 1
-                        else:
-                            setattr(ps, "owner_team_key", to_team_key)
-                            n_pick_updates += 1
-
-                _refresh_contract_cache_into_session_state()
-                save_autosave(state)
-
-                st.success(
-                    f"Trade saved to DB. trade_id={trade_id} assets={n_assets} "
-                    f"contract_updates={n_contract_updates} pick_updates={n_pick_updates} "
-                    f"matched_picks={matched_pick_ids} missing_picks={missing_pick_ids}"
-                )
-
-                # Reset builder after successful write
+            # --------------------------------------------------
+            # Session State Container
+            # --------------------------------------------------
+            if "trade_builder_v1" not in st.session_state:
                 st.session_state["trade_builder_v1"] = {
                     "left":  {"team_key": "", "players": [], "picks": []},
                     "right": {"team_key": "", "players": [], "picks": []},
                     "finalize": False,
                 }
-                st.rerun()
 
-            except Exception as e:
-                st.error(f"Submit failed: {e}")
+            tb = st.session_state["trade_builder_v1"]
+
+            # --------------------------------------------------
+            # Helpers
+            # --------------------------------------------------
+            def team_name(k: str) -> str:
+                t = state.teams.get(k)
+                return t.name if t else k
+
+            team_keys = sorted([t.team_key for t in state.teams.values()])
+
+            # ---------- Player options ----------
+            player_keys_sorted = sorted(
+                state.players.keys(),
+                key=lambda pk: (
+                    getattr(state.players[pk], "rank_value", None) is None,
+                    getattr(state.players[pk], "rank_value", None) if getattr(state.players[pk], "rank_value", None) is not None else 999999,
+                    state.players[pk].name or "",
+                    pk,
+                ),
+            )
+
+            player_label_by_key = {
+                pk: f"{state.players[pk].name} ({pk})"
+                for pk in player_keys_sorted
+            }
+
+            player_options = [""] + list(player_label_by_key.values())
+            player_key_by_label = {v: k for k, v in player_label_by_key.items()}
+
+            # ---------- Pick options ----------
+            def _pick_label(ps):
+                r = int(getattr(ps, "round_number", 0) or 0)
+                s = int(getattr(ps, "slot", 0) or 0)
+
+                # UI label: show pick_id + (R#.slot) + current owner only
+                owner = str(getattr(ps, "owner_team_key", "") or "").strip()
+                owner_nm = team_name(owner) if owner else ""
+
+                return f"{ps.pick_id} (R{r}.{s})" + (f" | owner={owner_nm}" if owner_nm else "")
+
+            pick_ids_sorted = sorted(
+                state.picks.keys(),
+                key=lambda pid: (
+                    state.picks[pid].round_number,
+                    state.picks[pid].slot,
+                    pid,
+                ),
+            )
+
+            pick_label_by_id = {
+                pid: _pick_label(state.picks[pid])
+                for pid in pick_ids_sorted
+            }
+
+            pick_options = [""] + list(pick_label_by_id.values())
+            pick_id_by_label = {v: k for k, v in pick_label_by_id.items()}
+
+            MAX_ITEMS = 10
+
+            # --------------------------------------------------
+            # Trade Pane Renderer
+            # --------------------------------------------------
+            def _pane(which: str):
+
+                pane = tb[which]
+                title = "Team A (gets)" if which == "left" else "Team B (gets)"
+
+                st.markdown(f"### {title}")
+
+                pane["team_key"] = st.selectbox(
+                    "Select team",
+                    options=[""] + team_keys,
+                    index=([""] + team_keys).index(pane["team_key"])
+                    if pane["team_key"] in ([""] + team_keys)
+                    else 0,
+                    key=f"trade_team_{which}",
+                    format_func=lambda k: "" if k == "" else team_name(k),
+                )
+
+                # ---------------- PLAYER ADD ----------------
+                st.markdown("**Add player to get**")
+                st.caption("Add contract to player:")
+
+                c1, c2, c3 = st.columns([3, 1, 1])
+
+                with c1:
+                    sel_player = st.selectbox(
+                        "Player",
+                        options=player_options,
+                        key=f"trade_player_sel_{which}",
+                        label_visibility="collapsed",
+                    )
+
+                with c2:
+                    contract_years = st.number_input(
+                        "Contract years (0–5)",
+                        min_value=0,
+                        max_value=5,
+                        value=0,
+                        step=1,
+                        key=f"trade_player_contract_{which}",
+                    )
+
+                with c3:
+                    if st.button("Add", key=f"trade_player_add_{which}", use_container_width=True):
+                        pk = player_key_by_label.get(sel_player, "")
+                        existing_keys = {str(x.get("player_key")) for x in pane["players"] if isinstance(x, dict)}
+                        if pk and pk not in existing_keys:
+                            if len(pane["players"]) < MAX_ITEMS:
+                                pane["players"].append({"player_key": pk, "contract_years": int(contract_years)})
+
+                # Display players
+                for i, rec in enumerate(list(pane["players"])):
+                    pk = str(rec.get("player_key") or "")
+                    yrs = int(rec.get("contract_years") or 0)
+
+                    nm = state.players.get(pk).name if pk in state.players else pk
+                    a, b = st.columns([6, 1])
+                    with a:
+                        st.write(f"• {nm} ({pk}) — contract {yrs}y")
+                    with b:
+                        if st.button("✕", key=f"trade_rm_player_{which}_{i}"):
+                            pane["players"].pop(i)
+                            st.rerun()
+
+                # ---------------- PICK ADD ----------------
+                st.markdown("**Add pick to get**")
+
+                c3, c4 = st.columns([3, 1])
+
+                with c3:
+                    # Picks to get should come from the OTHER team (the team you're trading with)
+                    other_team_key = tb["right"]["team_key"] if which == "left" else tb["left"]["team_key"]
+
+                    if not other_team_key:
+                        st.info("First select a team to trade with.")
+                        sel_pick = ""  # no selection possible yet
+                        other_pick_id_by_label = {}
+                    else:
+                        other_pick_ids = []
+                        for pid in pick_ids_sorted:
+                            ps = state.picks.get(pid)
+                            if not ps:
+                                continue
+                            ow = str(getattr(ps, "owner_team_key", "") or "").strip()
+                            if ow == str(other_team_key).strip():
+                                other_pick_ids.append(pid)
+
+                        other_pick_labels = [""] + [pick_label_by_id[pid] for pid in other_pick_ids]
+                        other_pick_id_by_label = {pick_label_by_id[pid]: pid for pid in other_pick_ids}
+
+                        sel_pick = st.selectbox(
+                            "Pick (from other team)",
+                            options=other_pick_labels,
+                            key=f"trade_pick_sel_{which}",
+                            label_visibility="collapsed",
+                        )
+
+                with c4:
+                    if st.button("Add", key=f"trade_pick_add_{which}", use_container_width=True):
+                        pid = other_pick_id_by_label.get(sel_pick, "")
+                        if pid and pid not in pane["picks"]:
+                            if len(pane["picks"]) < MAX_ITEMS:
+                                pane["picks"].append(pid)
+
+                # Display picks
+                for i, pid in enumerate(list(pane["picks"])):
+                    lbl = pick_label_by_id.get(pid, pid)
+                    a, b = st.columns([6, 1])
+                    with a:
+                        st.write(f"• {lbl}")
+                    with b:
+                        if st.button("✕", key=f"trade_rm_pick_{which}_{i}"):
+                            pane["picks"].remove(pid)
+                            st.rerun()
+                        
+                # (Contracts are attached to players at add-time via the contract_years input above.)
+
+            # --------------------------------------------------
+            # Layout
+            # --------------------------------------------------
+            left_col, right_col = st.columns(2)
+
+            with left_col:
+                _pane("left")
+
+            with right_col:
+                _pane("right")
+
+            # --------------------------------------------------
+            # Preview (UI only)
+            # --------------------------------------------------
+            st.divider()
+            st.markdown("### Trade Preview")
+
+            left_ct = len(tb["left"]["players"]) + len(tb["left"]["picks"])
+            right_ct = len(tb["right"]["players"]) + len(tb["right"]["picks"])
+
+            st.write(
+                f"Team A items: {left_ct} "
+                f"(players={len(tb['left']['players'])}, picks={len(tb['left']['picks'])})"
+            )
+
+            st.write(
+                f"Team B items: {right_ct} "
+                f"(players={len(tb['right']['players'])}, picks={len(tb['right']['picks'])})"
+            )
+
+            st.caption("Preview of the trade to be written to DB on Submit.")
+
+            st.divider()
+
+            # -----------------------
+            # Finalize → Submit
+            # -----------------------
+            tb["finalize"] = st.checkbox(
+                "Finalize Trade (locks selections and enables Submit)",
+                value=bool(tb.get("finalize", False)),
+                key="trade_finalize_checkbox",
+            )
+
+            teams_ok = bool(tb["left"]["team_key"]) and bool(tb["right"]["team_key"])
+            teams_distinct = (tb["left"]["team_key"] != tb["right"]["team_key"]) if teams_ok else False
+            can_submit = bool(tb["finalize"]) and teams_ok and teams_distinct
+
+            submit = st.button(
+                "Submit Trade (writes DB rows)",
+                type="primary",
+                disabled=not can_submit,
+                key="trade_submit_btn",
+            )
+
+            if submit:
+                try:
+                    dsn = _get_dsn()
+                    league_key = _get_league_key()
+                    season_year = _get_season_year()
+
+                    team_a = str(tb["left"]["team_key"])
+                    team_b = str(tb["right"]["team_key"])
+
+                    asset_rows: list[dict] = []
+
+                    # Team A gets: FROM Team B -> TO Team A
+                    for rec in tb["left"]["players"]:
+                        pk = str(rec.get("player_key") or "").strip()
+                        yrs = int(rec.get("contract_years") or 0)
+                        if pk:
+                            asset_rows.append(
+                                {
+                                    "asset_type": "PLAYER",
+                                    "asset_id": pk,
+                                    "from_team_key": team_b,
+                                    "to_team_key": team_a,
+                                    "snapshot": {"contract_years": yrs},
+                                }
+                            )
+
+                    for pid in tb["left"]["picks"]:
+                        pid = str(pid or "").strip()
+                        if pid:
+                            asset_rows.append(
+                                {
+                                    "asset_type": "PICK",
+                                    "asset_id": pid,
+                                    "from_team_key": team_b,
+                                    "to_team_key": team_a,
+                                    "snapshot": {},
+                                }
+                            )
+
+                    # Team B gets: FROM Team A -> TO Team B
+                    for rec in tb["right"]["players"]:
+                        pk = str(rec.get("player_key") or "").strip()
+                        yrs = int(rec.get("contract_years") or 0)
+                        if pk:
+                            asset_rows.append(
+                                {
+                                    "asset_type": "PLAYER",
+                                    "asset_id": pk,
+                                    "from_team_key": team_a,
+                                    "to_team_key": team_b,
+                                    "snapshot": {"contract_years": yrs},
+                                }
+                            )
+
+                    for pid in tb["right"]["picks"]:
+                        pid = str(pid or "").strip()
+                        if pid:
+                            asset_rows.append(
+                                {
+                                    "asset_type": "PICK",
+                                    "asset_id": pid,
+                                    "from_team_key": team_a,
+                                    "to_team_key": team_b,
+                                    "snapshot": {},
+                                }
+                            )
+
+                    trade_id = _insert_trade(
+                        dsn=dsn,
+                        league_key=league_key,
+                        season_year=season_year,
+                        created_by="commissioner",
+                        notes="",
+                    )
+                    n_assets = _insert_trade_assets(dsn=dsn, trade_id=trade_id, rows=asset_rows)
+
+                    # Push ownership changes into existing canonical SSOT paths.
+                    # - PLAYER with contract_years > 0 -> public.contract
+                    # - PICK -> DraftBoard persisted state (owner_team_key only; columns remain fixed)
+                    n_contract_updates = 0
+                    n_pick_updates = 0
+                    matched_pick_ids = []
+                    missing_pick_ids = []
+
+                    for row in asset_rows:
+                        asset_type = str(row.get("asset_type") or "").strip().upper()
+                        asset_id = str(row.get("asset_id") or "").strip()
+                        to_team_key = str(row.get("to_team_key") or "").strip()
+
+                        if not asset_id or not to_team_key:
+                            continue
+
+                        if asset_type == "PLAYER":
+                            snapshot = row.get("snapshot") or {}
+                            years_remaining = int(snapshot.get("contract_years") or 0)
+
+                            if years_remaining > 0:
+                                n_contract_updates += _update_contract_team_key(
+                                    dsn=dsn,
+                                    league_key=league_key,
+                                    season_year=season_year,
+                                    yahoo_player_key=asset_id,
+                                    to_team_key=to_team_key,
+                                    note=f"trade:{trade_id}",
+                                )
+                            continue
+
+                        if asset_type == "PICK":
+                            ps = (getattr(state, "picks", {}) or {}).get(asset_id)
+                            if not ps:
+                                missing_pick_ids.append(asset_id)
+                                continue
+
+                            matched_pick_ids.append(asset_id)
+
+                            if isinstance(ps, dict):
+                                ps["owner_team_key"] = to_team_key
+                                n_pick_updates += 1
+                            else:
+                                setattr(ps, "owner_team_key", to_team_key)
+                                n_pick_updates += 1
+
+                    _refresh_contract_cache_into_session_state()
+                    save_autosave(state)
+
+                    st.success(
+                        f"Trade saved to DB. trade_id={trade_id} assets={n_assets} "
+                        f"contract_updates={n_contract_updates} pick_updates={n_pick_updates} "
+                        f"matched_picks={matched_pick_ids} missing_picks={missing_pick_ids}"
+                    )
+
+                    # Reset builder after successful write
+                    st.session_state["trade_builder_v1"] = {
+                        "left":  {"team_key": "", "players": [], "picks": []},
+                        "right": {"team_key": "", "players": [], "picks": []},
+                        "finalize": False,
+                    }
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Submit failed: {e}")
 
     # -----------------------
     if not is_milf:
@@ -2203,234 +2210,235 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     if not is_milf:
         # Contract Overrides
         # -----------------------
-        with st.expander("Contracts (Overrides)", expanded=False):
-            st.subheader("Contracts (Overrides)")
-            st.caption("These overrides patch contract truth without rebuilding transaction analysis. Years=0 means NOT under contract.")
+        if show_contract_overrides:
+            with st.expander("Contracts (Overrides)", expanded=False):
+                st.subheader("Contracts (Overrides)")
+                st.caption("These overrides patch contract truth without rebuilding transaction analysis. Years=0 means NOT under contract.")
 
-            try:
-                dsn = _get_dsn()
-            except Exception as e:
-                st.error(str(e))
-                dsn = ""
+                try:
+                    dsn = _get_dsn()
+                except Exception as e:
+                    st.error(str(e))
+                    dsn = ""
 
-            league_key = _get_league_key()
-            season_year = _get_season_year()
+                league_key = _get_league_key()
+                season_year = _get_season_year()
 
-            if not dsn:
-                st.stop()
+                if not dsn:
+                    st.stop()
 
-            team_keys = sorted([t.team_key for t in state.teams.values()])
+                team_keys = sorted([t.team_key for t in state.teams.values()])
 
-            def _team_name(k: str) -> str:
-                return state.teams[k].name if k in state.teams else k
+                def _team_name(k: str) -> str:
+                    return state.teams[k].name if k in state.teams else k
 
-            # ---------------------------
-            # Build "who owns this contract/PT" labels for UI + void inference
-            # ---------------------------
-            contracted_keys = set(st.session_state.get("contracted_keys", set()) or set())
-            contract_rows = list(st.session_state.get("contract_rows", []) or [])
-            pt_map = dict(getattr(state, "pt_player_team_map", {}) or {})
+                # ---------------------------
+                # Build "who owns this contract/PT" labels for UI + void inference
+                # ---------------------------
+                contracted_keys = set(st.session_state.get("contracted_keys", set()) or set())
+                contract_rows = list(st.session_state.get("contract_rows", []) or [])
+                pt_map = dict(getattr(state, "pt_player_team_map", {}) or {})
 
-            # player_key -> display owner label (DraftBoard team name for PT; yahoo_team_name for contracts)
-            pkey_to_owner_label: dict[str, str] = {}
+                # player_key -> display owner label (DraftBoard team name for PT; yahoo_team_name for contracts)
+                pkey_to_owner_label: dict[str, str] = {}
 
-            # PT first (wins)
-            for pk, tkey in pt_map.items():
-                pk = str(pk)
-                tkey = str(tkey)
-                nm = _team_name(tkey)
-                pkey_to_owner_label[pk] = f"{nm} (PT)"
+                # PT first (wins)
+                for pk, tkey in pt_map.items():
+                    pk = str(pk)
+                    tkey = str(tkey)
+                    nm = _team_name(tkey)
+                    pkey_to_owner_label[pk] = f"{nm} (PT)"
 
-            # Contracts next (only if PT didn't already set it)
-            for row in contract_rows:
-                pk = str(row.get("yahoo_player_key") or "")
-                if not pk:
-                    continue
-                if pk in pkey_to_owner_label:
-                    continue
-                yn = str(row.get("yahoo_team_name") or "").strip()
-                if yn:
-                    pkey_to_owner_label[pk] = yn
+                # Contracts next (only if PT didn't already set it)
+                for row in contract_rows:
+                    pk = str(row.get("yahoo_player_key") or "")
+                    if not pk:
+                        continue
+                    if pk in pkey_to_owner_label:
+                        continue
+                    yn = str(row.get("yahoo_team_name") or "").strip()
+                    if yn:
+                        pkey_to_owner_label[pk] = yn
 
-            # Player picker (searchable)
-            all_player_keys = sorted(
-                state.players.keys(),
-                key=lambda pk: (
-                    getattr(state.players[pk], "rank_value", None) is None,
-                    getattr(state.players[pk], "rank_value", None) if getattr(state.players[pk], "rank_value", None) is not None else 999999,
-                    state.players[pk].name or "",
-                    pk,
-                ),
-            )
-
-            def _player_label(pk: str) -> str:
-                p = state.players.get(pk)
-                if not p:
-                    return pk
-                owner = pkey_to_owner_label.get(pk, "")
-                tm = getattr(p, "mlb_team", "") or ""
-                pos = "/".join([x.value for x in getattr(p, "positions", [])]) if getattr(p, "positions", None) else ""
-
-                bits = [p.name]
-                if owner:
-                    bits.append(owner)
-                if tm:
-                    bits.append(tm)
-                if pos:
-                    bits.append(pos)
-                return " — ".join(bits)
-
-            # Read mode FIRST (so the Player dropdown can depend on it)
-            mode = st.radio(
-                "Contract action",
-                options=["Set contract", "Void contract (years=0)"],
-                horizontal=True,
-                key="contract_override_mode",
-            )
-
-            # Player options depend on mode:
-            # - Set contract: all players
-            # - Void: ONLY currently contracted (including PT, because contracted_keys already unions PT)
-            if mode == "Void contract (years=0)":
-                player_options = sorted(
-                    contracted_keys,
+                # Player picker (searchable)
+                all_player_keys = sorted(
+                    state.players.keys(),
                     key=lambda pk: (
-                        getattr(state.players.get(pk), "rank_value", None) is None,
-                        getattr(state.players.get(pk), "rank_value", None) if getattr(state.players.get(pk), "rank_value", None) is not None else 999999,
-                        getattr(state.players.get(pk), "name", "") or "",
+                        getattr(state.players[pk], "rank_value", None) is None,
+                        getattr(state.players[pk], "rank_value", None) if getattr(state.players[pk], "rank_value", None) is not None else 999999,
+                        state.players[pk].name or "",
                         pk,
                     ),
                 )
-            else:
-                player_options = all_player_keys
 
-            override_player_key = st.selectbox(
-                "Player",
-                options=player_options,
-                format_func=_player_label,
-                index=None,
-                placeholder="Start typing a player name…",
-                key="contract_override_player",
-            )
+                def _player_label(pk: str) -> str:
+                    p = state.players.get(pk)
+                    if not p:
+                        return pk
+                    owner = pkey_to_owner_label.get(pk, "")
+                    tm = getattr(p, "mlb_team", "") or ""
+                    pos = "/".join([x.value for x in getattr(p, "positions", [])]) if getattr(p, "positions", None) else ""
 
-            years = 0
-            team_key = ""
-            note = ""
+                    bits = [p.name]
+                    if owner:
+                        bits.append(owner)
+                    if tm:
+                        bits.append(tm)
+                    if pos:
+                        bits.append(pos)
+                    return " — ".join(bits)
 
-            if mode == "Set contract":
-                c1, c2 = st.columns([1, 2])
-                with c1:
-                    years = st.number_input(
-                        "Years remaining",
-                        min_value=1,
-                        max_value=10,
-                        value=1,
-                        step=1,
-                        key="contract_override_years",
+                # Read mode FIRST (so the Player dropdown can depend on it)
+                mode = st.radio(
+                    "Contract action",
+                    options=["Set contract", "Void contract (years=0)"],
+                    horizontal=True,
+                    key="contract_override_mode",
+                )
+
+                # Player options depend on mode:
+                # - Set contract: all players
+                # - Void: ONLY currently contracted (including PT, because contracted_keys already unions PT)
+                if mode == "Void contract (years=0)":
+                    player_options = sorted(
+                        contracted_keys,
+                        key=lambda pk: (
+                            getattr(state.players.get(pk), "rank_value", None) is None,
+                            getattr(state.players.get(pk), "rank_value", None) if getattr(state.players.get(pk), "rank_value", None) is not None else 999999,
+                            getattr(state.players.get(pk), "name", "") or "",
+                            pk,
+                        ),
                     )
-                with c2:
-                    team_key = st.selectbox(
-                        "Assign contract to DraftBoard team",
-                        options=team_keys,
-                        format_func=_team_name,
-                        key="contract_override_team",
-                    )
-                note = st.text_input("Note (optional)", value="", key="contract_override_note")
-            else:
+                else:
+                    player_options = all_player_keys
+
+                override_player_key = st.selectbox(
+                    "Player",
+                    options=player_options,
+                    format_func=_player_label,
+                    index=None,
+                    placeholder="Start typing a player name…",
+                    key="contract_override_player",
+                )
+
                 years = 0
-                note = st.text_input("Note (optional)", value="voided", key="contract_override_note_void")
+                team_key = ""
+                note = ""
 
-                # In void mode, capture inferred owner for audit/debugging (helps validate what you're voiding)
-                # If PT: store DraftBoard team name. If contract row: store yahoo_team_name.
-                inferred_owner = ""
-                if override_player_key:
-                    inferred_owner = pkey_to_owner_label.get(str(override_player_key), "")
-                # We don't force a DraftBoard team_key here because voiding semantics are years=0,
-                # but we DO store a useful yahoo_team_name for visibility.
-                team_key = ""  # keep blank; years=0 is the signal
+                if mode == "Set contract":
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        years = st.number_input(
+                            "Years remaining",
+                            min_value=1,
+                            max_value=10,
+                            value=1,
+                            step=1,
+                            key="contract_override_years",
+                        )
+                    with c2:
+                        team_key = st.selectbox(
+                            "Assign contract to DraftBoard team",
+                            options=team_keys,
+                            format_func=_team_name,
+                            key="contract_override_team",
+                        )
+                    note = st.text_input("Note (optional)", value="", key="contract_override_note")
+                else:
+                    years = 0
+                    note = st.text_input("Note (optional)", value="voided", key="contract_override_note_void")
 
-            # Map DraftBoard team selection -> contract row expects yahoo_team_name
-            yahoo_team_name = _team_name(team_key) if team_key else ""
-            if mode == "Void contract (years=0)" and override_player_key:
-                # If we inferred an owner label, store it (even if it's "Team (PT)" it's still better than blank)
-                _inf = pkey_to_owner_label.get(str(override_player_key), "")
-                yahoo_team_name = _inf or yahoo_team_name
-
-            # Store DraftBoard team_key here (stable join key).
-            # NOTE: DB column name is yahoo_team_key, but we repurpose it as draft_team_key for now.
-            yahoo_team_key = str(team_key or "")
-
-            c1, c2, c3 = st.columns([1, 1, 2])
-
-            with c1:
-                if st.button("Save Contract Action", type="primary", key="contract_override_save"):
+                    # In void mode, capture inferred owner for audit/debugging (helps validate what you're voiding)
+                    # If PT: store DraftBoard team name. If contract row: store yahoo_team_name.
+                    inferred_owner = ""
                     if override_player_key:
-                        if mode == "Void contract (years=0)":
-                            n = _void_contract_ssot(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=override_player_key,
-                                note=note or "voided",
-                            )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Contract voided in SSOT. rows_updated={n}. Contract cache refreshed.")
+                        inferred_owner = pkey_to_owner_label.get(str(override_player_key), "")
+                    # We don't force a DraftBoard team_key here because voiding semantics are years=0,
+                    # but we DO store a useful yahoo_team_name for visibility.
+                    team_key = ""  # keep blank; years=0 is the signal
+
+                # Map DraftBoard team selection -> contract row expects yahoo_team_name
+                yahoo_team_name = _team_name(team_key) if team_key else ""
+                if mode == "Void contract (years=0)" and override_player_key:
+                    # If we inferred an owner label, store it (even if it's "Team (PT)" it's still better than blank)
+                    _inf = pkey_to_owner_label.get(str(override_player_key), "")
+                    yahoo_team_name = _inf or yahoo_team_name
+
+                # Store DraftBoard team_key here (stable join key).
+                # NOTE: DB column name is yahoo_team_key, but we repurpose it as draft_team_key for now.
+                yahoo_team_key = str(team_key or "")
+
+                c1, c2, c3 = st.columns([1, 1, 2])
+
+                with c1:
+                    if st.button("Save Contract Action", type="primary", key="contract_override_save"):
+                        if override_player_key:
+                            if mode == "Void contract (years=0)":
+                                n = _void_contract_ssot(
+                                    dsn=dsn,
+                                    league_key=league_key,
+                                    season_year=season_year,
+                                    yahoo_player_key=override_player_key,
+                                    note=note or "voided",
+                                )
+                                _refresh_contract_cache_into_session_state()
+                                st.success(f"Contract voided in SSOT. rows_updated={n}. Contract cache refreshed.")
+                            else:
+                                n = _upsert_contract_ssot(
+                                    dsn=dsn,
+                                    league_key=league_key,
+                                    season_year=season_year,
+                                    yahoo_player_key=override_player_key,
+                                    years_remaining=int(years),
+                                    team_key=yahoo_team_key,
+                                    note=note,
+                                )
+                                _refresh_contract_cache_into_session_state()
+                                st.success(f"Contract saved to SSOT. rows_written={n}. Contract cache refreshed.")
+                            st.rerun()
                         else:
-                            n = _upsert_contract_ssot(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=override_player_key,
-                                years_remaining=int(years),
-                                team_key=yahoo_team_key,
-                                note=note,
-                            )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Contract saved to SSOT. rows_written={n}. Contract cache refreshed.")
+                            st.error("Select a player first.")
+
+                with c2:
+                    if st.button("Delete Override", key="contract_override_delete"):
+                        n = _delete_contract_override(dsn, league_key, season_year, override_player_key)
+                        _refresh_contract_cache_into_session_state()
+                        st.success(f"Deleted {n} override row(s). Contract cache refreshed.")
                         st.rerun()
-                    else:
-                        st.error("Select a player first.")
 
-            with c2:
-                if st.button("Delete Override", key="contract_override_delete"):
-                    n = _delete_contract_override(dsn, league_key, season_year, override_player_key)
-                    _refresh_contract_cache_into_session_state()
-                    st.success(f"Deleted {n} override row(s). Contract cache refreshed.")
-                    st.rerun()
+                with c3:
+                    if st.button("Refresh contract cache only", key="contract_override_refresh_cache"):
+                        _refresh_contract_cache_into_session_state()
+                        st.success("Contract cache refreshed.")
+                        st.rerun()
 
-            with c3:
-                if st.button("Refresh contract cache only", key="contract_override_refresh_cache"):
-                    _refresh_contract_cache_into_session_state()
-                    st.success("Contract cache refreshed.")
-                    st.rerun()
+                st.divider()
+                st.subheader("Existing overrides")
 
-            st.divider()
-            st.subheader("Existing overrides")
+                try:
+                    rows = _load_contract_overrides(dsn, league_key, season_year)
+                except Exception as e:
+                    rows = []
+                    st.error(f"Failed to load overrides: {e}")
 
-            try:
-                rows = _load_contract_overrides(dsn, league_key, season_year)
-            except Exception as e:
-                rows = []
-                st.error(f"Failed to load overrides: {e}")
-
-            if not rows:
-                st.caption("No overrides saved yet.")
-            else:
-                table = []
-                for r in rows:
-                    pk = r["yahoo_player_key"]
-                    nm = state.players[pk].name if pk in state.players else ""
-                    table.append(
-                        {
-                            "Player": nm,
-                            "yahoo_player_key": pk,
-                            "Years": r["years_remaining"],
-                            "Team": r["yahoo_team_name"],
-                            "Note": r["note"],
-                            "Updated": r["updated_at"],
-                        }
-                    )
-                st.table(table)
+                if not rows:
+                    st.caption("No overrides saved yet.")
+                else:
+                    table = []
+                    for r in rows:
+                        pk = r["yahoo_player_key"]
+                        nm = state.players[pk].name if pk in state.players else ""
+                        table.append(
+                            {
+                                "Player": nm,
+                                "yahoo_player_key": pk,
+                                "Years": r["years_remaining"],
+                                "Team": r["yahoo_team_name"],
+                                "Note": r["note"],
+                                "Updated": r["updated_at"],
+                            }
+                        )
+                    st.table(table)
 
         # -----------------------
         # Draft Tools (your existing block)
