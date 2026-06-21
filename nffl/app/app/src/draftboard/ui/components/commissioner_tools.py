@@ -1237,7 +1237,29 @@ def _parse_qo_lines(raw: str, state: DraftState) -> tuple[list[tuple[str, int, s
     return rows, errors
 
 
-def reset_draft_state(state: DraftState) -> None:
+
+def reset_draft_state(state: DraftState) -> int:
+    """
+    Reset draft selections in both canonical DB truth and local UI/autosave state.
+
+    Canonical selected-pick truth is nffl.draft_selection.
+    Local state/autosave is still cleared so the current Streamlit session cannot rehydrate stale picks.
+    """
+    dsn = _get_dsn()
+    draft_key = _get_draft_key()
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM nffl.draft_selection
+                WHERE draft_key=%s
+                """,
+                (str(draft_key),),
+            )
+            deleted_rows = int(cur.rowcount or 0)
+        conn.commit()
+
     for pick in state.picks.values():
         pick.selected_player_key = None
         pick.selected_ts_iso = None
@@ -1254,26 +1276,49 @@ def reset_draft_state(state: DraftState) -> None:
     state.clock.elapsed_paused_seconds = 0
 
     save_autosave(state)
+    return deleted_rows
 
 
-def delete_pick(state: DraftState, pick_id: str, rewind_clock: bool) -> None:
-    if pick_id not in state.picks:
-        return
+def delete_pick(state: DraftState, pick_id: str, rewind_clock: bool) -> int:
+    """
+    Delete one selected pick in both canonical DB truth and local UI/autosave state.
+    """
+    pick_id = str(pick_id or "").strip()
+    if not pick_id:
+        return 0
 
-    pick = state.picks[pick_id]
-    pick.selected_player_key = None
-    pick.selected_ts_iso = None
+    dsn = _get_dsn()
+    draft_key = _get_draft_key()
 
-    for i in range(len(state.pick_log) - 1, -1, -1):
-        if state.pick_log[i].pick_id == pick_id:
-            state.pick_log.pop(i)
-            break
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM nffl.draft_selection
+                WHERE draft_key=%s
+                  AND pick_id=%s
+                """,
+                (str(draft_key), pick_id),
+            )
+            deleted_rows = int(cur.rowcount or 0)
+        conn.commit()
+
+    if pick_id in state.picks:
+        pick = state.picks[pick_id]
+        pick.selected_player_key = None
+        pick.selected_ts_iso = None
+
+    # Remove all matching local pick-log entries, not just the last one.
+    state.pick_log[:] = [
+        entry for entry in state.pick_log
+        if getattr(entry, "pick_id", None) != pick_id
+    ]
 
     if rewind_clock:
         state.clock.current_pick_id = pick_id
 
     save_autosave(state)
-
+    return deleted_rows
 
 def _pause_clock(state: DraftState) -> None:
     if state.clock.pick_started_ts_iso is None:
@@ -3573,11 +3618,12 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                 disabled=not confirm,
                 key="delete_pick_btn",
             ):
-                delete_pick(state, pick_id, rewind_clock=rewind)
+                db_rows_deleted = delete_pick(state, pick_id, rewind_clock=rewind)
                 if rewind:
-                    st.success(f"Deleted {pick_id}. Clock rewound to {pick_id}.")
+                    st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock rewound to {pick_id}.")
                 else:
-                    st.success(f"Deleted {pick_id}. Clock unchanged.")
+                    st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock unchanged.")
+                st.rerun()
 
     # -----------------------
     # Danger Zone (your existing block)
@@ -3593,5 +3639,6 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             disabled=not reset_confirm,
             key="reset_draft_btn",
         ):
-            reset_draft_state(state)
-            st.success("Draft reset. All picks cleared and clock reset to first pick.")
+            db_rows_deleted = reset_draft_state(state)
+            st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
+            st.rerun()
