@@ -174,6 +174,122 @@ def _fetch_rows(
     """
 
     math_sql = """
+        WITH ctx AS (
+            SELECT
+                current_league_key AS league_key,
+                current_season_year AS season_year
+            FROM nffl.v_active_season_context
+            LIMIT 1
+        ),
+        rules AS (
+            SELECT
+                r.league_key,
+                r.season_year,
+                r.roster_size,
+                r.draft_rounds_total,
+                r.qo_rounds,
+                r.first_standard_round,
+                r.max_ft_per_team
+            FROM nffl.league_roster_rule r
+            JOIN ctx
+              ON ctx.league_key = r.league_key
+             AND ctx.season_year = r.season_year
+        ),
+        team_base AS (
+            SELECT
+                t.league_key,
+                t.season_year,
+                t.team_key,
+                t.team_name,
+                t.owner_name
+            FROM nffl.team t
+            JOIN ctx
+              ON ctx.league_key = t.league_key
+             AND ctx.season_year = t.season_year
+        ),
+        visible_counts AS (
+            SELECT
+                w.league_key,
+                w.season_year,
+                w.team_key,
+                count(*) AS visible_eligible_players,
+                count(*) FILTER (WHERE w.is_active_contract) AS active_contracts
+            FROM nffl.v_team_offseason_qo_ft_workbench w
+            JOIN ctx
+              ON ctx.league_key = w.league_key
+             AND ctx.season_year = w.season_year
+            GROUP BY
+                w.league_key,
+                w.season_year,
+                w.team_key
+        ),
+        decision_counts AS (
+            SELECT
+                d.league_key,
+                d.season_year,
+                d.team_key,
+                count(*) FILTER (WHERE d.decision_type IN ('QO1', 'QO2', 'QO3', 'QO4')) AS selected_qos,
+                count(*) FILTER (WHERE d.decision_type = 'FT') AS selected_ft
+            FROM nffl.offseason_keeper_decision d
+            JOIN ctx
+              ON ctx.league_key = d.league_key
+             AND ctx.season_year = d.season_year
+            WHERE d.decision_type IN ('QO1', 'QO2', 'QO3', 'QO4', 'FT')
+            GROUP BY
+                d.league_key,
+                d.season_year,
+                d.team_key
+        ),
+        math AS (
+            SELECT
+                tb.team_key,
+                tb.team_name,
+                tb.owner_name,
+                r.roster_size,
+                r.draft_rounds_total,
+                r.qo_rounds,
+                r.first_standard_round,
+                COALESCE(vc.active_contracts, 0) AS active_contracts,
+                COALESCE(dc.selected_qos, 0) AS selected_qos,
+                COALESCE(dc.selected_ft, 0) AS selected_ft,
+                (
+                    COALESCE(vc.active_contracts, 0)
+                    + COALESCE(dc.selected_qos, 0)
+                    + COALESCE(dc.selected_ft, 0)
+                ) AS controlled_roster_slots,
+                (
+                    r.roster_size
+                    - COALESCE(vc.active_contracts, 0)
+                    - COALESCE(dc.selected_qos, 0)
+                    - COALESCE(dc.selected_ft, 0)
+                ) AS open_draft_slots_after_keeper_decisions,
+                (
+                    r.roster_size
+                    - COALESCE(vc.active_contracts, 0)
+                    - r.qo_rounds
+                    - COALESCE(dc.selected_ft, 0)
+                ) AS standard_open_slots_if_all_qos_used,
+                (
+                    COALESCE(vc.active_contracts, 0)
+                    + COALESCE(dc.selected_qos, 0)
+                    + COALESCE(dc.selected_ft, 0)
+                ) <= r.roster_size
+                AND COALESCE(dc.selected_qos, 0) <= r.qo_rounds
+                AND COALESCE(dc.selected_ft, 0) <= r.max_ft_per_team AS roster_math_valid,
+                COALESCE(vc.visible_eligible_players, 0) AS visible_eligible_players,
+                tb.league_key,
+                tb.season_year
+            FROM team_base tb
+            CROSS JOIN rules r
+            LEFT JOIN visible_counts vc
+              ON vc.league_key = tb.league_key
+             AND vc.season_year = tb.season_year
+             AND vc.team_key = tb.team_key
+            LEFT JOIN decision_counts dc
+              ON dc.league_key = tb.league_key
+             AND dc.season_year = tb.season_year
+             AND dc.team_key = tb.team_key
+        )
         SELECT
             team_key,
             team_name,
@@ -192,7 +308,7 @@ def _fetch_rows(
             visible_eligible_players,
             league_key,
             season_year
-        FROM nffl.v_team_roster_math
+        FROM math
         ORDER BY team_name;
     """
 
