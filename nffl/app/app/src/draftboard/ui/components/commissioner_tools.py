@@ -620,6 +620,7 @@ def _nffl_set_franchise_tag(
         "team_key": team_key,
         "yahoo_player_key": yahoo_player_key,
         "source": "commissioner_override",
+        "action": "set",
     }
 
     with psycopg.connect(dsn) as conn:
@@ -698,6 +699,11 @@ def _nffl_set_franchise_tag(
                     now(),
                     now()
                 )
+                ON CONFLICT (league_key, season_year, team_key, yahoo_player_key)
+                DO UPDATE SET
+                    tag_status='applied',
+                    note=EXCLUDED.note,
+                    updated_at_utc=now()
                 """,
                 (league_key, season_year, team_key, yahoo_player_key, note),
             )
@@ -717,7 +723,7 @@ def _nffl_set_franchise_tag(
                 )
                 VALUES (
                     %s, %s, %s,
-                    'COMMISSIONER_SET_FT',
+                    'SAVE_DRAFT',
                     1,
                     'commissioner',
                     now(),
@@ -778,7 +784,7 @@ def _nffl_clear_franchise_tag(
             cur.execute(
                 """
                 UPDATE nffl.franchise_tag_history
-                   SET tag_status='cleared',
+                   SET tag_status='void',
                        note=%s,
                        updated_at_utc=now()
                  WHERE league_key=%s
@@ -790,31 +796,32 @@ def _nffl_clear_franchise_tag(
             )
             history_rows = int(cur.rowcount or 0)
 
-            cur.execute(
-                """
-                INSERT INTO nffl.offseason_keeper_decision_audit (
-                    league_key,
-                    season_year,
-                    team_key,
-                    action_type,
-                    revision_number,
-                    action_by,
-                    action_at_utc,
-                    decision_payload,
-                    note
+            if decision_rows + history_rows > 0:
+                cur.execute(
+                    """
+                    INSERT INTO nffl.offseason_keeper_decision_audit (
+                        league_key,
+                        season_year,
+                        team_key,
+                        action_type,
+                        revision_number,
+                        action_by,
+                        action_at_utc,
+                        decision_payload,
+                        note
+                    )
+                    VALUES (
+                        %s, %s, %s,
+                        'SAVE_DRAFT',
+                        1,
+                        'commissioner',
+                        now(),
+                        %s::jsonb,
+                        %s
+                    )
+                    """,
+                    (league_key, season_year, team_key, json.dumps(payload), note),
                 )
-                VALUES (
-                    %s, %s, %s,
-                    'COMMISSIONER_CLEAR_FT',
-                    1,
-                    'commissioner',
-                    now(),
-                    %s::jsonb,
-                    %s
-                )
-                """,
-                (league_key, season_year, team_key, json.dumps(payload), note),
-            )
 
         conn.commit()
 
