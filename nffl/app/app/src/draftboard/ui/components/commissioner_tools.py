@@ -1590,7 +1590,7 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
     league_key = _get_league_key()
     season_year = _get_season_year()
 
-    st.subheader("NFFL QO/FT Publish + Reveal")
+    st.markdown("##### Publish / Reveal Status")
     st.caption(
         "Publishes Teams-tab QO selections into the DraftBoard QO source, reveals QO/FT choices, "
         "and locks the current QO/FT decision rows."
@@ -1716,10 +1716,13 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
 
 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
-    _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
+    st.subheader("Commissioner Tools")
+
+    with st.expander("NFFL QO/FT Publish + Reveal", expanded=False):
+        _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
+
     st.divider()
 
-    st.subheader("Commissioner Tools")
     auth_ctx = dict(auth_ctx or {})
     is_site_admin = bool(auth_ctx.get("is_site_admin", False))
     league_key = _get_league_key()
