@@ -1550,7 +1550,18 @@ def _reset_nffl_qoft_publish_for_testing(
     unlocked AS (
         UPDATE nffl.offseason_keeper_decision
            SET decision_status='DRAFT',
-               updated_at_utc=now()
+               updated_at_utc=now(),
+               note = NULLIF(
+                   BTRIM(
+                       regexp_replace(
+                           COALESCE(note, ''),
+                           E'\\s*\\|\\s*Locked by Commissioner reveal action\\.$',
+                           '',
+                           'g'
+                       )
+                   ),
+                   ''
+               )
          WHERE league_key=%s
            AND season_year=%s
            AND decision_status='LOCKED'
@@ -1718,8 +1729,8 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
     st.subheader("Commissioner Tools")
 
-    with st.expander("NFFL QO/FT Publish + Reveal", expanded=False):
-        _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
+    st.markdown("#### NFFL QO/FT Publish + Reveal")
+    _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
 
     st.divider()
 
