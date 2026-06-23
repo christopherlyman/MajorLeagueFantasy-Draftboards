@@ -873,56 +873,62 @@ def _render_decision_controls(
         st.warning("This team is locked. Editing is disabled.")
         return
 
-    selections: dict[str, str] = {}
+    form_key = f"nffl_decision_form_{_safe_key(str(team['team_key']))}"
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    columns = [c1, c2, c3, c4, c5]
+    with st.form(form_key, clear_on_submit=False):
+        selections: dict[str, str] = {}
 
-    for col, slot in zip(columns, DECISION_TYPES):
-        options, labels = _choice_options(team_rows, slot)
-        with col:
+        for slot in DECISION_TYPES:
+            options, labels = _choice_options(team_rows, slot)
+            if not options:
+                st.caption(f"No eligible players for {slot}.")
+                selections[slot] = ""
+                continue
+
             selections[slot] = st.selectbox(
                 slot,
                 options=options,
                 index=_option_index(options, existing.get(slot)),
                 format_func=lambda value, labels=labels: labels.get(value, value),
-                key=f"nffl_{_safe_key(str(team['team_key']))}_{slot}",
+                key=f"nffl_{_safe_key(str(team['team_key']))}_{slot}_form",
             )
 
-    chosen = [v for v in selections.values() if v]
-    duplicate = len(chosen) != len(set(chosen))
+        chosen = [v for v in selections.values() if v]
+        duplicate = len(chosen) != len(set(chosen))
 
-    if duplicate:
-        st.error("A player can only be selected once across QO1-QO4 and FT.")
+        if duplicate:
+            st.error("A player can only be selected once across QO1-QO4 and FT.")
 
-    save_col, reset_col = st.columns([1, 1])
+        save_col, reset_col = st.columns([1, 1])
 
-    with save_col:
-        if st.button(
-            "Save Selections",
-            key=f"nffl_save_{_safe_key(str(team['team_key']))}",
-            disabled=duplicate,
-            use_container_width=True,
-        ):
-            try:
-                _save_team_decisions(dsn, team, selections, decided_by=acting_as)
-                st.success("Draft selections saved.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not save selections: {exc}")
+        with save_col:
+            save_submitted = st.form_submit_button(
+                "Save Selections",
+                disabled=duplicate,
+                use_container_width=True,
+            )
 
-    with reset_col:
-        if st.button(
-            "Reset Selections",
-            key=f"nffl_reset_{_safe_key(str(team['team_key']))}",
-            use_container_width=True,
-        ):
-            try:
-                _reset_team_decisions(dsn, team, action_by=acting_as)
-                st.success("Draft selections reset.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not reset selections: {exc}")
+        with reset_col:
+            reset_submitted = st.form_submit_button(
+                "Reset Selections",
+                use_container_width=True,
+            )
+
+    if save_submitted:
+        try:
+            _save_team_decisions(dsn, team, selections, decided_by=acting_as)
+            st.success("Draft selections saved.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not save selections: {exc}")
+
+    if reset_submitted:
+        try:
+            _reset_team_decisions(dsn, team, action_by=acting_as)
+            st.success("Draft selections reset.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not reset selections: {exc}")
 
 
 def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None = None) -> None:
