@@ -50,6 +50,10 @@ keeper_sources AS (
       ON pu.league_key = d.league_key
      AND pu.season_year = d.season_year
      AND pu.yahoo_player_key = d.yahoo_player_key
+    JOIN nffl.league_visibility_state v
+      ON v.league_key = d.league_key
+     AND v.season_year = d.season_year
+     AND v.qoft_revealed = true
     WHERE d.league_key = '470.l.84346'
       AND d.season_year = 2026
       AND d.decision_type = 'FT'

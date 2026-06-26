@@ -1554,8 +1554,13 @@ def _reset_nffl_qoft_publish_for_testing(
                note = NULLIF(
                    BTRIM(
                        regexp_replace(
-                           COALESCE(note, ''),
-                           E'\\s*\\|\\s*Locked by Commissioner reveal action\\.$',
+                           regexp_replace(
+                               COALESCE(note, ''),
+                               E'\\s*\\|\\s*Locked by Commissioner reveal action\\.$',
+                               '',
+                               'g'
+                           ),
+                           E'\\s*\\|\\s*$',
                            '',
                            'g'
                        )
