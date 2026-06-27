@@ -1601,6 +1601,184 @@ def _reset_nffl_qoft_publish_for_testing(
     }
 
 
+
+def _load_nffl_contract_readiness(
+    *,
+    dsn: str,
+    league_key: str,
+    season_year: int,
+) -> dict[str, object]:
+    sql_counts = """
+        WITH contract_status AS (
+            SELECT
+                status AS label,
+                count(*)::integer AS value
+            FROM nffl.contract
+            WHERE league_key=%s
+              AND season_year=%s
+            GROUP BY status
+        ),
+        import_reconciliation AS (
+            SELECT
+                reconciliation_status AS label,
+                count(*)::integer AS value
+            FROM nffl.v_contract_import_roster_reconciliation
+            WHERE league_key=%s
+              AND season_year=%s
+              AND import_status='ACTIVE_CONTRACT'
+            GROUP BY reconciliation_status
+        ),
+        invalid_active AS (
+            WITH active_contracts AS (
+                SELECT
+                    c.league_key,
+                    c.season_year,
+                    c.team_key,
+                    c.yahoo_player_key
+                FROM nffl.contract c
+                WHERE c.league_key=%s
+                  AND c.season_year=%s
+                  AND c.status='active'
+            ),
+            rostered_same_team AS (
+                SELECT DISTINCT
+                    rsp.league_key,
+                    rsp.season_year,
+                    rsp.team_key,
+                    rsp.yahoo_player_key
+                FROM nffl.roster_snapshot_player rsp
+                WHERE rsp.league_key=%s
+                  AND rsp.season_year=%s
+            )
+            SELECT count(*)::integer AS value
+            FROM active_contracts ac
+            LEFT JOIN rostered_same_team r
+              ON r.league_key=ac.league_key
+             AND r.season_year=ac.season_year
+             AND r.team_key=ac.team_key
+             AND r.yahoo_player_key=ac.yahoo_player_key
+            WHERE r.yahoo_player_key IS NULL
+        )
+        SELECT 'contract_status' AS section, label, value FROM contract_status
+        UNION ALL
+        SELECT 'import_reconciliation' AS section, label, value FROM import_reconciliation
+        UNION ALL
+        SELECT 'current_invalid_active_contracts' AS section, 'invalid_active_contracts' AS label, value FROM invalid_active
+        ORDER BY section, label;
+    """
+
+    sql_blockers = """
+        SELECT
+            team_name,
+            player_name,
+            matched_full_name,
+            yahoo_player_key,
+            years_remaining_2026,
+            reconciliation_status
+        FROM nffl.v_contract_import_active_blockers
+        WHERE league_key=%s
+          AND season_year=%s
+        ORDER BY team_name, player_name;
+    """
+
+    counts: dict[str, int] = {}
+    blockers: list[dict[str, object]] = []
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql_counts,
+                (
+                    str(league_key),
+                    int(season_year),
+                    str(league_key),
+                    int(season_year),
+                    str(league_key),
+                    int(season_year),
+                    str(league_key),
+                    int(season_year),
+                ),
+            )
+            for section, label, value in cur.fetchall():
+                counts[f"{section}:{label}"] = int(value or 0)
+
+            cur.execute(sql_blockers, (str(league_key), int(season_year)))
+            for row in cur.fetchall():
+                blockers.append(
+                    {
+                        "team_name": str(row[0] or ""),
+                        "player_name": str(row[1] or ""),
+                        "matched_full_name": str(row[2] or ""),
+                        "yahoo_player_key": str(row[3] or ""),
+                        "years_remaining_2026": int(row[4] or 0),
+                        "reconciliation_status": str(row[5] or ""),
+                    }
+                )
+
+    return {"counts": counts, "blockers": blockers}
+
+
+def _render_nffl_contract_readiness_panel() -> None:
+    dsn = _get_dsn()
+    league_key = _get_league_key()
+    season_year = _get_season_year()
+
+    st.markdown("#### NFFL Contract / Roster Readiness")
+
+    try:
+        readiness = _load_nffl_contract_readiness(
+            dsn=dsn,
+            league_key=league_key,
+            season_year=season_year,
+        )
+    except Exception as exc:
+        st.error(f"Could not load NFFL contract readiness: {exc}")
+        return
+
+    counts = dict(readiness.get("counts") or {})
+    blockers = list(readiness.get("blockers") or [])
+
+    active_contracts = int(counts.get("contract_status:active", 0))
+    void_contracts = int(counts.get("contract_status:void", 0))
+    invalid_active = int(counts.get("current_invalid_active_contracts:invalid_active_contracts", 0))
+    eligible_import = int(counts.get("import_reconciliation:ACTIVE_ELIGIBLE_SAME_TEAM", 0))
+    import_blockers = sum(
+        value
+        for key, value in counts.items()
+        if key.startswith("import_reconciliation:")
+        and not key.endswith(":ACTIVE_ELIGIBLE_SAME_TEAM")
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Active Contracts", active_contracts)
+    c2.metric("Voided Contracts", void_contracts)
+    c3.metric("Invalid Active", invalid_active)
+    c4.metric("Import Eligible", eligible_import)
+    c5.metric("Import Blockers", import_blockers)
+
+    if invalid_active > 0:
+        st.error(
+            "Blocking issue: active contracts include players not found on the same team "
+            "in the end-of-prior-season roster snapshot."
+        )
+    else:
+        st.success("Current active contracts pass same-team end-of-prior-season roster reconciliation.")
+
+    if blockers:
+        with st.expander("Import reconciliation blockers", expanded=False):
+            st.caption(
+                "These are contract-sheet staging rows that should not become active contracts unless reviewed. "
+                "They are not a current DraftBoard blocker if the current Invalid Active count is zero."
+            )
+            st.dataframe(
+                blockers,
+                hide_index=True,
+                use_container_width=True,
+            )
+    else:
+        st.info("No active-contract import blockers found.")
+
+
 def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None = None) -> None:
     dsn = _get_dsn()
     league_key = _get_league_key()
@@ -1733,6 +1911,10 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
     st.subheader("Commissioner Tools")
+
+    _render_nffl_contract_readiness_panel()
+
+    st.divider()
 
     st.markdown("#### NFFL QO/FT Publish + Reveal")
     _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
