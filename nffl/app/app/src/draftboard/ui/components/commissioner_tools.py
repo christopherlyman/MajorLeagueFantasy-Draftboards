@@ -3917,18 +3917,18 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     # Danger Zone (your existing block)
     # -----------------------
     with st.expander("Danger Zone", expanded=False):
-            with st.form("reset_draft_form", clear_on_submit=False):
-                reset_confirm = st.checkbox(
-                    "I understand this will wipe ALL picks and reset the draft.",
-                    key="reset_draft_confirm",
-                )
-                reset_clicked = st.form_submit_button("RESET DRAFT (wipe all picks)", type="secondary")
+        with st.form("reset_draft_form", clear_on_submit=False):
+            reset_confirm = st.checkbox(
+                "I understand this will wipe ALL picks and reset the draft.",
+                key="reset_draft_confirm",
+            )
+            reset_clicked = st.form_submit_button("RESET DRAFT (wipe all picks)", type="secondary")
 
-            if reset_clicked:
-                if not reset_confirm:
-                    st.warning("Confirm that you understand this will wipe all picks first.")
-                    return
+        if reset_clicked:
+            if not reset_confirm:
+                st.warning("Confirm that you understand this will wipe all picks first.")
+                return
 
-                db_rows_deleted = reset_draft_state(state)
-                st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
-                st.rerun()
+            db_rows_deleted = reset_draft_state(state)
+            st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
+            st.rerun()
