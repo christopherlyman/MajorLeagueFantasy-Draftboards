@@ -1460,6 +1460,21 @@ def render_available_players(state: DraftState) -> None:
         st.caption("Available Players filters applied.")
     else:
         st.caption("Change filters, then click Apply Filters to rebuild this table.")
+
+    predraft_qo_keys: set[str] = set()
+    predraft_qo_level_by_key: dict[str, int] = {}
+    predraft_by_team = _load_predraft_qos_by_team(dsn, league_key, season_year) if (dsn and qo_enabled) else {}
+
+    for _tk, rec in (predraft_by_team or {}).items():
+        for lvl, pk in (rec.get("levels") or {}).items():
+            if pk:
+                predraft_qo_keys.add(str(pk))
+                predraft_qo_level_by_key[str(pk)] = int(lvl)
+
+    # Determine current round from the on-clock pick (used for "poach-eligible" filter)
+    _cp = state.picks.get(state.clock.current_pick_id)
+    current_round = int(_cp.round_number) if _cp else 0
+
     def matches_name(name: str) -> bool:
         return player_search_matches(search, name)
 
