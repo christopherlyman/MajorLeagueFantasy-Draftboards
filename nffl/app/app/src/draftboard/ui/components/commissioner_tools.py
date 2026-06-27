@@ -3765,152 +3765,170 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         st.rerun()
                     except Exception as e:
                         st.error(f"Pick ownership update failed: {e}")
-        st.divider()
 
-        st.subheader("Draft Clock")
-
-        status = compute_clock_status(
-            is_running=state.clock.is_running,
-            seconds_per_pick=state.clock.seconds_per_pick,
-            started_ts_iso=state.clock.pick_started_ts_iso,
-            paused_ts_iso=state.clock.pick_paused_ts_iso,
-            elapsed_paused_seconds=int(getattr(state.clock, "elapsed_paused_seconds", 0) or 0),
-        )
-
-        remaining_hr = status.remaining_seconds // 3600
-        remaining_min = (status.remaining_seconds % 3600) // 60
-        st.write(f"**Clock:** {'RUNNING' if status.is_running else 'STOPPED'}")
-        st.write(f"**Remaining:** {remaining_hr:02d}:{remaining_min:02d} (hh:mm)")
-
-        can_start = (state.clock.pick_started_ts_iso is None) or (
-            not status.is_running and state.clock.pick_paused_ts_iso is None
-        )
-        can_pause = status.is_running
-        can_resume = (state.clock.pick_paused_ts_iso is not None)
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Start Draft", type="primary", key="clock_start", disabled=not can_start):
-                _start_clock_if_needed(state)
-                st.success("Clock started.")
-        with c2:
-            if st.button("Pause Clock", type="secondary", key="clock_pause", disabled=not can_pause):
-                _pause_clock(state)
-                st.success("Clock paused.")
-        with c3:
-            if st.button("Resume Clock", type="secondary", key="clock_resume", disabled=not can_resume):
-                _resume_clock(state)
-                st.success("Clock resumed.")
-
-        st.write("")
-
-        preset = st.radio(
-            "Pick duration",
-            options=["24 hours", "12 hours", "Custom"],
-            index=0
-            if state.clock.seconds_per_pick == 24 * 3600
-            else (1 if state.clock.seconds_per_pick == 12 * 3600 else 2),
-            horizontal=True,
-            key="clock_duration_preset",
-        )
-        if preset == "Custom":
-            hours = st.number_input(
-                "Custom hours per pick",
-                min_value=1,
-                max_value=72,
-                value=max(1, int(state.clock.seconds_per_pick // 3600)),
-                step=1,
-                key="clock_custom_hours",
+        
+        with st.expander("Draft Tools", expanded=False):
+            # (keep your current Draft Tools section exactly as-is)
+            st.subheader("Set Current Pick")
+            current_pick_id = state.clock.current_pick_id
+            current_idx = state.pick_order.index(current_pick_id) if current_pick_id in state.pick_order else 0
+            new_pick = st.selectbox(
+                "Commissioner: set current pick",
+                options=state.pick_order,
+                index=current_idx,
+                key="current_pick_select_commissioner_tools",
             )
-            new_seconds = int(hours) * 3600
-        elif preset == "12 hours":
-            new_seconds = 12 * 3600
-        else:
-            new_seconds = 24 * 3600
-
-        if int(new_seconds) != int(state.clock.seconds_per_pick):
-            state.clock.seconds_per_pick = int(new_seconds)
-            save_autosave(state)
-            st.info("Pick duration updated.")
-
-        weekends = st.toggle(
-            "Count weekends (Sat/Sun) toward the clock",
-            value=bool(state.clock.weekends_count),
-            key="clock_weekends_count",
-        )
-        if bool(weekends) != bool(state.clock.weekends_count):
-            state.clock.weekends_count = bool(weekends)
-            save_autosave(state)
-            st.info("Weekend rule updated.")
-
-        st.divider()
-
-        st.subheader("Fix a Mistake")
-
-        picked = [
-            (pid, int(p.round_number), int(p.slot))
-            for pid, p in state.picks.items()
-            if (p.selected_player_key is not None and p.selected_ts_iso is not None)
-        ]
-        picked.sort(key=lambda t: (t[1], t[2]))
-        picked_ids = [pid for pid, _rnd, _slot in picked]
-        if not picked_ids:
-            st.caption("No picks to delete yet.")
-        else:
-            with st.form("delete_pick_form", clear_on_submit=False):
-                pick_id = st.selectbox(
-                    "Pick to delete",
-                    options=picked_ids,
-                    help="Clears the selected player from a pick slot.",
-                    key="delete_pick_select",
-                )
-
-                delete_mode = st.radio(
-                    "Delete behavior",
-                    options=[
-                        "Delete pick + rewind clock to this pick",
-                        "Delete pick (do not change clock)",
-                    ],
-                    index=0,
-                    key="delete_pick_mode",
-                )
-
-                confirm = st.checkbox(
-                    "I understand this will clear the pick.",
-                    key="delete_pick_confirm",
-                )
-
-                delete_clicked = st.form_submit_button("DELETE PICK", type="primary")
-
-            if delete_clicked:
-                if not confirm:
-                    st.warning("Confirm that you understand this will clear the pick first.")
-                    return
-
-                rewind = delete_mode.startswith("Delete pick + rewind")
-                db_rows_deleted = delete_pick(state, pick_id, rewind_clock=rewind)
-                if rewind:
-                    st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock rewound to {pick_id}.")
-                else:
-                    st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock unchanged.")
+            if new_pick != state.clock.current_pick_id:
+                set_current_pick(new_pick)
+                save_autosave(state)
+                st.success(f"Current pick set to {new_pick}.")
                 st.rerun()
+            st.divider()
+
+            st.subheader("Draft Clock")
+
+            status = compute_clock_status(
+                is_running=state.clock.is_running,
+                seconds_per_pick=state.clock.seconds_per_pick,
+                started_ts_iso=state.clock.pick_started_ts_iso,
+                paused_ts_iso=state.clock.pick_paused_ts_iso,
+                elapsed_paused_seconds=int(getattr(state.clock, "elapsed_paused_seconds", 0) or 0),
+            )
+
+            remaining_hr = status.remaining_seconds // 3600
+            remaining_min = (status.remaining_seconds % 3600) // 60
+            st.write(f"**Clock:** {'RUNNING' if status.is_running else 'STOPPED'}")
+            st.write(f"**Remaining:** {remaining_hr:02d}:{remaining_min:02d} (hh:mm)")
+
+            can_start = (state.clock.pick_started_ts_iso is None) or (
+                not status.is_running and state.clock.pick_paused_ts_iso is None
+            )
+            can_pause = status.is_running
+            can_resume = (state.clock.pick_paused_ts_iso is not None)
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("Start Draft", type="primary", key="clock_start", disabled=not can_start):
+                    _start_clock_if_needed(state)
+                    st.success("Clock started.")
+            with c2:
+                if st.button("Pause Clock", type="secondary", key="clock_pause", disabled=not can_pause):
+                    _pause_clock(state)
+                    st.success("Clock paused.")
+            with c3:
+                if st.button("Resume Clock", type="secondary", key="clock_resume", disabled=not can_resume):
+                    _resume_clock(state)
+                    st.success("Clock resumed.")
+
+            st.write("")
+
+            preset = st.radio(
+                "Pick duration",
+                options=["24 hours", "12 hours", "Custom"],
+                index=0
+                if state.clock.seconds_per_pick == 24 * 3600
+                else (1 if state.clock.seconds_per_pick == 12 * 3600 else 2),
+                horizontal=True,
+                key="clock_duration_preset",
+            )
+            if preset == "Custom":
+                hours = st.number_input(
+                    "Custom hours per pick",
+                    min_value=1,
+                    max_value=72,
+                    value=max(1, int(state.clock.seconds_per_pick // 3600)),
+                    step=1,
+                    key="clock_custom_hours",
+                )
+                new_seconds = int(hours) * 3600
+            elif preset == "12 hours":
+                new_seconds = 12 * 3600
+            else:
+                new_seconds = 24 * 3600
+
+            if int(new_seconds) != int(state.clock.seconds_per_pick):
+                state.clock.seconds_per_pick = int(new_seconds)
+                save_autosave(state)
+                st.info("Pick duration updated.")
+
+            weekends = st.toggle(
+                "Count weekends (Sat/Sun) toward the clock",
+                value=bool(state.clock.weekends_count),
+                key="clock_weekends_count",
+            )
+            if bool(weekends) != bool(state.clock.weekends_count):
+                state.clock.weekends_count = bool(weekends)
+                save_autosave(state)
+                st.info("Weekend rule updated.")
+
+            st.divider()
+
+            st.subheader("Fix a Mistake")
+
+            picked = [
+                (pid, int(p.round_number), int(p.slot))
+                for pid, p in state.picks.items()
+                if (p.selected_player_key is not None and p.selected_ts_iso is not None)
+            ]
+            picked.sort(key=lambda t: (t[1], t[2]))
+            picked_ids = [pid for pid, _rnd, _slot in picked]
+            if not picked_ids:
+                st.caption("No picks to delete yet.")
+            else:
+                with st.form("delete_pick_form", clear_on_submit=False):
+                    pick_id = st.selectbox(
+                        "Pick to delete",
+                        options=picked_ids,
+                        help="Clears the selected player from a pick slot.",
+                        key="delete_pick_select",
+                    )
+
+                    delete_mode = st.radio(
+                        "Delete behavior",
+                        options=[
+                            "Delete pick + rewind clock to this pick",
+                            "Delete pick (do not change clock)",
+                        ],
+                        index=0,
+                        key="delete_pick_mode",
+                    )
+
+                    confirm = st.checkbox(
+                        "I understand this will clear the pick.",
+                        key="delete_pick_confirm",
+                    )
+
+                    delete_clicked = st.form_submit_button("DELETE PICK", type="primary")
+
+                if delete_clicked:
+                    if not confirm:
+                        st.warning("Confirm that you understand this will clear the pick first.")
+                        return
+
+                    rewind = delete_mode.startswith("Delete pick + rewind")
+                    db_rows_deleted = delete_pick(state, pick_id, rewind_clock=rewind)
+                    if rewind:
+                        st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock rewound to {pick_id}.")
+                    else:
+                        st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock unchanged.")
+                    st.rerun()
 
     # -----------------------
     # Danger Zone (your existing block)
     # -----------------------
     with st.expander("Danger Zone", expanded=False):
-        with st.form("reset_draft_form", clear_on_submit=False):
-            reset_confirm = st.checkbox(
-                "I understand this will wipe ALL picks and reset the draft.",
-                key="reset_draft_confirm",
-            )
-            reset_clicked = st.form_submit_button("RESET DRAFT (wipe all picks)", type="secondary")
+            with st.form("reset_draft_form", clear_on_submit=False):
+                reset_confirm = st.checkbox(
+                    "I understand this will wipe ALL picks and reset the draft.",
+                    key="reset_draft_confirm",
+                )
+                reset_clicked = st.form_submit_button("RESET DRAFT (wipe all picks)", type="secondary")
 
-        if reset_clicked:
-            if not reset_confirm:
-                st.warning("Confirm that you understand this will wipe all picks first.")
-                return
+            if reset_clicked:
+                if not reset_confirm:
+                    st.warning("Confirm that you understand this will wipe all picks first.")
+                    return
 
-            db_rows_deleted = reset_draft_state(state)
-            st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
-            st.rerun()
+                db_rows_deleted = reset_draft_state(state)
+                st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
+                st.rerun()
