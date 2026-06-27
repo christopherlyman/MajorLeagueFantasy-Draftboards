@@ -1338,9 +1338,7 @@ def render_available_players(state: DraftState) -> None:
     season_year = get_season_year()
 
     st.subheader("Available Players")
-    search = st.text_input("Search", value="", placeholder="Type a player name...")
     pos_options = [p.value for p in Position]
-    pos_filter = st.multiselect("Filter by position", options=pos_options, default=[])
 
     toggle_labels = ["Show all players"]
     if qo_enabled:
@@ -1349,49 +1347,6 @@ def render_available_players(state: DraftState) -> None:
         toggle_labels.append("Show only PT")
     if contracts_enabled:
         toggle_labels.append("Show only Contracts")
-
-    cols = st.columns(len(toggle_labels))
-    i = 0
-
-    with cols[i]:
-        show_all_players = st.toggle("Show all players", value=False)
-    i += 1
-
-    show_qo = False
-    show_poach = False
-    show_pt = False
-    show_contracts = False
-
-    if qo_enabled:
-        with cols[i]:
-            show_qo = st.toggle("Show only QOs", value=False)
-        i += 1
-        with cols[i]:
-            show_poach = st.toggle("Show only Poach-eligible", value=False)
-        i += 1
-
-    if pt_enabled:
-        with cols[i]:
-            show_pt = st.toggle("Show only PT", value=False)
-        i += 1
-
-    if contracts_enabled:
-        with cols[i]:
-            show_contracts = st.toggle("Show only Contracts", value=False)
-
-    predraft_qo_keys: set[str] = set()
-    predraft_qo_level_by_key: dict[str, int] = {}
-    predraft_by_team = _load_predraft_qos_by_team(dsn, league_key, season_year) if (dsn and qo_enabled) else {}
-
-    for _tk, rec in (predraft_by_team or {}).items():
-        for lvl, pk in (rec.get("levels") or {}).items():
-            if pk:
-                predraft_qo_keys.add(str(pk))
-                predraft_qo_level_by_key[str(pk)] = int(lvl)
-
-    # Determine current round from the on-clock pick (used for "poach-eligible" filter)
-    _cp = state.picks.get(state.clock.current_pick_id)
-    current_round = int(_cp.round_number) if _cp else 0
 
     # --- Sort controls (single source of truth = session_state) ---
     sort_cols = ["Draft Pick", "Team Name", "Actual Rank", "% Ros",
@@ -1404,25 +1359,107 @@ def render_available_players(state: DraftState) -> None:
     if contracts_enabled:
         sort_cols.insert(2, "Contract Years")
 
-    # Set defaults BEFORE widget creation (and only once)
     default_sort = "Actual Rank"
-    # Default to Actual Rank ASC; rank_value is now populated from 2025 actual fantasy points.
+
+    # Defaults must exist before widget creation.
+    st.session_state.setdefault("available_players_search", "")
+    st.session_state.setdefault("available_players_pos_filter", [])
+    st.session_state.setdefault("available_players_show_all", False)
+    st.session_state.setdefault("available_players_show_qo", False)
+    st.session_state.setdefault("available_players_show_poach", False)
+    st.session_state.setdefault("available_players_show_pt", False)
+    st.session_state.setdefault("available_players_show_contracts", False)
+
     if st.session_state.get("avail_sort_col") not in sort_cols:
         st.session_state["avail_sort_col"] = default_sort
         st.session_state["avail_sort_desc"] = False
     st.session_state.setdefault("avail_sort_col", default_sort)
     st.session_state.setdefault("avail_sort_desc", False)
 
-    # Widget gets its value from session_state via the key
-    sort_col = st.selectbox("Sort by", options=sort_cols, key="avail_sort_col")
+    with st.form("available_players_filters_form", clear_on_submit=False):
+        search = st.text_input(
+            "Search",
+            placeholder="Type a player name...",
+            key="available_players_search",
+        )
+        pos_filter = st.multiselect(
+            "Filter by position",
+            options=pos_options,
+            key="available_players_pos_filter",
+        )
 
-    sort_desc = st.toggle("Descending", key="avail_sort_desc")
+        cols = st.columns(len(toggle_labels))
+        i = 0
 
-    if st.button("Reset sort", key="avail_sort_reset"):
-        st.session_state.pop("avail_sort_col", None)
-        st.session_state.pop("avail_sort_desc", None)
+        with cols[i]:
+            show_all_players = st.toggle(
+                "Show all players",
+                key="available_players_show_all",
+            )
+        i += 1
+
+        show_qo = False
+        show_poach = False
+        show_pt = False
+        show_contracts = False
+
+        if qo_enabled:
+            with cols[i]:
+                show_qo = st.toggle(
+                    "Show only QOs",
+                    key="available_players_show_qo",
+                )
+            i += 1
+            with cols[i]:
+                show_poach = st.toggle(
+                    "Show only Poach-eligible",
+                    key="available_players_show_poach",
+                )
+            i += 1
+
+        if pt_enabled:
+            with cols[i]:
+                show_pt = st.toggle(
+                    "Show only PT",
+                    key="available_players_show_pt",
+                )
+            i += 1
+
+        if contracts_enabled:
+            with cols[i]:
+                show_contracts = st.toggle(
+                    "Show only Contracts",
+                    key="available_players_show_contracts",
+                )
+
+        sort_col = st.selectbox("Sort by", options=sort_cols, key="avail_sort_col")
+        sort_desc = st.toggle("Descending", key="avail_sort_desc")
+
+        c_apply, c_reset = st.columns([1, 1])
+        with c_apply:
+            apply_filters_clicked = st.form_submit_button("Apply Filters", type="primary")
+        with c_reset:
+            reset_filters_clicked = st.form_submit_button("Reset Filters")
+
+    if reset_filters_clicked:
+        for _key in [
+            "available_players_search",
+            "available_players_pos_filter",
+            "available_players_show_all",
+            "available_players_show_qo",
+            "available_players_show_poach",
+            "available_players_show_pt",
+            "available_players_show_contracts",
+            "avail_sort_col",
+            "avail_sort_desc",
+        ]:
+            st.session_state.pop(_key, None)
         st.rerun()
 
+    if apply_filters_clicked:
+        st.caption("Available Players filters applied.")
+    else:
+        st.caption("Change filters, then click Apply Filters to rebuild this table.")
     def matches_name(name: str) -> bool:
         return player_search_matches(search, name)
 
