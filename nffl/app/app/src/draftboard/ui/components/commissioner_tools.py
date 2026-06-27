@@ -1527,7 +1527,7 @@ def _reset_nffl_qoft_publish_for_testing(
     season_year: int,
 ) -> dict:
     """
-    Testing reset only. Clears published predraft QOs and hides QO/FT again.
+    Clears published predraft QOs and returns QO/FT to private.
     Does not delete saved Teams-tab QO/FT decisions.
     """
     sql = """
@@ -1904,18 +1904,18 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
         except Exception as exc:
             st.error(f"Publish/reveal failed: {exc}")
 
-    with st.expander("Testing reset: hide QO/FT and clear published QO rows", expanded=False):
+    with st.expander("Reset QO/FT reveal to private", expanded=False):
         st.caption(
-            "Testing only. This clears public.qualifying_offer for this league/year and sets QO/FT back to private. "
+            "This clears published QO rows for this league/year and returns QO/FT to private. "
             "It does not delete saved Teams-tab QO/FT decisions."
         )
         reset_confirm = st.checkbox(
-            "Confirm testing reset",
+            "Confirm reset QO/FT reveal",
             value=False,
             key="nffl_confirm_reset_qoft_publish",
         )
         if st.button(
-            "Reset QO/FT Publish State for Testing",
+            "Reset QO/FT Reveal to Private",
             disabled=not reset_confirm,
             key="nffl_reset_qoft_publish_btn",
         ):
@@ -1925,10 +1925,10 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
                     league_key=league_key,
                     season_year=season_year,
                 )
-                st.success(f"Reset QO/FT publish state: {result}")
+                st.success(f"Reset QO/FT reveal state: {result}")
                 st.rerun()
             except Exception as exc:
-                st.error(f"Testing reset failed: {exc}")
+                st.error(f"QO/FT reveal reset failed: {exc}")
 
 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
