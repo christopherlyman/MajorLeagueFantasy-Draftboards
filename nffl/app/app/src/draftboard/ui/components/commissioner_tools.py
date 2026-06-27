@@ -3690,55 +3690,62 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                 pick_ids = [str(r["pick_id"]) for r in pick_rows]
                 row_by_pick_id = {str(r["pick_id"]): r for r in pick_rows}
 
-                c1, c2 = st.columns([3, 2])
-                with c1:
-                    pick_id = st.selectbox(
-                        "Pick",
-                        options=pick_ids,
-                        format_func=lambda pid: _pick_label(row_by_pick_id[pid]),
-                        key="nffl_pick_owner_override_pick",
+                with st.form("nffl_pick_owner_override_form", clear_on_submit=False):
+                    c1, c2 = st.columns([3, 2])
+                    with c1:
+                        pick_id = st.selectbox(
+                            "Pick",
+                            options=pick_ids,
+                            format_func=lambda pid: _pick_label(row_by_pick_id[pid]),
+                            key="nffl_pick_owner_override_pick",
+                        )
+
+                    selected_row = row_by_pick_id[pick_id]
+                    current_owner = str(selected_row.get("current_owner_team_key") or "")
+                    default_owner_idx = team_keys.index(current_owner) if current_owner in team_keys else 0
+
+                    with c2:
+                        new_owner_team_key = st.selectbox(
+                            "New owner",
+                            options=team_keys,
+                            index=default_owner_idx,
+                            format_func=_nffl_team_label,
+                            key="nffl_pick_owner_override_new_owner",
+                        )
+
+                    note = st.text_input(
+                        "Ownership note",
+                        value="commissioner pick ownership override",
+                        key="nffl_pick_owner_override_note",
                     )
 
-                selected_row = row_by_pick_id[pick_id]
-                current_owner = str(selected_row.get("current_owner_team_key") or "")
-                default_owner_idx = team_keys.index(current_owner) if current_owner in team_keys else 0
+                    is_selected = bool(selected_row.get("is_selected"))
+                    if is_selected:
+                        st.warning(
+                            "This pick already has a draft selection. Ownership override is blocked here. "
+                            "Use Draft Tools to correct the selection first."
+                        )
 
-                with c2:
-                    new_owner_team_key = st.selectbox(
-                        "New owner",
-                        options=team_keys,
-                        index=default_owner_idx,
-                        format_func=_nffl_team_label,
-                        key="nffl_pick_owner_override_new_owner",
+                    confirm = st.checkbox(
+                        "Confirm pick ownership override",
+                        value=False,
+                        key="nffl_pick_owner_override_confirm",
                     )
 
-                note = st.text_input(
-                    "Ownership note",
-                    value="commissioner pick ownership override",
-                    key="nffl_pick_owner_override_note",
-                )
-
-                is_selected = bool(selected_row.get("is_selected"))
-                if is_selected:
-                    st.warning(
-                        "This pick already has a draft selection. Ownership override is blocked here. "
-                        "Use Draft Tools to correct the selection first."
+                    save_owner_clicked = st.form_submit_button(
+                        "Save Pick Ownership Override",
+                        type="primary",
+                        disabled=bool(is_selected),
                     )
 
-                confirm = st.checkbox(
-                    "Confirm pick ownership override",
-                    value=False,
-                    key="nffl_pick_owner_override_confirm",
-                )
+                if save_owner_clicked:
+                    if not confirm:
+                        st.warning("Confirm pick ownership override first.")
+                        return
+                    if not pick_id or not new_owner_team_key:
+                        st.warning("Select a pick and new owner first.")
+                        return
 
-                disabled = bool(is_selected or not confirm or not pick_id or not new_owner_team_key)
-
-                if st.button(
-                    "Save Pick Ownership Override",
-                    type="primary",
-                    key="nffl_pick_owner_override_save",
-                    disabled=disabled,
-                ):
                     try:
                         result = _nffl_update_pick_owner(
                             dsn=dsn,
@@ -3753,31 +3760,11 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                             "Pick ownership updated: "
                             f"{result['pick_id']} | "
                             f"{_nffl_team_label(result['old_owner_team_key'])} -> "
-                            f"{_nffl_team_label(result['new_owner_team_key'])} | "
-                            f"traded_flag={result['traded_flag']}"
+                            f"{_nffl_team_label(result['new_owner_team_key'])}"
                         )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Pick ownership override failed: {e}")
-
-
-    with st.expander("Draft Tools", expanded=False):
-        # (keep your current Draft Tools section exactly as-is)
-        st.subheader("Set Current Pick")
-        current_pick_id = state.clock.current_pick_id
-        current_idx = state.pick_order.index(current_pick_id) if current_pick_id in state.pick_order else 0
-        new_pick = st.selectbox(
-            "Commissioner: set current pick",
-            options=state.pick_order,
-            index=current_idx,
-            key="current_pick_select_commissioner_tools",
-        )
-        if new_pick != state.clock.current_pick_id:
-            set_current_pick(new_pick)
-            save_autosave(state)
-            st.success(f"Current pick set to {new_pick}.")
-            st.rerun()
-
+                        st.error(f"Pick ownership update failed: {e}")
         st.divider()
 
         st.subheader("Draft Clock")
