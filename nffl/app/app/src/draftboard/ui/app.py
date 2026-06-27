@@ -582,29 +582,52 @@ def render_pick_controls(state: DraftState) -> None:
                 return f"{p.name} — {pos}"
             return p.name
 
-        draft_player_query_main = st.text_input(
-            "Search player",
-            value="",
-            placeholder="Type a player name...",
-            key=f"draft_player_query_main_{state.clock.current_pick_id}",
-        )
-
         player_keys = [p.player_key for p in available_players]
-        player_options = filter_player_keys_by_query(player_keys, draft_player_query_main, fmt_player)
-
         select_key = f"selected_player_key_main_{state.clock.current_pick_id}"
-        chosen_player_key = st.selectbox(
-            "Select player to draft",
-            options=player_options,
-            format_func=fmt_player,
-            index=None,
-            placeholder="Choose a player…",
-            help="Search above. Player search is case-insensitive and accent-insensitive.",
-            key=select_key,
-        )
+        search_input_key = f"draft_player_query_input_main_{state.clock.current_pick_id}"
+        search_applied_key = f"draft_player_query_applied_main_{state.clock.current_pick_id}"
+        search_form_key = f"draft_player_search_form_main_{state.clock.current_pick_id}"
+        submit_form_key = f"draft_player_submit_form_main_{state.clock.current_pick_id}"
+
+        st.session_state.setdefault(search_applied_key, "")
+
+        with st.form(search_form_key, clear_on_submit=False):
+            draft_player_query_main = st.text_input(
+                "Search player",
+                value=str(st.session_state.get(search_applied_key, "") or ""),
+                placeholder="Type a player name...",
+                key=search_input_key,
+            )
+            search_submitted = st.form_submit_button("Search")
+
+        if search_submitted:
+            st.session_state[search_applied_key] = str(draft_player_query_main or "")
+            st.session_state.pop(select_key, None)
+            st.rerun()
+
+        draft_player_query_applied = str(st.session_state.get(search_applied_key, "") or "")
+        player_options = filter_player_keys_by_query(player_keys, draft_player_query_applied, fmt_player)
+
+        if draft_player_query_applied:
+            st.caption(f"Search: {draft_player_query_applied} · {len(player_options)} matching players")
+        else:
+            st.caption(f"Showing {len(player_options)} draftable players")
 
         btn_label = "MAKE PICK" if state.commissioner_mode else "SUBMIT PICK"
-        if st.button(btn_label, type="primary", key="submit_pick_main"):
+
+        with st.form(submit_form_key, clear_on_submit=False):
+            chosen_player_key = st.selectbox(
+                "Select player to draft",
+                options=player_options,
+                format_func=fmt_player,
+                index=None,
+                placeholder="Choose a player…",
+                help="Search above. Player search is case-insensitive and accent-insensitive.",
+                key=select_key,
+            )
+            submit_pick_clicked = st.form_submit_button(btn_label, type="primary")
+
+        if submit_pick_clicked:
             if not _user_can_submit_pick(state):
                 st.error("You are not authorized to submit this pick.")
                 return
@@ -620,7 +643,6 @@ def render_pick_controls(state: DraftState) -> None:
             if chosen_player_key in drafted:
                 st.error("Player already drafted.")
                 return
-
 
             # ---- QO / POACH / RELEASE LOGIC (pick-driven, replay-aware) ----
             pick_kind = "FA"
@@ -663,11 +685,11 @@ def render_pick_controls(state: DraftState) -> None:
                 f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [{pick_kind}]"
             )
 
-            # Clear selection for THIS pick + rerun so UI updates immediately
-            if select_key in st.session_state:
-                del st.session_state[select_key]
+            # Clear selection/search for THIS pick + rerun so UI updates immediately
+            st.session_state.pop(select_key, None)
+            st.session_state.pop(search_input_key, None)
+            st.session_state.pop(search_applied_key, None)
             st.rerun()
-
 def render_mobile_pick(state: DraftState) -> None:
     drafted = {ps.selected_player_key for ps in state.picks.values()
     if ps.selected_player_key and ps.selected_ts_iso is not None}
