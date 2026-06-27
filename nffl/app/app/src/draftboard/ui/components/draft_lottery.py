@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import html
+import importlib.util
 import json
 import random
 import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+import requests
 import streamlit as st
 
 from draftboard.state.autosave import save_autosave
@@ -49,6 +52,279 @@ def _actor_label() -> str:
         if val:
             return val
     return "commissioner"
+
+
+def _walk_json(obj: Any):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk_json(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_json(v)
+
+
+def _scalarize_json(obj: Any) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)):
+                nested = _scalarize_json(v)
+                for nk, nv in nested.items():
+                    out.setdefault(nk, nv)
+            else:
+                out.setdefault(str(k), "" if v is None else str(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            nested = _scalarize_json(item)
+            for nk, nv in nested.items():
+                out.setdefault(nk, nv)
+    return out
+
+
+def _parse_int_safe(raw: Any) -> int | None:
+    try:
+        val = str(raw or "").strip()
+        if not val:
+            return None
+        return int(val)
+    except Exception:
+        return None
+
+
+def _find_yahoo_auth_module_path() -> str:
+    candidates = [
+        "/app/scripts/yahoo/auth.py",
+        "/app/app/scripts/yahoo/auth.py",
+        "/league_runtime/app/scripts/yahoo/auth.py",
+        "/workspace/app/scripts/yahoo/auth.py",
+    ]
+    for candidate in candidates:
+        p = Path(candidate)
+        if p.exists():
+            return str(p)
+    raise RuntimeError("Could not find Yahoo auth.py inside the app container.")
+
+
+def _get_yahoo_access_token() -> str:
+    auth_path = _find_yahoo_auth_module_path()
+    spec = importlib.util.spec_from_file_location("nffl_lottery_yahoo_auth", auth_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load Yahoo auth module from {auth_path}.")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return str(mod.get_access_token())
+
+
+def _load_active_context(dsn: str) -> dict[str, Any]:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT
+                    current_season_year,
+                    current_league_key,
+                    prior_season_year,
+                    prior_league_key,
+                    draft_key
+                FROM nffl.v_active_season_context
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+    if not row:
+        raise RuntimeError("No active season context found in nffl.v_active_season_context.")
+    return dict(row)
+
+
+def _fetch_yahoo_json(token: str, url: str) -> dict[str, Any]:
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        timeout=45,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Yahoo API returned HTTP {resp.status_code}: {resp.text[:500]}")
+    return resp.json()
+
+
+def _extract_standings_team_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for node in _walk_json(payload):
+        if not isinstance(node, dict) or "team" not in node:
+            continue
+
+        flat = _scalarize_json(node["team"])
+        team_key = str(flat.get("team_key") or "").strip()
+        if not team_key or ".t." not in team_key or team_key in seen:
+            continue
+
+        rank = _parse_int_safe(flat.get("rank"))
+        playoff_seed = _parse_int_safe(flat.get("playoff_seed"))
+        clinched = str(flat.get("clinched_playoffs") or "").strip() == "1"
+
+        # For the standings endpoint, all usable team rows should have rank.
+        if rank is None:
+            continue
+
+        seen.add(team_key)
+        rows.append(
+            {
+                "source_team_key": team_key,
+                "source_team_id": str(flat.get("team_id") or "").strip(),
+                "source_team_name": str(flat.get("name") or "").strip(),
+                "rank": rank,
+                "playoff_seed": playoff_seed,
+                "clinched_playoffs": clinched,
+                "wins": str(flat.get("wins") or "").strip(),
+                "losses": str(flat.get("losses") or "").strip(),
+                "ties": str(flat.get("ties") or "").strip(),
+                "percentage": str(flat.get("percentage") or "").strip(),
+                "points_for": str(flat.get("points_for") or "").strip(),
+            }
+        )
+
+    rows.sort(key=lambda r: int(r["rank"]))
+    return rows
+
+
+def _load_team_bridge_map(
+    *,
+    dsn: str,
+    current_league_key: str,
+    current_season_year: int,
+    prior_league_key: str,
+    prior_season_year: int,
+) -> dict[str, dict[str, Any]]:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT
+                    b.source_team_key,
+                    b.current_team_key,
+                    t.team_name AS current_team_name,
+                    t.owner_name AS current_owner_name
+                FROM nffl.team_season_bridge b
+                JOIN nffl.team t
+                  ON t.league_key = b.current_league_key
+                 AND t.season_year = b.current_season_year
+                 AND t.team_key = b.current_team_key
+                WHERE b.league_code = 'NFFL'
+                  AND b.source_league_key = %s
+                  AND b.source_season_year = %s
+                  AND b.current_league_key = %s
+                  AND b.current_season_year = %s
+                """,
+                (
+                    prior_league_key,
+                    int(prior_season_year),
+                    current_league_key,
+                    int(current_season_year),
+                ),
+            )
+            rows = list(cur.fetchall() or [])
+
+    return {str(r["source_team_key"]): dict(r) for r in rows}
+
+
+def _load_yahoo_auto_lottery_defaults(
+    *,
+    dsn: str,
+    current_league_key: str,
+    current_season_year: int,
+    current_team_keys: list[str],
+) -> dict[str, Any]:
+    ctx = _load_active_context(dsn)
+    prior_league_key = str(ctx.get("prior_league_key") or "").strip()
+    prior_season_year = int(ctx.get("prior_season_year") or 0)
+
+    if not prior_league_key or not prior_season_year:
+        raise RuntimeError("Active context is missing prior_league_key/prior_season_year.")
+
+    token = _get_yahoo_access_token()
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{prior_league_key}/standings?format=json"
+    payload = _fetch_yahoo_json(token, url)
+    standings_rows = _extract_standings_team_rows(payload)
+
+    if len(standings_rows) != 12:
+        raise RuntimeError(f"Expected 12 prior-season standings rows, found {len(standings_rows)}.")
+
+    bridge = _load_team_bridge_map(
+        dsn=dsn,
+        current_league_key=current_league_key,
+        current_season_year=current_season_year,
+        prior_league_key=prior_league_key,
+        prior_season_year=prior_season_year,
+    )
+    if len(bridge) != 12:
+        raise RuntimeError(f"Expected 12 team bridge rows, found {len(bridge)}.")
+
+    champion_prior = standings_rows[0]
+    playoff_prior = [r for r in standings_rows if bool(r["clinched_playoffs"])]
+    if len(playoff_prior) != 6:
+        # Conservative fallback if Yahoo ever omits clinched_playoffs.
+        playoff_prior = standings_rows[:6]
+
+    consolation_prior = [r for r in standings_rows if r["source_team_key"] not in {p["source_team_key"] for p in playoff_prior}]
+
+    champion_current = bridge.get(champion_prior["source_team_key"])
+    if not champion_current:
+        raise RuntimeError(f"Missing bridge for champion {champion_prior['source_team_key']}.")
+
+    champion_team_key = str(champion_current["current_team_key"])
+    playoff_team_keys: list[str] = []
+    consolation_team_keys: list[str] = []
+    proof_rows: list[dict[str, Any]] = []
+
+    for row in standings_rows:
+        b = bridge.get(row["source_team_key"])
+        if not b:
+            raise RuntimeError(f"Missing bridge for prior team {row['source_team_key']}.")
+
+        current_team_key = str(b["current_team_key"])
+        if row["source_team_key"] == champion_prior["source_team_key"]:
+            pool = "CHAMPION"
+        elif row["source_team_key"] in {p["source_team_key"] for p in playoff_prior}:
+            pool = "PLAYOFF"
+            playoff_team_keys.append(current_team_key)
+        else:
+            pool = "CONSOLATION"
+            consolation_team_keys.append(current_team_key)
+
+        proof_rows.append(
+            {
+                "Pool": pool,
+                "2025 Rank": int(row["rank"]),
+                "2025 Team": row["source_team_name"],
+                "2025 Key": row["source_team_key"],
+                "2026 Team": str(b.get("current_team_name") or current_team_key),
+                "2026 Owner": str(b.get("current_owner_name") or ""),
+                "2026 Key": current_team_key,
+            }
+        )
+
+    if champion_team_key not in current_team_keys:
+        raise RuntimeError(f"Champion current team key is not loaded in app state: {champion_team_key}")
+    if len(playoff_team_keys) != 5:
+        raise RuntimeError(f"Expected 5 non-champion playoff teams, found {len(playoff_team_keys)}.")
+    if len(consolation_team_keys) != 6:
+        raise RuntimeError(f"Expected 6 consolation teams, found {len(consolation_team_keys)}.")
+    if len(set([champion_team_key] + playoff_team_keys + consolation_team_keys)) != 12:
+        raise RuntimeError("Auto-detected lottery pools did not resolve to 12 unique current teams.")
+
+    return {
+        "source": "Yahoo prior-season standings",
+        "prior_league_key": prior_league_key,
+        "prior_season_year": prior_season_year,
+        "champion_team_key": champion_team_key,
+        "playoff_team_keys": playoff_team_keys,
+        "consolation_team_keys": consolation_team_keys,
+        "proof_rows": proof_rows,
+        "loaded_at_utc": _utc_now_iso(),
+    }
 
 
 def _load_lottery(dsn: str, league_key: str, season_year: int, draft_key: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -578,8 +854,7 @@ def _render_lottery_css() -> None:
 def _render_setup_form(state: Any, dsn: str, league_key: str, season_year: int, draft_key: str) -> None:
     st.markdown("### Initialize Draft Order Lottery")
     st.caption(
-        "Pick #12 is fixed to the league champion. Picks #11-#7 are randomized from the other playoff teams. "
-        "Picks #6-#1 are randomized from consolation teams."
+        "Yahoo auto-detect is used as the default setup. Commissioner override remains available before initialization."
     )
 
     team_keys = _ordered_team_keys(state)
@@ -587,31 +862,95 @@ def _render_setup_form(state: Any, dsn: str, league_key: str, season_year: int, 
         st.warning(f"Expected 12 teams, found {len(team_keys)}.")
         return
 
+    cache_key = f"lottery_auto_defaults::{league_key}::{season_year}::{draft_key}"
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("Refresh Yahoo Auto-Detect", key="lottery_refresh_yahoo_defaults"):
+            st.session_state.pop(cache_key, None)
+            st.rerun()
+    with c2:
+        st.caption("Source: prior-season Yahoo standings + NFFL team bridge.")
+
+    auto: dict[str, Any] | None = st.session_state.get(cache_key)
+    if auto is None:
+        try:
+            with st.spinner("Loading Yahoo prior-season lottery defaults..."):
+                auto = _load_yahoo_auto_lottery_defaults(
+                    dsn=dsn,
+                    current_league_key=league_key,
+                    current_season_year=season_year,
+                    current_team_keys=team_keys,
+                )
+            st.session_state[cache_key] = auto
+        except Exception as exc:
+            # Do not cache errors. A transient Yahoo/auth/code issue should not stick
+            # in the user's Streamlit session after a fix or refresh.
+            auto = {"error": str(exc)}
+
+    champion_default = team_keys[0]
+    playoff_default: list[str] = []
+    consolation_default: list[str] = []
+
+    if auto and not auto.get("error"):
+        st.success(
+            f"Yahoo auto-detected pools from {auto['prior_season_year']} league {auto['prior_league_key']}."
+        )
+        proof_rows = list(auto.get("proof_rows") or [])
+        champion_name = _team_name(state, str(auto.get("champion_team_key") or ""))
+        st.caption(f"Auto-detected champion: {champion_name}")
+
+        with st.expander("Review Yahoo source details / prior-season standings", expanded=False):
+            st.dataframe(proof_rows, hide_index=True, use_container_width=True)
+
+        champion_default = str(auto.get("champion_team_key") or champion_default)
+        playoff_default = [str(tk) for tk in (auto.get("playoff_team_keys") or []) if str(tk) in team_keys]
+        consolation_default = [str(tk) for tk in (auto.get("consolation_team_keys") or []) if str(tk) in team_keys]
+    else:
+        st.warning(
+            "Yahoo auto-detect is unavailable. Use the manual override controls below."
+        )
+        if auto and auto.get("error"):
+            st.caption(str(auto.get("error")))
+
+    if champion_default not in team_keys:
+        champion_default = team_keys[0]
+
     with st.form("draft_order_lottery_setup_form", clear_on_submit=False):
         champion_team_key = st.selectbox(
             "League Champion / Pick #12",
             options=team_keys,
+            index=team_keys.index(champion_default),
             format_func=lambda tk: _team_name(state, tk),
             key="lottery_champion_team_key",
+            help="Default comes from Yahoo final standings rank #1 when available.",
         )
 
         remaining = [tk for tk in team_keys if tk != champion_team_key]
+        playoff_default_effective = [tk for tk in playoff_default if tk in remaining]
+        consolation_default_effective = [tk for tk in consolation_default if tk in remaining and tk not in playoff_default_effective]
 
         playoff_team_keys = st.multiselect(
             "Remaining playoff teams, randomized into Picks #11-#7",
             options=remaining,
-            default=[],
+            default=playoff_default_effective,
             format_func=lambda tk: _team_name(state, tk),
             key="lottery_playoff_team_keys",
+            help="Default comes from Yahoo clinched_playoffs=1, excluding the champion.",
         )
 
         consolation_options = [tk for tk in remaining if tk not in set(playoff_team_keys)]
+        consolation_default_effective = [tk for tk in consolation_default_effective if tk in consolation_options]
+
+        # If Yahoo defaults are valid, this should already contain 6 teams. If the commissioner
+        # edits playoff picks, leave consolation editable rather than trying to silently reassign.
         consolation_team_keys = st.multiselect(
             "Consolation teams, randomized into Picks #6-#1",
             options=consolation_options,
-            default=[],
+            default=consolation_default_effective,
             format_func=lambda tk: _team_name(state, tk),
             key="lottery_consolation_team_keys",
+            help="Default is every non-playoff team after Yahoo standings are mapped into the 2026 team keys.",
         )
 
         st.caption(
