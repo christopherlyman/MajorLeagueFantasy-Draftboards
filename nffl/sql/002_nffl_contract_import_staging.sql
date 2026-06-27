@@ -44,7 +44,6 @@ WITH s AS (
         *,
         nffl.norm_player_name(player_name) AS staging_norm
     FROM nffl.contract_import_staging
-    WHERE import_batch = '2026_from_2025_sheet_v1'
 ),
 u AS (
     SELECT
@@ -56,8 +55,6 @@ u AS (
         eligible_positions,
         nffl.norm_player_name(full_name) AS universe_norm
     FROM nffl.player_universe
-    WHERE league_key='470.l.84346'
-      AND season_year=2026
 ),
 matches AS (
     SELECT
@@ -82,7 +79,9 @@ matches AS (
         ) AS match_count
     FROM s
     LEFT JOIN u
-      ON u.universe_norm = s.staging_norm
+      ON u.league_key = s.league_key
+     AND u.season_year = s.season_year
+     AND u.universe_norm = s.staging_norm
 )
 SELECT
     *,
