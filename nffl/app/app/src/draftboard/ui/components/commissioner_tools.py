@@ -1872,18 +1872,23 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
     if publish_blockers:
         st.error("Publish / Reveal is blocked: " + "; ".join(publish_blockers) + ".")
 
-    confirm = st.checkbox(
-        "Confirm publish/reveal QO-FT",
-        value=False,
-        key="nffl_confirm_publish_reveal_qoft",
-    )
+    with st.form("nffl_publish_reveal_qoft_form", clear_on_submit=False):
+        confirm = st.checkbox(
+            "Confirm publish/reveal QO-FT",
+            value=False,
+            key="nffl_confirm_publish_reveal_qoft",
+        )
+        publish_clicked = st.form_submit_button(
+            "Publish / Reveal QO-FT",
+            type="primary",
+            disabled=bool(publish_blockers),
+        )
 
-    if st.button(
-        "Publish / Reveal QO-FT",
-        type="primary",
-        disabled=(not confirm or bool(publish_blockers)),
-        key="nffl_publish_reveal_qoft_btn",
-    ):
+    if publish_clicked:
+        if not confirm:
+            st.warning("Confirm publish/reveal QO-FT first.")
+            return
+
         actor = "commissioner"
         if isinstance(auth_ctx, dict):
             actor = str(auth_ctx.get("acting_as") or auth_ctx.get("display_name") or "commissioner")
@@ -1909,16 +1914,19 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
             "This clears published QO rows for this league/year and returns QO/FT to private. "
             "It does not delete saved Teams-tab QO/FT decisions."
         )
-        reset_confirm = st.checkbox(
-            "Confirm reset QO/FT reveal",
-            value=False,
-            key="nffl_confirm_reset_qoft_publish",
-        )
-        if st.button(
-            "Reset QO/FT Reveal to Private",
-            disabled=not reset_confirm,
-            key="nffl_reset_qoft_publish_btn",
-        ):
+        with st.form("nffl_reset_qoft_publish_form", clear_on_submit=False):
+            reset_confirm = st.checkbox(
+                "Confirm reset QO/FT reveal",
+                value=False,
+                key="nffl_confirm_reset_qoft_publish",
+            )
+            reset_clicked = st.form_submit_button("Reset QO/FT Reveal to Private")
+
+        if reset_clicked:
+            if not reset_confirm:
+                st.warning("Confirm reset QO/FT reveal first.")
+                return
+
             try:
                 result = _reset_nffl_qoft_publish_for_testing(
                     dsn=dsn,
@@ -3862,35 +3870,37 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
         if not picked_ids:
             st.caption("No picks to delete yet.")
         else:
-            pick_id = st.selectbox(
-                "Pick to delete",
-                options=picked_ids,
-                help="Clears the selected player from a pick slot.",
-                key="delete_pick_select",
-            )
+            with st.form("delete_pick_form", clear_on_submit=False):
+                pick_id = st.selectbox(
+                    "Pick to delete",
+                    options=picked_ids,
+                    help="Clears the selected player from a pick slot.",
+                    key="delete_pick_select",
+                )
 
-            delete_mode = st.radio(
-                "Delete behavior",
-                options=[
-                    "Delete pick + rewind clock to this pick",
-                    "Delete pick (do not change clock)",
-                ],
-                index=0,
-                key="delete_pick_mode",
-            )
+                delete_mode = st.radio(
+                    "Delete behavior",
+                    options=[
+                        "Delete pick + rewind clock to this pick",
+                        "Delete pick (do not change clock)",
+                    ],
+                    index=0,
+                    key="delete_pick_mode",
+                )
 
-            confirm = st.checkbox(
-                "I understand this will clear the pick.",
-                key="delete_pick_confirm",
-            )
+                confirm = st.checkbox(
+                    "I understand this will clear the pick.",
+                    key="delete_pick_confirm",
+                )
 
-            rewind = delete_mode.startswith("Delete pick + rewind")
-            if st.button(
-                "DELETE PICK",
-                type="primary",
-                disabled=not confirm,
-                key="delete_pick_btn",
-            ):
+                delete_clicked = st.form_submit_button("DELETE PICK", type="primary")
+
+            if delete_clicked:
+                if not confirm:
+                    st.warning("Confirm that you understand this will clear the pick first.")
+                    return
+
+                rewind = delete_mode.startswith("Delete pick + rewind")
                 db_rows_deleted = delete_pick(state, pick_id, rewind_clock=rewind)
                 if rewind:
                     st.success(f"Deleted {pick_id}. DB rows deleted={db_rows_deleted}. Clock rewound to {pick_id}.")
@@ -3902,16 +3912,18 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
     # Danger Zone (your existing block)
     # -----------------------
     with st.expander("Danger Zone", expanded=False):
-        reset_confirm = st.checkbox(
-            "I understand this will wipe ALL picks and reset the draft.",
-            key="reset_draft_confirm",
-        )
-        if st.button(
-            "RESET DRAFT (wipe all picks)",
-            type="secondary",
-            disabled=not reset_confirm,
-            key="reset_draft_btn",
-        ):
+        with st.form("reset_draft_form", clear_on_submit=False):
+            reset_confirm = st.checkbox(
+                "I understand this will wipe ALL picks and reset the draft.",
+                key="reset_draft_confirm",
+            )
+            reset_clicked = st.form_submit_button("RESET DRAFT (wipe all picks)", type="secondary")
+
+        if reset_clicked:
+            if not reset_confirm:
+                st.warning("Confirm that you understand this will wipe all picks first.")
+                return
+
             db_rows_deleted = reset_draft_state(state)
             st.success(f"Draft reset. DB rows deleted={db_rows_deleted}. All picks cleared and clock reset to first pick.")
             st.rerun()
