@@ -1850,6 +1850,28 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
     else:
         st.warning("QO/FT is currently private and not yet published to the DraftBoard QO source.")
 
+    publish_blockers: list[str] = []
+
+    try:
+        readiness = _load_nffl_contract_readiness(
+            dsn=dsn,
+            league_key=league_key,
+            season_year=season_year,
+        )
+        readiness_counts = dict(readiness.get("counts") or {})
+        invalid_active_contracts = int(
+            readiness_counts.get("current_invalid_active_contracts:invalid_active_contracts", 0)
+        )
+        if invalid_active_contracts > 0:
+            publish_blockers.append(
+                f"{invalid_active_contracts} active contract(s) failed same-team end-roster reconciliation"
+            )
+    except Exception as exc:
+        publish_blockers.append(f"could not verify contract readiness: {exc}")
+
+    if publish_blockers:
+        st.error("Publish / Reveal is blocked: " + "; ".join(publish_blockers) + ".")
+
     confirm = st.checkbox(
         "Confirm publish/reveal QO-FT",
         value=False,
@@ -1859,7 +1881,7 @@ def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None 
     if st.button(
         "Publish / Reveal QO-FT",
         type="primary",
-        disabled=not confirm,
+        disabled=(not confirm or bool(publish_blockers)),
         key="nffl_publish_reveal_qoft_btn",
     ):
         actor = "commissioner"
