@@ -766,35 +766,56 @@ def _sync_state_order_from_lottery(state: Any, slot_to_team: dict[int, str]) -> 
     save_autosave(state)
 
 
-def _pick_card_html(*, pick_number: int, team_name: str, owner_name: str, pool_type: str, revealed: bool, side: str = "") -> str:
+def _pick_card_html(
+    *,
+    pick_number: int,
+    team_name: str,
+    owner_name: str,
+    pool_type: str,
+    revealed: bool,
+    side: str = "",
+    run_id: str = "",
+    is_commissioner: bool = False,
+    can_reveal: bool = False,
+) -> str:
     pool_type = str(pool_type or "").upper()
     side_class = "lottery-tile-left" if side == "left" else "lottery-tile-right" if side == "right" else ""
 
     tile_class = f"lottery-tile {side_class} lottery-tile-locked"
-    banner = ""
+    detail_html = '<div class="lottery-owner-name">Reveal pending</div>'
     team_display = "LOCKED"
-    owner_display = "Reveal pending"
 
     if revealed:
         tile_class = f"lottery-tile {side_class} lottery-tile-revealed"
         team_display = html.escape(team_name or "")
-        owner_display = html.escape(owner_name or "")
+        owner = html.escape(owner_name or "")
 
         if pool_type == "CHAMPION" and pick_number == 12:
             tile_class = f"lottery-tile {side_class} lottery-tile-champion"
-            banner = '<div class="lottery-banner">2025 Champion</div>'
+            detail_html = f'<div class="lottery-owner-name">{owner}</div><div class="lottery-banner">2025 Champion</div>'
         elif pool_type == "PLAYOFF":
-            banner = '<div class="lottery-banner lottery-banner-muted">Playoff Pool</div>'
+            detail_html = f'<div class="lottery-owner-name">{owner}</div><div class="lottery-banner lottery-banner-muted">Playoff Pool</div>'
         elif pool_type == "CONSOLATION":
-            banner = '<div class="lottery-banner lottery-banner-muted">Consolation Pool</div>'
+            detail_html = f'<div class="lottery-owner-name">{owner}</div><div class="lottery-banner lottery-banner-muted">Consolation Pool</div>'
+        else:
+            detail_html = f'<div class="lottery-owner-name">{owner}</div>'
+    elif is_commissioner and can_reveal:
+        detail_html = (
+            '<div class="lottery-owner-name">Next pick ready</div>'
+            '<div class="lottery-button-pocket"></div>'
+        )
+    elif is_commissioner:
+        detail_html = (
+            '<div class="lottery-owner-name">Awaiting prior reveal</div>'
+            f'<div class="lottery-reveal-disabled">Reveal Pick #{int(pick_number)}</div>'
+        )
 
     return (
         f'<div class="{tile_class}">'
         f'<div class="lottery-pick-num"><span>{pick_number}</span></div>'
         f'<div class="lottery-team-panel">'
         f'<div class="lottery-team-name">{team_display}</div>'
-        f'<div class="lottery-owner-name">{owner_display}</div>'
-        f'{banner}'
+        f'{detail_html}'
         f'</div>'
         f'</div>'
     )
@@ -854,7 +875,7 @@ def _render_lottery_css() -> None:
 .lottery-tile {
     width: 100%;
     max-width: 480px;
-    min-height: 94px;
+    height: 114px;
     border: 2px solid #D50A0A;
     background: #f2f2ec;
     border-radius: 8px;
@@ -929,6 +950,46 @@ def _render_lottery_css() -> None:
     background: rgba(213,10,10,0.13);
     border: 1px solid rgba(0,0,0,0.10);
 }
+.lottery-button-pocket {
+    height: 36px;
+    margin-top: 6px;
+}
+div[class*="st-key-lottery_reveal_pick_"] {
+    position: relative;
+    z-index: 20;
+    margin-top: -56px;
+    margin-bottom: 24px;
+}
+div[class*="st-key-lottery_reveal_pick_"] button {
+    background: #D50A0A !important;
+    color: #F2F0EA !important;
+    border: 1px solid rgba(255,255,255,0.20) !important;
+    border-radius: 999px !important;
+    padding: 5px 12px !important;
+    min-height: 30px !important;
+    font-size: 0.82rem !important;
+    font-weight: 900 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    white-space: nowrap !important;
+}
+div[class*="st-key-lottery_reveal_pick_"] button:hover {
+    background: #FF7900 !important;
+    color: #0A0A08 !important;
+}
+.lottery-reveal-disabled {
+    display: inline-block;
+    margin-top: 7px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    color: rgba(255,255,255,0.48);
+    background: rgba(255,255,255,0.08);
+    font-size: 0.82rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid rgba(255,255,255,0.10);
+}
 .lottery-tile-locked {
     border-color: rgba(213,10,10,0.58);
     background: #34302B;
@@ -949,6 +1010,10 @@ def _render_lottery_css() -> None:
 }
 .lottery-tile-champion .lottery-team-panel {
     background: linear-gradient(90deg, #fff0df 0%, #F2F0EA 100%);
+}
+.lottery-control-spacer {
+    height: 38px;
+    margin-bottom: 6px;
 }
 .lottery-hash {
     font-family: monospace;
@@ -1119,11 +1184,13 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
         unsafe_allow_html=True,
     )
 
-    with st.expander("Lottery technical details", expanded=False):
-        st.caption(f"Status: {status}")
-        if audit_hash:
-            st.markdown(f'<div class="lottery-hash">Audit hash: {html.escape(audit_hash)}</div>', unsafe_allow_html=True)
-        st.caption("Reveal path: #12 is already shown → #11 up to #7 → #6 up to #1.")
+    if st.button(
+        "Refresh Lottery Results",
+        key=f"lottery_refresh_results_{run_id}",
+        help="Reload the latest revealed picks without leaving the Draft Lottery tab.",
+        use_container_width=False,
+    ):
+        st.rerun()
 
     pick_by_number = {int(p["pick_number"]): p for p in picks}
     revealed_by_pick = {int(p["pick_number"]): bool(p["is_revealed"]) for p in picks}
@@ -1157,29 +1224,37 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
                 pool_type=pool_type,
                 revealed=revealed,
                 side=side,
+                run_id=run_id,
+                is_commissioner=is_commissioner,
+                can_reveal=(pick_number == next_reveal_pick and status != LOTTERY_STATUS_APPLIED),
             ),
             unsafe_allow_html=True,
         )
 
-        if is_commissioner and not revealed:
-            disabled = pick_number != next_reveal_pick or status == LOTTERY_STATUS_APPLIED
-            if st.button(
-                f"Reveal Pick #{pick_number}",
-                key=f"lottery_reveal_pick_{run_id}_{pick_number}",
-                disabled=disabled,
-                use_container_width=False,
-            ):
-                try:
-                    _reveal_pick(
-                        dsn=dsn,
-                        run_id=run_id,
-                        pick_number=pick_number,
-                        actor=_actor_label(),
-                    )
-                    st.success(f"Pick #{pick_number} revealed.")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Reveal failed: {exc}")
+        if is_commissioner:
+            if not revealed:
+                disabled = pick_number != next_reveal_pick or status == LOTTERY_STATUS_APPLIED
+                _, reveal_button_col = st.columns([0.64, 0.36], gap="small")
+                with reveal_button_col:
+                    if st.button(
+                        f"Reveal Pick #{pick_number}",
+                        key=f"lottery_reveal_pick_{pick_number}",
+                        disabled=disabled,
+                        use_container_width=True,
+                    ):
+                        try:
+                            _reveal_pick(
+                                dsn=dsn,
+                                run_id=run_id,
+                                pick_number=pick_number,
+                                actor=_actor_label(),
+                            )
+                            st.success(f"Pick #{pick_number} revealed.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Reveal failed: {exc}")
+            else:
+                st.markdown('<div class="lottery-control-spacer"></div>', unsafe_allow_html=True)
 
     with left_col:
         for n in left_numbers:
@@ -1188,6 +1263,12 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
     with right_col:
         for n in right_numbers:
             render_pick_slot(n, "right")
+
+    with st.expander("Lottery technical details", expanded=False):
+        st.caption(f"Status: {status}")
+        if audit_hash:
+            st.markdown(f'<div class="lottery-hash">Audit hash: {html.escape(audit_hash)}</div>', unsafe_allow_html=True)
+        st.caption("Reveal path: #12 is already shown → #11 up to #7 → #6 up to #1.")
 
     all_revealed = bool(picks) and all(bool(p.get("is_revealed")) for p in picks)
 
