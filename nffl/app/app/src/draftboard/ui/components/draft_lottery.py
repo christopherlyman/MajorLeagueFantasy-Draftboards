@@ -766,86 +766,197 @@ def _sync_state_order_from_lottery(state: Any, slot_to_team: dict[int, str]) -> 
     save_autosave(state)
 
 
-def _pick_card_html(*, pick_number: int, team_name: str, owner_name: str, pool_type: str, revealed: bool) -> str:
+def _pick_card_html(*, pick_number: int, team_name: str, owner_name: str, pool_type: str, revealed: bool, side: str = "") -> str:
+    pool_type = str(pool_type or "").upper()
+    side_class = "lottery-tile-left" if side == "left" else "lottery-tile-right" if side == "right" else ""
+
+    tile_class = f"lottery-tile {side_class} lottery-tile-locked"
+    banner = ""
+    team_display = "LOCKED"
+    owner_display = "Reveal pending"
+
     if revealed:
-        if pool_type == "CHAMPION":
-            title = "🏆 Champion Pick"
-            accent = "rgba(255, 215, 0, 0.25)"
+        tile_class = f"lottery-tile {side_class} lottery-tile-revealed"
+        team_display = html.escape(team_name or "")
+        owner_display = html.escape(owner_name or "")
+
+        if pool_type == "CHAMPION" and pick_number == 12:
+            tile_class = f"lottery-tile {side_class} lottery-tile-champion"
+            banner = '<div class="lottery-banner">2025 Champion</div>'
         elif pool_type == "PLAYOFF":
-            title = "Playoff Pool"
-            accent = "rgba(80, 160, 255, 0.18)"
-        else:
-            title = "Consolation Pool"
-            accent = "rgba(120, 220, 140, 0.18)"
+            banner = '<div class="lottery-banner lottery-banner-muted">Playoff Pool</div>'
+        elif pool_type == "CONSOLATION":
+            banner = '<div class="lottery-banner lottery-banner-muted">Consolation Pool</div>'
 
-        body = f"""
-            <div class="lottery-team">{html.escape(team_name)}</div>
-            <div class="lottery-owner">{html.escape(owner_name or '')}</div>
-            <div class="lottery-pool">{html.escape(title)}</div>
-        """
-    else:
-        accent = "rgba(160, 160, 160, 0.13)"
-        body = """
-            <div class="lottery-hidden">Locked</div>
-            <div class="lottery-owner">Awaiting reveal</div>
-            <div class="lottery-pool">Commissioner reveal pending</div>
-        """
-
-    return f"""
-    <div class="lottery-card" style="background: {accent};">
-      <div class="lottery-pick">Pick #{pick_number}</div>
-      {body}
-    </div>
-    """
+    return (
+        f'<div class="{tile_class}">'
+        f'<div class="lottery-pick-num"><span>{pick_number}</span></div>'
+        f'<div class="lottery-team-panel">'
+        f'<div class="lottery-team-name">{team_display}</div>'
+        f'<div class="lottery-owner-name">{owner_display}</div>'
+        f'{banner}'
+        f'</div>'
+        f'</div>'
+    )
 
 
 def _render_lottery_css() -> None:
     st.markdown(
         """
-        <style>
-        .lottery-card {
-            border: 1px solid rgba(255,255,255,0.18);
-            border-radius: 14px;
-            padding: 14px 16px;
-            margin-bottom: 10px;
-            min-height: 112px;
-            box-shadow: 0 1px 8px rgba(0,0,0,0.18);
-        }
-        .lottery-pick {
-            font-size: 0.95rem;
-            opacity: 0.80;
-            margin-bottom: 8px;
-            font-weight: 700;
-        }
-        .lottery-team {
-            font-size: 1.35rem;
-            font-weight: 800;
-            line-height: 1.2;
-        }
-        .lottery-hidden {
-            font-size: 1.25rem;
-            font-weight: 800;
-            opacity: 0.72;
-        }
-        .lottery-owner {
-            margin-top: 4px;
-            opacity: 0.78;
-            font-size: 0.95rem;
-        }
-        .lottery-pool {
-            margin-top: 8px;
-            font-size: 0.85rem;
-            opacity: 0.70;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .lottery-hash {
-            font-family: monospace;
-            font-size: 0.78rem;
-            overflow-wrap: anywhere;
-            opacity: 0.75;
-        }
-        </style>
+<style>
+.lottery-hero {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    background: linear-gradient(135deg, #0A0A08 0%, #34302B 58%, #5c1717 100%);
+    border: 2px solid #D50A0A;
+    border-radius: 18px;
+    padding: 16px 20px;
+    margin: 8px auto 18px auto;
+    max-width: 860px;
+    box-shadow: 0 0 18px rgba(213, 10, 10, 0.22);
+}
+.lottery-logo-fallback {
+    width: 64px;
+    height: 64px;
+    border-radius: 12px;
+    border: 2px solid #D50A0A;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+    font-size: 1.30rem;
+    color: #FF7900;
+    background: #34302B;
+    letter-spacing: 0.03em;
+}
+.lottery-title-wrap {
+    line-height: 1.0;
+}
+.lottery-kicker {
+    color: #FF7900;
+    font-weight: 800;
+    font-size: 0.88rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.lottery-title {
+    color: #f7f7f7;
+    font-weight: 950;
+    font-size: clamp(1.85rem, 4.5vw, 3.15rem);
+    letter-spacing: -0.04em;
+    text-transform: uppercase;
+}
+.lottery-title-year {
+    color: #FF7900;
+}
+.lottery-tile {
+    width: 100%;
+    max-width: 480px;
+    min-height: 94px;
+    border: 2px solid #D50A0A;
+    background: #f2f2ec;
+    border-radius: 8px;
+    margin-bottom: 11px;
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+    align-items: stretch;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.24);
+    overflow: hidden;
+}
+.lottery-tile-left {
+    margin-left: auto;
+    margin-right: 0;
+}
+.lottery-tile-right {
+    margin-left: 0;
+    margin-right: auto;
+}
+.lottery-pick-num {
+    background: #34302B;
+    color: #FF7900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 2px solid #D50A0A;
+}
+.lottery-pick-num span {
+    font-size: 2.65rem;
+    font-style: italic;
+    font-weight: 950;
+    line-height: 1;
+    text-shadow: 0 0 8px rgba(255, 121, 0, 0.28);
+}
+.lottery-team-panel {
+    padding: 11px 15px 10px 15px;
+    min-width: 0;
+}
+.lottery-team-name {
+    color: #111111;
+    font-size: clamp(1.25rem, 2.05vw, 1.80rem);
+    font-weight: 950;
+    line-height: 1.05;
+    text-transform: uppercase;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.lottery-owner-name {
+    color: rgba(0,0,0,0.62);
+    font-size: 0.95rem;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.lottery-banner {
+    color: #050505;
+    background: #FF7900;
+    border-radius: 999px;
+    display: inline-block;
+    width: fit-content;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 5px;
+}
+.lottery-banner-muted {
+    color: rgba(0,0,0,0.72);
+    background: rgba(213,10,10,0.13);
+    border: 1px solid rgba(0,0,0,0.10);
+}
+.lottery-tile-locked {
+    border-color: rgba(213,10,10,0.58);
+    background: #34302B;
+}
+.lottery-tile-locked .lottery-team-panel {
+    background: linear-gradient(90deg, #0A0A08 0%, #34302B 100%);
+}
+.lottery-tile-locked .lottery-team-name {
+    color: rgba(255,255,255,0.55);
+    letter-spacing: 0.08em;
+}
+.lottery-tile-locked .lottery-owner-name {
+    color: rgba(255,255,255,0.54);
+}
+.lottery-tile-champion {
+    border-color: #FF7900;
+    box-shadow: 0 0 14px rgba(255,121,0,0.26);
+}
+.lottery-tile-champion .lottery-team-panel {
+    background: linear-gradient(90deg, #fff0df 0%, #F2F0EA 100%);
+}
+.lottery-hash {
+    font-family: monospace;
+    font-size: 0.95rem;
+    overflow-wrap: anywhere;
+    opacity: 0.75;
+}
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -997,10 +1108,22 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
     status = str(run["status"])
     audit_hash = str(run.get("audit_hash") or "")
 
-    st.markdown("### Draft Order Lottery Board")
-    st.caption(f"Status: {status}")
-    if audit_hash:
-        st.markdown(f'<div class="lottery-hash">Audit hash: {html.escape(audit_hash)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="lottery-hero">'
+        '<div class="lottery-logo-fallback">NFFL</div>'
+        '<div class="lottery-title-wrap">'
+        '<div class="lottery-kicker">Official Draft Order Reveal</div>'
+        '<div class="lottery-title">Draft Lottery <span class="lottery-title-year">2026</span></div>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Lottery technical details", expanded=False):
+        st.caption(f"Status: {status}")
+        if audit_hash:
+            st.markdown(f'<div class="lottery-hash">Audit hash: {html.escape(audit_hash)}</div>', unsafe_allow_html=True)
+        st.caption("Reveal path: #12 is already shown → #11 up to #7 → #6 up to #1.")
 
     pick_by_number = {int(p["pick_number"]): p for p in picks}
     revealed_by_pick = {int(p["pick_number"]): bool(p["is_revealed"]) for p in picks}
@@ -1010,11 +1133,16 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
             next_reveal_pick = pick_number
             break
 
-    for pick_number in range(12, 0, -1):
+    left_numbers = [1, 2, 3, 4, 5, 6]
+    right_numbers = [7, 8, 9, 10, 11, 12]
+
+    _, left_col, _, right_col, _ = st.columns([0.9, 1.35, 0.04, 1.35, 0.9], gap="small")
+
+    def render_pick_slot(pick_number: int, side: str) -> None:
         p = pick_by_number.get(pick_number)
         if not p:
             st.warning(f"Pick #{pick_number} is missing from lottery run {run_id}.")
-            continue
+            return
 
         revealed = bool(p.get("is_revealed"))
         team_name = str(p.get("team_name") or _team_name(state, str(p.get("team_key") or "")))
@@ -1028,6 +1156,7 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
                 owner_name=owner_name,
                 pool_type=pool_type,
                 revealed=revealed,
+                side=side,
             ),
             unsafe_allow_html=True,
         )
@@ -1038,7 +1167,7 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
                 f"Reveal Pick #{pick_number}",
                 key=f"lottery_reveal_pick_{run_id}_{pick_number}",
                 disabled=disabled,
-                use_container_width=True,
+                use_container_width=False,
             ):
                 try:
                     _reveal_pick(
@@ -1051,6 +1180,14 @@ def _render_lottery_board(state: Any, dsn: str, run: dict[str, Any], picks: list
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Reveal failed: {exc}")
+
+    with left_col:
+        for n in left_numbers:
+            render_pick_slot(n, "left")
+
+    with right_col:
+        for n in right_numbers:
+            render_pick_slot(n, "right")
 
     all_revealed = bool(picks) and all(bool(p.get("is_revealed")) for p in picks)
 
