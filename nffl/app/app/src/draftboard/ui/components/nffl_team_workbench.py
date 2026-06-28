@@ -1049,6 +1049,49 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
         st.info("Choose your team in the Team Gateway.")
         return
 
+    def _load_active_draft_team_order() -> list[str]:
+        try:
+            import psycopg
+
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        WITH ctx AS (
+                            SELECT draft_key
+                            FROM nffl.v_active_season_context
+                            LIMIT 1
+                        ),
+                        first_round AS (
+                            SELECT MIN(dp.round_number) AS round_number
+                            FROM nffl.draft_pick dp
+                            JOIN ctx
+                              ON ctx.draft_key = dp.draft_key
+                        )
+                        SELECT dp.column_team_key
+                        FROM nffl.draft_pick dp
+                        JOIN ctx
+                          ON ctx.draft_key = dp.draft_key
+                        JOIN first_round fr
+                          ON fr.round_number = dp.round_number
+                        ORDER BY dp.slot_number
+                        """
+                    )
+                    return [str(r[0] or "").strip() for r in cur.fetchall() if str(r[0] or "").strip()]
+        except Exception:
+            return []
+
+    canonical_order = _load_active_draft_team_order()
+    if canonical_order:
+        order_index = {team_key: idx for idx, team_key in enumerate(canonical_order)}
+        visible_math_rows = sorted(
+            visible_math_rows,
+            key=lambda row: (
+                order_index.get(str(row.get("team_key") or ""), 10_000),
+                str(row.get("team_name") or ""),
+            ),
+        )
+
     if not visible_math_rows:
         st.warning("No teams are available for this Team Gateway selection.")
         return

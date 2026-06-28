@@ -1849,8 +1849,62 @@ def render_teams(state: DraftState, contract_years_2026: dict[str, int]) -> None
 
     st.subheader("Teams")
 
-    order = list(getattr(state, "draft_order_team_keys_by_slot", []) or [])
-    teams = [state.teams[tk] for tk in order if tk in state.teams]
+    # Teams tab order should follow the canonical draft-slot order from Postgres.
+    # The in-memory/autosave order can be stale across browser sessions after lottery apply.
+    def _load_teams_tab_order_from_db() -> list[str]:
+        try:
+            import os
+            import psycopg
+
+            dsn = get_postgres_dsn()
+            draft_key = os.environ.get("DRAFTBOARD_DRAFT_KEY", "nffl_2026_preseason")
+            if not dsn or not draft_key:
+                return []
+
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        WITH first_round AS (
+                            SELECT MIN(round_number) AS round_number
+                            FROM nffl.draft_pick
+                            WHERE draft_key = %s
+                        )
+                        SELECT dp.column_team_key
+                        FROM nffl.draft_pick dp
+                        JOIN first_round fr
+                          ON fr.round_number = dp.round_number
+                        WHERE dp.draft_key = %s
+                        ORDER BY dp.slot_number
+                        """,
+                        (draft_key, draft_key),
+                    )
+                    rows = [str(r[0] or "").strip() for r in cur.fetchall()]
+
+            return [tk for tk in rows if tk]
+        except Exception:
+            return []
+
+    db_order = _load_teams_tab_order_from_db()
+    state_order = list(getattr(state, "draft_order_team_keys_by_slot", []) or [])
+
+    if db_order and all(tk in state.teams for tk in db_order):
+        order = db_order
+        state.draft_order_team_keys_by_slot = db_order
+    else:
+        order = state_order
+
+    # Keep all loaded teams visible even if an order source is incomplete.
+    ordered_seen = set()
+    teams = []
+    for tk in order:
+        if tk in state.teams and tk not in ordered_seen:
+            teams.append(state.teams[tk])
+            ordered_seen.add(tk)
+    for tk, team in state.teams.items():
+        if tk not in ordered_seen:
+            teams.append(team)
+            ordered_seen.add(tk)
     if not teams:
         st.caption("No teams loaded.")
         return
