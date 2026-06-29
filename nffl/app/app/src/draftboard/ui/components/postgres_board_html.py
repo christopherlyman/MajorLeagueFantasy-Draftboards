@@ -102,22 +102,27 @@ def render_postgres_board_html(
             position: sticky;
             top: 3.25rem;
             z-index: 20;
-            background: linear-gradient(180deg, #F8FAFC, #EEF2F7);
-            padding: 8px 0 10px 0;
-            border-bottom: 2px solid #CBD5E1;
+            background: linear-gradient(135deg, #0A0A08 0%, #34302B 62%, #5c1717 100%);
+            padding: 10px 0 12px 0;
+            border-bottom: 3px solid #D50A0A;
           }}
 
           .db-hcell {{
-            background: #FFFFFF;
-            color: #0F172A !important;
-            border: 2px solid #CBD5E1;
-            border-radius: 12px;
-            padding: 8px 8px;
-            font-weight: 900;
+            background: #34302B;
+            color: #F2F0EA !important;
+            border: 2px solid #D50A0A;
+            border-radius: 10px;
+            padding: 8px 10px;
+            box-sizing: border-box;
+            font-weight: 950;
             font-size: clamp(0.95rem, 1.2vw, 1.12rem);
             line-height: clamp(1.05rem, 1.4vw, 1.22rem);
             height: 74px;
             text-align: center;
+            text-transform: uppercase;
+            letter-spacing: -0.03em;
+            text-shadow: 0 0 8px rgba(255, 121, 0, 0.24);
+            box-shadow: inset 0 -4px 0 #D50A0A, 0 2px 8px rgba(0,0,0,0.24);
             display: -webkit-box;
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;

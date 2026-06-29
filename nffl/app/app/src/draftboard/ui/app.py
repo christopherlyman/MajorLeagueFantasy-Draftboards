@@ -3905,6 +3905,102 @@ def render_app() -> None:
               scrollbar-width: thin;
               scrollbar-color: rgba(255,255,255,0.25) rgba(255,255,255,0.07);
             }
+
+            div[data-testid="stElementContainer"]:has(.draftboard-hero-shell),
+            div[data-testid="stMarkdownContainer"]:has(.draftboard-hero-shell) {
+              width: 100% !important;
+              max-width: none !important;
+            }
+
+            .draftboard-hero-shell {
+              width: 100%;
+              max-width: none;
+              margin: 0 0 16px 0;
+              padding: 0;
+              box-sizing: border-box;
+            }
+
+            .draftboard-hero {
+              display: flex;
+              align-items: center;
+              justify-content: flex-start;
+              gap: 26px;
+              width: 100%;
+              min-height: 126px;
+              background: linear-gradient(135deg, #0A0A08 0%, #34302B 54%, #5c1717 100%);
+              border: 3px solid #D50A0A;
+              border-radius: 18px;
+              padding: 24px 32px;
+              margin: 0;
+              box-sizing: border-box;
+              box-shadow: 0 0 20px rgba(213, 10, 10, 0.26);
+            }
+
+            .draftboard-logo-fallback {
+              width: 92px;
+              height: 92px;
+              border-radius: 14px;
+              border: 3px solid #D50A0A;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-weight: 950;
+              font-size: 1.72rem;
+              color: #FF7900;
+              background: #34302B;
+              letter-spacing: 0.03em;
+              flex: 0 0 auto;
+            }
+
+            .draftboard-title-wrap {
+              line-height: 1.0;
+              text-align: left;
+            }
+
+            .draftboard-kicker {
+              color: #FF7900;
+              font-weight: 850;
+              font-size: 1.00rem;
+              letter-spacing: 0.20em;
+              text-transform: uppercase;
+              margin-bottom: 9px;
+            }
+
+            .draftboard-title {
+              color: #f7f7f7;
+              font-weight: 950;
+              font-size: clamp(2.8rem, 7vw, 5.6rem);
+              letter-spacing: -0.05em;
+              text-transform: uppercase;
+            }
+
+            .draftboard-title-year {
+              color: #FF7900;
+            }
+
+            @media (max-width: 640px) {
+              .draftboard-hero {
+                gap: 14px;
+                min-height: 102px;
+                padding: 18px 16px;
+              }
+
+              .draftboard-logo-fallback {
+                width: 62px;
+                height: 62px;
+                font-size: 1.10rem;
+              }
+
+              .draftboard-kicker {
+                font-size: 0.80rem;
+                letter-spacing: 0.12em;
+                margin-bottom: 6px;
+              }
+
+              .draftboard-title {
+                font-size: clamp(1.9rem, 9vw, 2.8rem);
+              }
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -3913,7 +4009,20 @@ def render_app() -> None:
     from draftboard.state.league_profile import get_active_league_profile
     _active_profile = get_active_league_profile()
     _league_name = str((_active_profile.get("league") or {}).get("name") or "Draft Board").strip()
-    st.title(f"{_league_name} Draft Board")
+    st.markdown(
+        f"""
+        <div class="draftboard-hero-shell">
+          <div class="draftboard-hero">
+            <div class="draftboard-logo-fallback">NFFL</div>
+            <div class="draftboard-title-wrap">
+              <div class="draftboard-kicker">Official Draft Board</div>
+              <div class="draftboard-title">Draft Board <span class="draftboard-title-year">{season_year}</span></div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     gateway_ctx = _render_nffl_team_gateway(get_postgres_dsn())
     st.session_state["nffl_gateway_context"] = gateway_ctx
