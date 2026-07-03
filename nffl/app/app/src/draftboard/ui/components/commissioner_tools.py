@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 import psycopg
+from psycopg import sql as pg_sql
 import streamlit as st
 
 from draftboard.state.runtime import (
@@ -1286,6 +1287,365 @@ def reset_draft_state(state: DraftState) -> int:
     return deleted_rows
 
 
+def _validate_backup_table_name(table_name: str) -> str:
+    table_name = str(table_name or "").strip()
+    if not re.match(r"^draft_pick_\d{8}_\d{6}$", table_name):
+        raise ValueError("Backup table name must match draft_pick_YYYYMMDD_HHMMSS.")
+    return table_name
+
+
+def _load_draft_lottery_reset_backup_tables(dsn: str) -> list[str]:
+    sql = """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'nffl_test_backup'
+          AND table_name ~ '^draft_pick_[0-9]{8}_[0-9]{6}$'
+        ORDER BY table_name DESC
+    """
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return [str(r[0]) for r in cur.fetchall()]
+
+
+def _preview_draft_lottery_reset(
+    *,
+    dsn: str,
+    league_key: str,
+    season_year: int,
+    draft_key: str,
+    backup_table: str,
+) -> dict:
+    backup_table = _validate_backup_table_name(backup_table)
+    backup_ident = pg_sql.Identifier("nffl_test_backup", backup_table)
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s::text)", (f"nffl_test_backup.{backup_table}",))
+            if cur.fetchone()[0] is None:
+                raise RuntimeError(f"Backup table not found: nffl_test_backup.{backup_table}")
+
+            cur.execute(
+                """
+                SELECT run_id, status, completed_at_utc, applied_at_utc
+                FROM nffl.draft_order_lottery_run
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND draft_key=%s
+                  AND status <> 'VOID'
+                ORDER BY created_at_utc DESC
+                """,
+                (league_key, int(season_year), draft_key),
+            )
+            runs = list(cur.fetchall() or [])
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM nffl.draft_selection
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+            draft_selection_rows = int(cur.fetchone()[0] or 0)
+
+            cur.execute(
+                """
+                SELECT
+                    count(*) AS draft_pick_rows,
+                    count(DISTINCT round_number) AS rounds,
+                    count(DISTINCT slot_number) AS slots,
+                    count(*) FILTER (WHERE column_team_key = current_owner_team_key) AS untraded_rows,
+                    count(*) FILTER (WHERE column_team_key <> current_owner_team_key) AS traded_or_overridden_rows
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+            current_integrity = cur.fetchone()
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    SELECT
+                        count(*) AS backup_rows,
+                        count(DISTINCT round_number) AS rounds,
+                        count(DISTINCT slot_number) AS slots,
+                        count(*) FILTER (WHERE draft_key <> %s) AS wrong_draft_key_rows,
+                        count(*) FILTER (WHERE column_team_key = current_owner_team_key) AS untraded_rows,
+                        count(*) FILTER (WHERE column_team_key <> current_owner_team_key) AS traded_or_overridden_rows
+                    FROM {}
+                    """
+                ).format(backup_ident),
+                (draft_key,),
+            )
+            backup_integrity = cur.fetchone()
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    SELECT b.slot_number, b.column_team_key, t.team_name, t.owner_name
+                    FROM (
+                        SELECT DISTINCT slot_number, column_team_key
+                        FROM {}
+                    ) b
+                    LEFT JOIN nffl.team t
+                      ON t.league_key=%s
+                     AND t.season_year=%s
+                     AND t.team_key=b.column_team_key
+                    ORDER BY b.slot_number
+                    """
+                ).format(backup_ident),
+                (league_key, int(season_year)),
+            )
+            target_order_rows = list(cur.fetchall() or [])
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    WITH current_order AS (
+                        SELECT DISTINCT slot_number, column_team_key
+                        FROM nffl.draft_pick
+                        WHERE draft_key=%s
+                    ),
+                    target_order AS (
+                        SELECT DISTINCT slot_number, column_team_key
+                        FROM {}
+                    )
+                    SELECT count(*)
+                    FROM current_order c
+                    JOIN target_order t
+                      ON t.slot_number=c.slot_number
+                    WHERE c.column_team_key <> t.column_team_key
+                    """
+                ).format(backup_ident),
+                (draft_key,),
+            )
+            slots_that_would_change = int(cur.fetchone()[0] or 0)
+
+    return {
+        "runs": runs,
+        "draft_selection_rows": draft_selection_rows,
+        "current_integrity": current_integrity,
+        "backup_integrity": backup_integrity,
+        "target_order_rows": target_order_rows,
+        "slots_that_would_change": slots_that_would_change,
+    }
+
+
+def reset_draft_lottery_to_backup_order(
+    state: DraftState,
+    *,
+    backup_table: str,
+    actor: str = "commissioner",
+) -> dict:
+    """
+    Commissioner-only reset for test/pre-draft lottery rehearsal.
+
+    Restores nffl.draft_pick from a validated nffl_test_backup.draft_pick_* table
+    and marks the current non-VOID lottery run VOID so a new lottery can be initialized.
+
+    This intentionally does NOT touch QO/FT decisions, contracts, manager links,
+    league visibility, or public qualifying_offer rows.
+    """
+    backup_table = _validate_backup_table_name(backup_table)
+
+    dsn = _get_dsn()
+    league_key = _get_league_key()
+    season_year = int(_get_season_year())
+    draft_key = _get_draft_key()
+    actor = str(actor or "commissioner").strip() or "commissioner"
+
+    backup_ident = pg_sql.Identifier("nffl_test_backup", backup_table)
+    result: dict = {
+        "backup_table": backup_table,
+        "voided_runs": [],
+        "updated_draft_pick_rows": 0,
+        "target_order": [],
+    }
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s::text)", (f"nffl_test_backup.{backup_table}",))
+            if cur.fetchone()[0] is None:
+                raise RuntimeError(f"Backup table not found: nffl_test_backup.{backup_table}")
+
+            cur.execute(
+                """
+                SELECT run_id, status
+                FROM nffl.draft_order_lottery_run
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND draft_key=%s
+                  AND status <> 'VOID'
+                ORDER BY created_at_utc DESC
+                FOR UPDATE
+                """,
+                (league_key, season_year, draft_key),
+            )
+            runs = list(cur.fetchall() or [])
+            if len(runs) != 1:
+                raise RuntimeError(f"Expected exactly 1 non-VOID lottery run. Found={len(runs)}.")
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM nffl.draft_selection
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+            draft_selection_rows = int(cur.fetchone()[0] or 0)
+            if draft_selection_rows != 0:
+                raise RuntimeError(f"Refusing lottery reset after draft selections exist. Rows={draft_selection_rows}.")
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                  AND (
+                      traded_flag IS TRUE
+                      OR column_team_key <> current_owner_team_key
+                  )
+                """,
+                (draft_key,),
+            )
+            current_override_rows = int(cur.fetchone()[0] or 0)
+            if current_override_rows != 0:
+                raise RuntimeError(f"Refusing lottery reset while pick trades/overrides exist. Rows={current_override_rows}.")
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    SELECT
+                        count(*) AS backup_rows,
+                        count(DISTINCT round_number) AS rounds,
+                        count(DISTINCT slot_number) AS slots,
+                        count(*) FILTER (WHERE draft_key <> %s) AS wrong_draft_key_rows,
+                        count(*) FILTER (WHERE column_team_key <> current_owner_team_key) AS traded_or_overridden_rows
+                    FROM {}
+                    """
+                ).format(backup_ident),
+                (draft_key,),
+            )
+            b_rows, b_rounds, b_slots, wrong_draft_key_rows, b_traded_rows = cur.fetchone()
+            if int(b_rows or 0) != 192:
+                raise RuntimeError(f"Backup table must contain 192 rows. Found={b_rows}.")
+            if int(b_rounds or 0) != 16:
+                raise RuntimeError(f"Backup table must contain 16 rounds. Found={b_rounds}.")
+            if int(b_slots or 0) != 12:
+                raise RuntimeError(f"Backup table must contain 12 slots. Found={b_slots}.")
+            if int(wrong_draft_key_rows or 0) != 0:
+                raise RuntimeError(f"Backup table contains rows for another draft_key. Rows={wrong_draft_key_rows}.")
+            if int(b_traded_rows or 0) != 0:
+                raise RuntimeError(f"Backup table contains traded/overridden rows. Rows={b_traded_rows}.")
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    SELECT count(*)
+                    FROM nffl.draft_pick dp
+                    JOIN {} b
+                      ON b.draft_key=dp.draft_key
+                     AND b.pick_id=dp.pick_id
+                    WHERE dp.draft_key=%s
+                    """
+                ).format(backup_ident),
+                (draft_key,),
+            )
+            matched_rows = int(cur.fetchone()[0] or 0)
+            if matched_rows != 192:
+                raise RuntimeError(f"Current draft_pick rows do not fully match backup by pick_id. Matched={matched_rows}.")
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    UPDATE nffl.draft_pick dp
+                       SET column_team_key=b.column_team_key,
+                           current_owner_team_key=b.current_owner_team_key,
+                           traded_flag=b.traded_flag,
+                           ownership_note=b.ownership_note,
+                           updated_at_utc=now()
+                    FROM {} b
+                    WHERE dp.draft_key=b.draft_key
+                      AND dp.pick_id=b.pick_id
+                      AND dp.draft_key=%s
+                    """
+                ).format(backup_ident),
+                (draft_key,),
+            )
+            result["updated_draft_pick_rows"] = int(cur.rowcount or 0)
+
+            cur.execute(
+                """
+                UPDATE nffl.draft_order_lottery_run
+                   SET status='VOID',
+                       updated_at_utc=now(),
+                       note=concat_ws(
+                           ' | ',
+                           nullif(note, ''),
+                           %s::text
+                       )
+                 WHERE league_key=%s
+                   AND season_year=%s
+                   AND draft_key=%s
+                   AND status <> 'VOID'
+                 RETURNING run_id, status
+                """,
+                (
+                    f"Reset by {actor} at {_utc_now_iso()} using nffl_test_backup.{backup_table}",
+                    league_key,
+                    season_year,
+                    draft_key,
+                ),
+            )
+            result["voided_runs"] = [(str(r[0]), str(r[1])) for r in cur.fetchall()]
+
+            cur.execute(
+                pg_sql.SQL(
+                    """
+                    SELECT DISTINCT slot_number, column_team_key
+                    FROM {}
+                    ORDER BY slot_number
+                    """
+                ).format(backup_ident)
+            )
+            result["target_order"] = [(int(r[0]), str(r[1])) for r in cur.fetchall()]
+
+        conn.commit()
+
+    target_by_slot = {slot: team_key for slot, team_key in result["target_order"]}
+    ordered = [target_by_slot.get(slot, "") for slot in range(1, len(target_by_slot) + 1)]
+    if ordered:
+        state.draft_order_team_keys_by_slot = ordered
+
+    for ps in (getattr(state, "picks", {}) or {}).values():
+        try:
+            slot = int(getattr(ps, "slot", 0) or 0)
+        except Exception:
+            continue
+        team_key = target_by_slot.get(slot, "")
+        if not team_key:
+            continue
+        if hasattr(ps, "original_team_key"):
+            setattr(ps, "original_team_key", team_key)
+        if hasattr(ps, "owner_team_key"):
+            setattr(ps, "owner_team_key", team_key)
+        if hasattr(ps, "column_team_key"):
+            setattr(ps, "column_team_key", team_key)
+        if hasattr(ps, "current_owner_team_key"):
+            setattr(ps, "current_owner_team_key", team_key)
+
+    if ordered:
+        st.session_state["draft_order_slot_to_team"] = {
+            slot: team_key for slot, team_key in result["target_order"]
+        }
+
+    save_autosave(state)
+    return result
+
+
 def delete_pick(state: DraftState, pick_id: str, rewind_clock: bool) -> int:
     """
     Delete one selected pick in both canonical DB truth and local UI/autosave state.
@@ -2259,6 +2619,132 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     }
                 )
             st.table(table_rows)
+
+
+    # -----------------------
+    # Reset Draft Lottery
+    # -----------------------
+    with st.expander("Reset Draft Lottery to Pre-Lottery State", expanded=False):
+        st.subheader("Reset Draft Lottery to Pre-Lottery State")
+        st.warning(
+            "Use this only during pre-draft testing/rehearsal. "
+            "It restores draft order from a validated draft_pick backup table and voids the current lottery run."
+        )
+        st.caption(
+            "This does not touch QO/FT decisions, QO/FT reveal state, contracts, manager links, or public qualifying_offer rows."
+        )
+
+        try:
+            dsn = _get_dsn()
+            league_key = _get_league_key()
+            season_year = int(_get_season_year())
+            draft_key = _get_draft_key()
+
+            backup_tables = _load_draft_lottery_reset_backup_tables(dsn)
+            if not backup_tables:
+                st.error("No nffl_test_backup.draft_pick_* backup tables found.")
+            else:
+                preferred_backup = "draft_pick_20260627_152830"
+                default_index = backup_tables.index(preferred_backup) if preferred_backup in backup_tables else 0
+                backup_table = st.selectbox(
+                    "Draft pick backup table to restore",
+                    options=backup_tables,
+                    index=default_index,
+                    key="draft_lottery_reset_backup_table",
+                    help="The selected table supplies the pre-lottery draft order.",
+                )
+
+                preview = _preview_draft_lottery_reset(
+                    dsn=dsn,
+                    league_key=league_key,
+                    season_year=season_year,
+                    draft_key=draft_key,
+                    backup_table=backup_table,
+                )
+
+                runs = preview.get("runs", [])
+                if not runs:
+                    st.info("No non-VOID lottery run exists. Nothing to reset.")
+                else:
+                    st.markdown("**Current non-VOID lottery run**")
+                    st.table(
+                        [
+                            {
+                                "run_id": str(r[0]),
+                                "status": str(r[1]),
+                                "completed_at_utc": str(r[2]),
+                                "applied_at_utc": str(r[3]),
+                            }
+                            for r in runs
+                        ]
+                    )
+
+                current_integrity = preview.get("current_integrity")
+                backup_integrity = preview.get("backup_integrity")
+                if current_integrity:
+                    st.write(
+                        "Current draft_pick integrity: "
+                        f"rows={current_integrity[0]}, rounds={current_integrity[1]}, slots={current_integrity[2]}, "
+                        f"untraded={current_integrity[3]}, traded_or_overridden={current_integrity[4]}"
+                    )
+                if backup_integrity:
+                    st.write(
+                        "Backup integrity: "
+                        f"rows={backup_integrity[0]}, rounds={backup_integrity[1]}, slots={backup_integrity[2]}, "
+                        f"wrong_draft_key_rows={backup_integrity[3]}, untraded={backup_integrity[4]}, "
+                        f"traded_or_overridden={backup_integrity[5]}"
+                    )
+
+                st.write(f"Draft selections currently recorded: **{preview.get('draft_selection_rows', 0)}**")
+                st.write(f"Draft-order slots that would change: **{preview.get('slots_that_would_change', 0)}**")
+
+                target_rows = preview.get("target_order_rows", [])
+                if target_rows:
+                    st.markdown("**Target restored order**")
+                    st.table(
+                        [
+                            {
+                                "Pick #": int(r[0]),
+                                "Team Key": str(r[1]),
+                                "Team": str(r[2] or ""),
+                                "Owner": str(r[3] or ""),
+                            }
+                            for r in target_rows
+                        ]
+                    )
+
+                confirm_backup = st.checkbox(
+                    f"I confirm restoring from nffl_test_backup.{backup_table}",
+                    key="draft_lottery_reset_confirm_backup",
+                )
+
+                disabled = (
+                    not confirm_backup
+                    or int(preview.get("draft_selection_rows", 0) or 0) != 0
+                    or not runs
+                )
+
+                if st.button(
+                    "Reset Draft Lottery to Pre-Lottery State",
+                    key="draft_lottery_reset_btn",
+                    type="secondary",
+                    disabled=disabled,
+                ):
+                    result = reset_draft_lottery_to_backup_order(
+                        state,
+                        backup_table=backup_table,
+                        actor="commissioner",
+                    )
+                    st.success(
+                        "Draft lottery reset complete. "
+                        f"updated_draft_pick_rows={result.get('updated_draft_pick_rows')}; "
+                        f"voided_runs={result.get('voided_runs')}"
+                    )
+                    st.rerun()
+
+        except Exception as exc:
+            st.error(f"Draft lottery reset tool failed: {exc}")
+
 
     # -----------------------
     # Refresh Yahoo Player Universe
