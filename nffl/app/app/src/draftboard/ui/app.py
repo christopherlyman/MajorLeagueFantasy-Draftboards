@@ -275,6 +275,102 @@ def _compute_current_qos_from_log(predraft: dict[str, dict[int, str]], pick_log:
     }
 
 
+def _compute_qo_display_from_log(predraft: dict[str, dict[int, str]], pick_log: list) -> dict[str, dict[int, str]]:
+    """
+    Replay QO display outcomes for the QOs tab.
+
+    This is intentionally separate from _compute_current_qos_from_log:
+    - current_qos is for future rights / poach eligibility, so retained QOs are consumed.
+    - qo_display is for visible outcomes, so retained QOs remain shown in their QO slot.
+    """
+    max_qo = int(get_active_qo_rounds())
+
+    current: dict[str, dict[int, str]] = {
+        str(tk): {int(lvl): str(pk) for lvl, pk in (lvls or {}).items() if pk}
+        for tk, lvls in (predraft or {}).items()
+    }
+
+    def _find_player(pk: str) -> tuple[str, int] | None:
+        wanted = str(pk or "").strip()
+        if not wanted:
+            return None
+        for team_key, lvls in current.items():
+            for lvl, pkey in list(lvls.items()):
+                if str(pkey) == wanted:
+                    return team_key, int(lvl)
+        return None
+
+    def _release_team_level(team_key: str, lvl: int) -> None:
+        tk = str(team_key or "").strip()
+        if not tk:
+            return
+        current.setdefault(tk, {})
+        current[tk].pop(int(lvl), None)
+        current[tk] = {int(k): str(v) for k, v in current[tk].items() if v}
+
+    def _qoround_from_pick_id(pick_id: str) -> int | None:
+        m = re.match(r"^QO(\d+)-", str(pick_id or "").strip(), flags=re.IGNORECASE)
+        if not m:
+            return None
+        lvl = int(m.group(1))
+        return lvl if 1 <= lvl <= max_qo else None
+
+    events = sorted(
+        list(pick_log or []),
+        key=lambda e: str(getattr(e, "ts_iso", "") or ""),
+    )
+
+    for e in events:
+        round_level = _qoround_from_pick_id(getattr(e, "pick_id", ""))
+        if round_level is None:
+            continue
+
+        owner_team_key = str(getattr(e, "owner_team_key", "") or "").strip()
+        selected_player_key = str(getattr(e, "player_key", "") or "").strip()
+        pick_kind = str(getattr(e, "pick_kind", "") or "").strip().upper()
+
+        if not owner_team_key or not selected_player_key:
+            continue
+
+        if pick_kind == "QO":
+            # Retained QO is no longer poachable, but should remain visible as
+            # the team's QO outcome in the QOs tab current table.
+            current.setdefault(owner_team_key, {})[int(round_level)] = selected_player_key
+            continue
+
+        if pick_kind == "FA":
+            # Team declined/released its own QO at this level.
+            _release_team_level(owner_team_key, round_level)
+            continue
+
+        if pick_kind == "POACH":
+            # Poacher declined/released its own same-level QO.
+            _release_team_level(owner_team_key, round_level)
+
+            # Victim loses the poached player; lower remaining QOs promote.
+            found = _find_player(selected_player_key)
+            if not found:
+                continue
+
+            victim_team_key, victim_level = found
+            victim_lvls = dict(current.get(victim_team_key, {}) or {})
+            victim_lvls.pop(int(victim_level), None)
+            current[victim_team_key] = _shift_qos_up_after_gap(
+                victim_lvls,
+                int(victim_level),
+                max_level=max_qo,
+            )
+            continue
+
+        _release_team_level(owner_team_key, round_level)
+
+    return {
+        str(tk): {int(lvl): str(pk) for lvl, pk in sorted((lvls or {}).items()) if pk}
+        for tk, lvls in sorted(current.items())
+        if lvls
+    }
+
+
 def _load_predraft_qo_player_maps_raw(dsn: str, league_key: str, season_year: int) -> tuple[set[str], dict[str, int], dict[str, str]]:
     '''
     Returns:
@@ -2486,9 +2582,9 @@ def render_qos_tab(state) -> None:
         predraft_levels[str(canon_tk)] = {int(lvl): str(pk) for lvl, pk in levels.items() if pk}
         predraft_updated_at[str(canon_tk)] = str((rec or {}).get("updated_at") or "")
 
-    # Current QO state = predraft + replayed POACH events.
-    # IMPORTANT: Do NOT use board pick slots to populate this table.
-    current_levels = _compute_current_qos_from_log(predraft_levels, state.pick_log)
+    # Current QO display outcomes = predraft + replayed live QO/FA/POACH outcomes.
+    # IMPORTANT: this is display-only; future poach eligibility still uses _compute_current_qos_from_log.
+    current_levels = _compute_qo_display_from_log(predraft_levels, state.pick_log)
 
     def _updated_ts_for_team(team_key: str) -> str:
         latest = ""
