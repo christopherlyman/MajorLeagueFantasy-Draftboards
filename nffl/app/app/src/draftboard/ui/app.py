@@ -1471,6 +1471,26 @@ def render_available_players(state: DraftState) -> None:
                 predraft_qo_keys.add(str(pk))
                 predraft_qo_level_by_key[str(pk)] = int(lvl)
 
+    # Live QO overlay for Available Players.
+    # public.qualifying_offer remains the original submission source; this overlay
+    # replays live draft decisions so declined/poached-away QOs become free agents.
+    predraft_qos_for_live_available = _load_predraft_qos(dsn, league_key, season_year) if (dsn and qo_enabled) else {}
+    current_qos_for_available = _compute_current_qos_from_log(
+        predraft_qos_for_live_available,
+        state.pick_log,
+    ) if qo_enabled else {}
+
+    current_qo_keys: set[str] = set()
+    current_qo_level_by_key: dict[str, int] = {}
+    for _tk, _levels in (current_qos_for_available or {}).items():
+        for lvl, pk in (_levels or {}).items():
+            if pk:
+                pk = str(pk)
+                current_qo_keys.add(pk)
+                current_qo_level_by_key[pk] = int(lvl)
+                # Team ownership is intentionally not used here; Available Players
+                # should show live QO status, not original/released team ownership.
+
     # Determine current round from the on-clock pick (used for "poach-eligible" filter)
     _cp = state.picks.get(state.clock.current_pick_id)
     current_round = int(_cp.round_number) if _cp else 0
@@ -1491,8 +1511,9 @@ def render_available_players(state: DraftState) -> None:
     ) if (dsn and (contracts_enabled or qo_enabled)) else {}
 
     canonical_reserved_keys = {
-        pk for pk, row in canonical_keeper_status_by_player_key.items()
-        if row.get("status_type") in {"CONTRACT", "FT", "QO"}
+        str(pk) for pk, row in canonical_keeper_status_by_player_key.items()
+        if row.get("status_type") in {"CONTRACT", "FT"}
+        or (row.get("status_type") == "QO" and str(pk) in current_qo_keys)
     }
 
     canonical_contract_keys = {
@@ -1542,19 +1563,21 @@ def render_available_players(state: DraftState) -> None:
         if not matches_positions(all_pos_list):
             continue
 
-        # Show only QOs = restrict to predraft QO list (public.qualifying_offer)
-        if show_qo and (p.player_key not in predraft_qo_keys):
+        # Show only QOs = restrict to CURRENT live QOs, not released original QOs.
+        if show_qo and (pk not in current_qo_keys):
             continue
 
-        # Show only Poach-eligible = predraft QOs whose level is strictly greater than the current round (1..5)
+        # Show only Poach-eligible = current live QOs whose level is strictly greater than the current round.
         if show_poach:
             cur_round = int(current_round or 0)
             # Only meaningful during QO rounds
             if 1 <= cur_round <= get_active_qo_rounds():
-                lvl = predraft_qo_level_by_key.get(p.player_key)
-                # eligible means: player's predraft QO level is strictly greater than current round
+                lvl = current_qo_level_by_key.get(pk)
+                # eligible means: player's current QO level is strictly greater than current round
                 if lvl is None or int(lvl) <= cur_round:
                     continue
+            else:
+                continue
         available_players.append(p)
 
     # ---- build deterministic mappings for the 3 new columns ----
@@ -1585,12 +1608,17 @@ def render_available_players(state: DraftState) -> None:
 
     status_by_player_key: dict[str, str] = {}
 
-    # Canonical DB statuses first: contracts, FT, QO.
+    # Canonical DB statuses first: contracts, FT, and CURRENT live QOs only.
+    # Released original QOs must not keep their QO label.
     # PT can still override below if ever enabled.
     for pk, row in (canonical_keeper_status_by_player_key or {}).items():
+        pk = str(pk)
+        status_type = str(row.get("status_type") or "")
+        if status_type == "QO" and pk not in current_qo_keys:
+            continue
         label = str(row.get("status_label") or "")
         if label:
-            status_by_player_key[str(pk)] = label
+            status_by_player_key[pk] = label
 
     # DB draft selections override keeper/QO/FT display status when visible in show-all views.
     for pk, row in (db_draft_status_by_player_key or {}).items():
@@ -1610,23 +1638,13 @@ def render_available_players(state: DraftState) -> None:
             continue
         status_by_player_key[pk] = _contract_label(int(yrs))
 
-    # 2) Predraft QOs (source of truth: public.qualifying_offer via _load_predraft_qos_by_team)
-    #    Also gives us QO team ownership for Team Name even if not placed on board.
-    predraft_by_team = _load_predraft_qos_by_team(dsn, league_key, season_year) if (dsn and qo_enabled) else {}
-    predraft_qo_level_by_key: dict[str, int] = {}
-    predraft_qo_team_by_key: dict[str, str] = {}
-
-    for tkey, rec in (predraft_by_team or {}).items():
-        levels = (rec or {}).get("levels", {}) or {}
-        for lvl, pk in levels.items():
-            if not pk:
-                continue
-            pk = str(pk)
-            predraft_qo_level_by_key[pk] = int(lvl)
-            predraft_qo_team_by_key[pk] = str(tkey)
-            # Only set status if not already PT/Contract
-            if pk not in status_by_player_key:
-                status_by_player_key[pk] = f"QO{int(lvl)}"
+    # 2) Current live QOs only.
+    # Original QO submissions remain available for original/audit tables,
+    # but Available Players should classify only current QO rights as QOs.
+    for pk, lvl in (current_qo_level_by_key or {}).items():
+        pk = str(pk)
+        if pk not in status_by_player_key:
+            status_by_player_key[pk] = f"QO{int(lvl)}"
 
     # 3) Draft Pick + Team Name (ownership rules)
     # - Draft Pick: ONLY real picks (selected_ts_iso is not None)
@@ -1643,6 +1661,10 @@ def render_available_players(state: DraftState) -> None:
         str(pk): str(row.get("team_name") or "")
         for pk, row in (canonical_keeper_status_by_player_key or {}).items()
         if row.get("team_name")
+        and (
+            row.get("status_type") in {"CONTRACT", "FT"}
+            or (row.get("status_type") == "QO" and str(pk) in current_qo_keys)
+        )
     }
     draft_pick_label_by_player_key: dict[str, str] = {}
     draft_pick_sort_by_player_key: dict[str, int] = {}
