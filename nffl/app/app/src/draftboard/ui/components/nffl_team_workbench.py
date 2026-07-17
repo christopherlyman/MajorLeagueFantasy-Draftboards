@@ -431,6 +431,157 @@ def _points_label(value: Any) -> str:
         return text
 
 
+def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
+    """
+    Post-reveal Teams tab display source.
+
+    Keep the football workbench UI, but display only live roster membership:
+    active contracts + locked FT + real draft selections.
+    """
+    sql = """
+        WITH ctx AS (
+            SELECT
+                current_league_key AS league_key,
+                current_season_year AS season_year,
+                draft_key
+            FROM nffl.v_active_season_context
+            LIMIT 1
+        ),
+        snap AS (
+            SELECT rs.snapshot_id
+            FROM nffl.roster_snapshot rs
+            JOIN ctx
+              ON ctx.league_key = rs.league_key
+             AND ctx.season_year = rs.season_year
+            WHERE rs.snapshot_type='END_OF_PRIOR_SEASON_ROSTER'
+            ORDER BY rs.updated_at_utc DESC
+            LIMIT 1
+        ),
+        player_lookup AS (
+            SELECT DISTINCT ON (w.yahoo_player_key)
+                w.yahoo_player_key,
+                w.player_name,
+                w.nfl_team_abbr,
+                w.eligible_positions,
+                w.percent_rostered,
+                w.bye_week,
+                COALESCE(s.stats_json, '{}'::jsonb) AS stats_json,
+                fp.fan_points_2025
+            FROM nffl.v_team_offseason_qo_ft_workbench w
+            JOIN ctx
+              ON ctx.league_key = w.league_key
+             AND ctx.season_year = w.season_year
+            LEFT JOIN snap ON true
+            LEFT JOIN nffl.roster_snapshot_player rsp
+              ON rsp.snapshot_id = snap.snapshot_id
+             AND rsp.league_key = w.league_key
+             AND rsp.season_year = w.season_year
+             AND rsp.team_key = w.team_key
+             AND rsp.yahoo_player_key = w.yahoo_player_key
+            LEFT JOIN nffl.roster_snapshot_player_stats s
+              ON s.snapshot_id = rsp.snapshot_id
+             AND s.team_key = rsp.team_key
+             AND s.yahoo_player_key = rsp.yahoo_player_key
+            LEFT JOIN nffl.v_roster_snapshot_player_fantasy_points fp
+              ON fp.snapshot_id = rsp.snapshot_id
+             AND fp.team_key = rsp.team_key
+             AND fp.yahoo_player_key = rsp.yahoo_player_key
+            ORDER BY w.yahoo_player_key, w.is_active_contract DESC, w.player_name
+        ),
+        live_source AS (
+            SELECT
+                1 AS source_order,
+                'CONTRACT' AS roster_source,
+                c.league_key,
+                c.season_year,
+                c.team_key,
+                c.yahoo_player_key,
+                c.contract_years_remaining::text AS display_label,
+                c.contract_years_remaining,
+                true AS is_active_contract
+            FROM nffl.contract c
+            JOIN ctx
+              ON ctx.league_key = c.league_key
+             AND ctx.season_year = c.season_year
+            WHERE c.status = 'active'
+
+            UNION ALL
+
+            SELECT
+                2 AS source_order,
+                'FT' AS roster_source,
+                d.league_key,
+                d.season_year,
+                d.team_key,
+                d.yahoo_player_key,
+                'FT' AS display_label,
+                NULL::integer AS contract_years_remaining,
+                false AS is_active_contract
+            FROM nffl.offseason_keeper_decision d
+            JOIN ctx
+              ON ctx.league_key = d.league_key
+             AND ctx.season_year = d.season_year
+            WHERE d.decision_type = 'FT'
+              AND d.decision_status = 'LOCKED'
+
+            UNION ALL
+
+            SELECT
+                3 AS source_order,
+                'DRAFTED' AS roster_source,
+                ctx.league_key,
+                ctx.season_year,
+                ds.selecting_team_key AS team_key,
+                ds.yahoo_player_key,
+                ds.pick_id || ':' || ds.pick_kind AS display_label,
+                NULL::integer AS contract_years_remaining,
+                false AS is_active_contract
+            FROM nffl.draft_selection ds
+            JOIN ctx
+              ON ctx.draft_key = ds.draft_key
+        )
+        SELECT
+            ls.league_key,
+            ls.season_year,
+            ls.team_key,
+            t.team_name,
+            t.owner_name,
+            ls.yahoo_player_key,
+            COALESCE(pl.player_name, ls.yahoo_player_key) AS player_name,
+            COALESCE(pl.nfl_team_abbr, '') AS nfl_team_abbr,
+            COALESCE(pl.eligible_positions, '[]'::jsonb) AS eligible_positions,
+            pl.percent_rostered,
+            pl.bye_week,
+            ls.contract_years_remaining,
+            ls.is_active_contract,
+            false AS was_franchise_tagged_prior_season,
+            false AS can_select_qo,
+            false AS can_select_ft,
+            ls.roster_source AS manager_action_status,
+            COALESCE(pl.stats_json, '{}'::jsonb) AS stats_json,
+            pl.fan_points_2025,
+            ls.roster_source,
+            ls.display_label
+        FROM live_source ls
+        LEFT JOIN nffl.team t
+          ON t.league_key = ls.league_key
+         AND t.season_year = ls.season_year
+         AND t.team_key = ls.team_key
+        LEFT JOIN player_lookup pl
+          ON pl.yahoo_player_key = ls.yahoo_player_key
+        ORDER BY
+            t.team_name,
+            ls.source_order,
+            COALESCE(pl.fan_points_2025, 0) DESC,
+            COALESCE(pl.player_name, ls.yahoo_player_key);
+    """
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return [dict(r) for r in cur.fetchall()]
+
+
 def _percent_label(value: Any) -> str:
     if value is None:
         return "0%"
@@ -449,6 +600,12 @@ def _percent_label(value: Any) -> str:
 
 
 def _contract_label(row: dict[str, Any]) -> str:
+    roster_source = str(row.get("roster_source") or "").upper()
+    if roster_source == "FT":
+        return "FT"
+    if roster_source == "DRAFTED":
+        return "Drafted"
+
     if not row.get("is_active_contract"):
         return ""
     years = row.get("contract_years_remaining")
@@ -1036,6 +1193,18 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     acting_as_base = str(gateway_context.get("acting_as") or gateway_role)
     qoft_revealed = _qoft_revealed(dsn)
 
+    display_rows_by_team = rows_by_team
+    if qoft_revealed:
+        try:
+            live_display_rows = _fetch_live_roster_display_rows(dsn)
+            live_display_rows_by_team: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in live_display_rows:
+                live_display_rows_by_team[str(row["team_key"])].append(row)
+            display_rows_by_team = live_display_rows_by_team
+            st.caption("Live roster view: active contracts + locked FT + real draft selections.")
+        except Exception as exc:
+            st.warning(f"Could not load live roster display rows; falling back to offseason pool: {exc}")
+
     if gateway_role == "commissioner":
         visible_math_rows = math_rows
         st.caption("Team Gateway: Commissioner")
@@ -1101,6 +1270,7 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     for tab, math in zip(tabs, visible_math_rows):
         team_key = str(math["team_key"])
         team_rows = rows_by_team.get(team_key, [])
+        display_team_rows = display_rows_by_team.get(team_key, [])
         is_own_team = gateway_role == "manager" and team_key == gateway_team_key
         can_manage_qoft = gateway_role == "commissioner" or (is_own_team and not qoft_revealed)
         can_see_qoft = gateway_role == "commissioner" or is_own_team or qoft_revealed
@@ -1112,7 +1282,10 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Post-Draft Cap", int(math["roster_size"]))
-            c2.metric("Eligible Offseason Players", len(team_rows))
+            if qoft_revealed:
+                c2.metric("Rostered Players", len(display_team_rows))
+            else:
+                c2.metric("Eligible Offseason Players", len(team_rows))
             c3.metric("Contracts", int(math["active_contracts"]))
 
             public_open_slots = int(math["roster_size"]) - int(math["active_contracts"])
@@ -1145,7 +1318,7 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
                 st.caption("QO/FT selections are hidden until the commissioner starts the draft.")
 
             rows_by_pos: dict[str, list[dict[str, Any]]] = {pos: [] for pos in POSITION_ORDER}
-            for row in team_rows:
+            for row in display_team_rows:
                 pos = _primary_position(row)
                 rows_by_pos.setdefault(pos, []).append(row)
 
