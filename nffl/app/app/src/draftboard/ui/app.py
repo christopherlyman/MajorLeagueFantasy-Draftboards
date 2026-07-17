@@ -659,10 +659,34 @@ def render_pick_controls(state: DraftState) -> None:
             p for p in state.players.values()
             if (p.player_key not in drafted and p.player_key not in contracted_keys)
         ]
+
+        # Sort the desktop pick dropdown by DB-backed NFFL Actual Rank.
+        # state.players.rank_value is not hydrated for NFFL, but nffl.player_universe has rank_value.
+        dropdown_stats_by_player_key = _fetch_available_players_nffl_stats(
+            dsn,
+            league_key,
+            season_year,
+            [str(p.player_key) for p in available_players],
+        )
+        dropdown_rank_by_player_key = {
+            str(pk): row.get("rank_value")
+            for pk, row in (dropdown_stats_by_player_key or {}).items()
+            if row.get("rank_value") is not None
+        }
+
+        def _dropdown_rank_value(p):
+            rv = dropdown_rank_by_player_key.get(str(p.player_key))
+            if rv is None:
+                rv = getattr(p, "rank_value", None)
+            try:
+                return float(rv) if rv is not None else None
+            except Exception:
+                return None
+
         available_players.sort(
             key=lambda p: (
-                getattr(p, "rank_value", None) is None,
-                getattr(p, "rank_value", None) if getattr(p, "rank_value", None) is not None else 999999,
+                _dropdown_rank_value(p) is None,
+                _dropdown_rank_value(p) if _dropdown_rank_value(p) is not None else 999999,
                 p.name or "",
             )
         )
