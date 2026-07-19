@@ -242,7 +242,28 @@ def _compute_current_qos_from_log(predraft: dict[str, dict[int, str]], pick_log:
             continue
 
         if pick_kind == "QO":
-            _release_team_level(owner_team_key, round_level)
+            # Own same-level QO retention consumes that QO.
+            # Own lower-QO promotion also consumes the selected lower QO, releases
+            # the skipped same-round QO, and promotes later own QOs after the gap.
+            found = _find_player(selected_player_key)
+            if found and str(found[0]) == owner_team_key:
+                _selected_team_key, selected_level = found
+                team_lvls = dict(current.get(owner_team_key, {}) or {})
+                team_lvls.pop(int(round_level), None)
+                team_lvls.pop(int(selected_level), None)
+                if int(selected_level) != int(round_level):
+                    team_lvls = _shift_qos_up_after_gap(
+                        team_lvls,
+                        int(selected_level),
+                        max_level=max_qo,
+                    )
+                current[owner_team_key] = {
+                    int(lvl): str(pk)
+                    for lvl, pk in sorted(team_lvls.items())
+                    if pk
+                }
+            else:
+                _release_team_level(owner_team_key, round_level)
             continue
 
         if pick_kind == "FA":
@@ -333,9 +354,25 @@ def _compute_qo_display_from_log(predraft: dict[str, dict[int, str]], pick_log: 
             continue
 
         if pick_kind == "QO":
-            # Retained QO is no longer poachable, but should remain visible as
-            # the team's QO outcome in the QOs tab current table.
-            current.setdefault(owner_team_key, {})[int(round_level)] = selected_player_key
+            # Retained/promoted own QO should remain visible as the team's QO
+            # outcome in the QOs tab current table.
+            found = _find_player(selected_player_key)
+            selected_level = int(found[1]) if found and str(found[0]) == owner_team_key else int(round_level)
+            team_lvls = dict(current.get(owner_team_key, {}) or {})
+            team_lvls.pop(int(round_level), None)
+            if selected_level != int(round_level):
+                team_lvls.pop(selected_level, None)
+                team_lvls = _shift_qos_up_after_gap(
+                    team_lvls,
+                    selected_level,
+                    max_level=max_qo,
+                )
+            team_lvls[int(round_level)] = selected_player_key
+            current[owner_team_key] = {
+                int(lvl): str(pk)
+                for lvl, pk in sorted(team_lvls.items())
+                if pk
+            }
             continue
 
         if pick_kind == "FA":
@@ -786,7 +823,8 @@ def render_pick_controls(state: DraftState) -> None:
                     holder_lvl = int(current_qo_level_by_player[chosen_player_key])
                     holder_team_key = str(current_qo_team_by_player.get(chosen_player_key, ""))
 
-                    if cur_team_key == holder_team_key and cur_round == holder_lvl:
+                    if cur_team_key == holder_team_key and holder_lvl >= cur_round:
+                        # Own same-level QO retention and own lower-QO promotion are both legal.
                         pick_kind = "QO"
                     elif holder_team_key != cur_team_key and holder_lvl > cur_round:
                         pick_kind = "POACH"
@@ -1502,9 +1540,11 @@ def render_available_players(state: DraftState) -> None:
         key="available_players_search",
     )
     pos_filter = st.multiselect(
-        "Filter by position",
-        options=pos_options,
+        "Position filter",
+        options=["QB", "RB", "WR", "TE", "K", "DEF"],
+        default=[],
         key="available_players_pos_filter",
+        help="Leave blank to show all positions. Select one or more positions to filter the table.",
     )
 
     cols = st.columns(len(toggle_labels))
@@ -1560,6 +1600,7 @@ def render_available_players(state: DraftState) -> None:
         for _key in [
             "available_players_search",
             "available_players_pos_filter",
+            "available_players_pos_filter_choice",
             "available_players_show_all",
             "available_players_show_qo",
             "available_players_show_poach",
@@ -1631,8 +1672,16 @@ def render_available_players(state: DraftState) -> None:
         if row.get("status_type") == "CONTRACT"
     }
 
+    legacy_reserved_keys = set(st.session_state.get("contracted_keys", set()) or set())
+    released_original_qo_keys = set(predraft_qo_keys) - set(current_qo_keys)
+
+    # Legacy session-state reserved keys can include original QOs. Once live QO
+    # replay releases an original QO, Available Players must treat that player
+    # as a free agent again.
+    legacy_reserved_keys.difference_update(released_original_qo_keys)
+
     contracted_keys = set() if not (contracts_enabled or pt_enabled or qo_enabled) else (
-        set(st.session_state.get("contracted_keys", set()) or set()) | canonical_reserved_keys
+        legacy_reserved_keys | canonical_reserved_keys
     )
 
     # Build available players list:
