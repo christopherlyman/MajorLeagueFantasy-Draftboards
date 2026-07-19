@@ -1301,6 +1301,18 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
         st.warning("No teams are available for this Team Gateway selection.")
         return
 
+    default_team_key = ""
+    if gateway_role == "manager" and gateway_team_key:
+        default_team_key = gateway_team_key
+    elif gateway_role == "commissioner":
+        default_team_key = "470.l.84346.t.1"  # Buccaneer Blitzkrieg
+
+    if default_team_key:
+        visible_math_rows = sorted(
+            visible_math_rows,
+            key=lambda row: 0 if str(row.get("team_key") or "") == default_team_key else 1,
+        )
+
     tabs = st.tabs([str(r["team_name"]) for r in visible_math_rows])
 
     for tab, math in zip(tabs, visible_math_rows):
