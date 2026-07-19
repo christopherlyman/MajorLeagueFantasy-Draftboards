@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -78,18 +78,100 @@ def _fmt_seconds_hhmmss(total_seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+
+def _fmt_hours_minutes(total_seconds: float) -> str:
+    total_seconds = max(0, int(round(float(total_seconds))))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes = rem // 60
+
+    if hours <= 0:
+        return f"{minutes}m"
+    if minutes <= 0:
+        return f"{hours}h"
+    return f"{hours}h {minutes}m"
+
+
+def _fmt_projected_completion_date(projected_dt: datetime | None) -> str:
+    if projected_dt is None:
+        return "—"
+    return projected_dt.date().isoformat()
+
+
+def _render_draft_kpis(
+    *,
+    total_pick_slots: int,
+    total_picks_remaining: int,
+    avg_picks_per_day: float | None,
+    projected_completion_date: datetime | None,
+    avg_seconds_per_pick: float | None,
+) -> None:
+    kpi_cols = st.columns(5)
+    kpi_cols[0].metric("Total Picks", f"{int(total_pick_slots):,}")
+    kpi_cols[1].metric("Picks Remaining", f"{int(total_picks_remaining):,}")
+    kpi_cols[2].metric(
+        "Avg Picks / Day",
+        "—" if avg_picks_per_day is None else f"{float(avg_picks_per_day):.2f}",
+    )
+    kpi_cols[3].metric("Projected Complete", _fmt_projected_completion_date(projected_completion_date))
+    kpi_cols[4].metric(
+        "Avg Time / Pick",
+        "—" if avg_seconds_per_pick is None else _fmt_hours_minutes(float(avg_seconds_per_pick)),
+    )
+
+    st.caption(
+        "KPI pace uses calendar days from the first recorded pick through today. "
+        "Average time per pick uses elapsed wall-clock time between completed picks."
+    )
+
+
 def render_draft_statistics_tab(state: DraftState) -> None:
     st.subheader("Draft Statistics")
 
     opening_day_date = parse_opening_day_date_from_env()
     real_picks = _real_pick_rows(state)
+
+    total_pick_slots = len(list(state.pick_order or []))
+    completed_picks = len(real_picks)
+    total_picks_remaining = max(0, total_pick_slots - completed_picks)
+
     if not real_picks:
+        _render_draft_kpis(
+            total_pick_slots=total_pick_slots,
+            total_picks_remaining=total_picks_remaining,
+            avg_picks_per_day=None,
+            projected_completion_date=None,
+            avg_seconds_per_pick=None,
+        )
         st.info("No real picks have been made yet.")
         return
 
-    total_pick_slots = len(list(state.pick_order or []))
-    first_pick_date = real_picks[0]["selected_ts"].date()
-    last_pick_date = real_picks[-1]["selected_ts"].date()
+    first_pick_ts = real_picks[0]["selected_ts"]
+    latest_pick_ts = real_picks[-1]["selected_ts"]
+    first_pick_date = first_pick_ts.date()
+    last_pick_date = latest_pick_ts.date()
+
+    now_for_projection = datetime.now(tz=latest_pick_ts.tzinfo) if latest_pick_ts.tzinfo else datetime.now()
+    elapsed_days_for_kpi = max(1, (now_for_projection.date() - first_pick_date).days + 1)
+    avg_picks_per_day_kpi = float(completed_picks) / float(elapsed_days_for_kpi)
+
+    elapsed_seconds_first_to_latest = max(0.0, (latest_pick_ts - first_pick_ts).total_seconds())
+    avg_seconds_per_pick_kpi = elapsed_seconds_first_to_latest / float(max(completed_picks - 1, 1))
+
+    projected_completion_date = None
+    if total_picks_remaining == 0:
+        projected_completion_date = latest_pick_ts
+    elif avg_picks_per_day_kpi > 0:
+        projected_completion_date = now_for_projection + timedelta(
+            days=float(total_picks_remaining) / float(avg_picks_per_day_kpi)
+        )
+
+    _render_draft_kpis(
+        total_pick_slots=total_pick_slots,
+        total_picks_remaining=total_picks_remaining,
+        avg_picks_per_day=avg_picks_per_day_kpi,
+        projected_completion_date=projected_completion_date,
+        avg_seconds_per_pick=avg_seconds_per_pick_kpi,
+    )
 
     chart_end_date = last_pick_date
     if opening_day_date is not None and opening_day_date > chart_end_date:
