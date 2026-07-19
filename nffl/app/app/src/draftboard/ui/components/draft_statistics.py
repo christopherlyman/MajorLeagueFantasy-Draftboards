@@ -9,15 +9,17 @@ import streamlit as st
 
 from draftboard.state.store import DraftState
 
+NFL_OPENING_DAY_FALLBACK = date(2026, 9, 9)
+
 
 def parse_opening_day_date_from_env() -> date | None:
     raw = str(os.environ.get("DRAFTBOARD_OPENING_DAY_DATE", "") or "").strip()
     if not raw:
-        return None
+        return NFL_OPENING_DAY_FALLBACK
     try:
         return date.fromisoformat(raw)
     except Exception:
-        return None
+        return NFL_OPENING_DAY_FALLBACK
 
 
 def _real_pick_rows(state: DraftState) -> list[dict[str, Any]]:
@@ -97,29 +99,65 @@ def _fmt_projected_completion_date(projected_dt: datetime | None) -> str:
     return projected_dt.date().isoformat()
 
 
+def _required_picks_per_day_to_target(
+    *,
+    total_picks_remaining: int,
+    target_completion_date: date | None,
+    today_date: date,
+) -> tuple[float | None, bool]:
+    if target_completion_date is None:
+        return None, False
+
+    if total_picks_remaining <= 0:
+        return 0.0, False
+
+    days_available = (target_completion_date - today_date).days + 1
+    if days_available <= 0:
+        return None, True
+
+    return float(total_picks_remaining) / float(days_available), False
+
+
+def _fmt_required_picks_per_day(value: float | None, *, overdue: bool) -> str:
+    if overdue:
+        return "Overdue"
+    if value is None:
+        return "—"
+    return f"{float(value):.2f}"
+
+
 def _render_draft_kpis(
     *,
     total_pick_slots: int,
     total_picks_remaining: int,
     avg_picks_per_day: float | None,
+    required_picks_per_day: float | None,
+    required_picks_overdue: bool,
+    target_completion_date: date | None,
     projected_completion_date: datetime | None,
     avg_seconds_per_pick: float | None,
 ) -> None:
-    kpi_cols = st.columns(5)
+    kpi_cols = st.columns(6)
     kpi_cols[0].metric("Total Picks", f"{int(total_pick_slots):,}")
     kpi_cols[1].metric("Picks Remaining", f"{int(total_picks_remaining):,}")
     kpi_cols[2].metric(
         "Avg Picks / Day",
         "—" if avg_picks_per_day is None else f"{float(avg_picks_per_day):.2f}",
     )
-    kpi_cols[3].metric("Projected Complete", _fmt_projected_completion_date(projected_completion_date))
-    kpi_cols[4].metric(
+    kpi_cols[3].metric(
+        "Req Picks / Day",
+        _fmt_required_picks_per_day(required_picks_per_day, overdue=required_picks_overdue),
+    )
+    kpi_cols[4].metric("Projected Complete", _fmt_projected_completion_date(projected_completion_date))
+    kpi_cols[5].metric(
         "Avg Time / Pick",
         "—" if avg_seconds_per_pick is None else _fmt_hours_minutes(float(avg_seconds_per_pick)),
     )
 
+    target_label = "—" if target_completion_date is None else target_completion_date.isoformat()
     st.caption(
-        "KPI pace uses calendar days from the first recorded pick through today. "
+        f"Target finish date: {target_label}. "
+        "Required picks/day uses calendar days remaining through the target finish date. "
         "Average time per pick uses elapsed wall-clock time between completed picks."
     )
 
@@ -134,11 +172,21 @@ def render_draft_statistics_tab(state: DraftState) -> None:
     completed_picks = len(real_picks)
     total_picks_remaining = max(0, total_pick_slots - completed_picks)
 
+    completion_target_date = opening_day_date - timedelta(days=1) if opening_day_date is not None else None
+    required_picks_per_day_to_target, required_picks_overdue = _required_picks_per_day_to_target(
+        total_picks_remaining=total_picks_remaining,
+        target_completion_date=completion_target_date,
+        today_date=date.today(),
+    )
+
     if not real_picks:
         _render_draft_kpis(
             total_pick_slots=total_pick_slots,
             total_picks_remaining=total_picks_remaining,
             avg_picks_per_day=None,
+            required_picks_per_day=required_picks_per_day_to_target,
+            required_picks_overdue=required_picks_overdue,
+            target_completion_date=completion_target_date,
             projected_completion_date=None,
             avg_seconds_per_pick=None,
         )
@@ -169,6 +217,9 @@ def render_draft_statistics_tab(state: DraftState) -> None:
         total_pick_slots=total_pick_slots,
         total_picks_remaining=total_picks_remaining,
         avg_picks_per_day=avg_picks_per_day_kpi,
+        required_picks_per_day=required_picks_per_day_to_target,
+        required_picks_overdue=required_picks_overdue,
+        target_completion_date=completion_target_date,
         projected_completion_date=projected_completion_date,
         avg_seconds_per_pick=avg_seconds_per_pick_kpi,
     )
