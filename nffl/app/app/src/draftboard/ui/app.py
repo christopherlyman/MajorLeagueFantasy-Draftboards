@@ -1496,70 +1496,65 @@ def render_available_players(state: DraftState) -> None:
     st.session_state.setdefault("avail_sort_col", default_sort)
     st.session_state.setdefault("avail_sort_desc", False)
 
-    with st.form("available_players_filters_form", clear_on_submit=False):
-        search = st.text_input(
-            "Search",
-            placeholder="Type a player name...",
-            key="available_players_search",
-        )
-        pos_filter = st.multiselect(
-            "Filter by position",
-            options=pos_options,
-            key="available_players_pos_filter",
-        )
+    search = st.text_input(
+        "Search",
+        placeholder="Type a player name...",
+        key="available_players_search",
+    )
+    pos_filter = st.multiselect(
+        "Filter by position",
+        options=pos_options,
+        key="available_players_pos_filter",
+    )
 
-        cols = st.columns(len(toggle_labels))
-        i = 0
+    cols = st.columns(len(toggle_labels))
+    i = 0
 
+    with cols[i]:
+        show_all_players = st.toggle(
+            "Show all players",
+            key="available_players_show_all",
+        )
+    i += 1
+
+    show_qo = False
+    show_poach = False
+    show_pt = False
+    show_contracts = False
+
+    if qo_enabled:
         with cols[i]:
-            show_all_players = st.toggle(
-                "Show all players",
-                key="available_players_show_all",
+            show_qo = st.toggle(
+                "Show only QOs",
+                key="available_players_show_qo",
+            )
+        i += 1
+        with cols[i]:
+            show_poach = st.toggle(
+                "Show only Poach-eligible",
+                key="available_players_show_poach",
             )
         i += 1
 
-        show_qo = False
-        show_poach = False
-        show_pt = False
-        show_contracts = False
+    if pt_enabled:
+        with cols[i]:
+            show_pt = st.toggle(
+                "Show only PT",
+                key="available_players_show_pt",
+            )
+        i += 1
 
-        if qo_enabled:
-            with cols[i]:
-                show_qo = st.toggle(
-                    "Show only QOs",
-                    key="available_players_show_qo",
-                )
-            i += 1
-            with cols[i]:
-                show_poach = st.toggle(
-                    "Show only Poach-eligible",
-                    key="available_players_show_poach",
-                )
-            i += 1
+    if contracts_enabled:
+        with cols[i]:
+            show_contracts = st.toggle(
+                "Show only Contracts",
+                key="available_players_show_contracts",
+            )
 
-        if pt_enabled:
-            with cols[i]:
-                show_pt = st.toggle(
-                    "Show only PT",
-                    key="available_players_show_pt",
-                )
-            i += 1
+    sort_col = st.selectbox("Sort by", options=sort_cols, key="avail_sort_col")
+    sort_desc = st.toggle("Descending", key="avail_sort_desc")
 
-        if contracts_enabled:
-            with cols[i]:
-                show_contracts = st.toggle(
-                    "Show only Contracts",
-                    key="available_players_show_contracts",
-                )
-
-        sort_col = st.selectbox("Sort by", options=sort_cols, key="avail_sort_col")
-        sort_desc = st.toggle("Descending", key="avail_sort_desc")
-
-        c_apply, c_reset = st.columns([1, 1])
-        with c_apply:
-            apply_filters_clicked = st.form_submit_button("Apply Filters", type="primary")
-        with c_reset:
-            reset_filters_clicked = st.form_submit_button("Reset Filters")
+    reset_filters_clicked = st.button("Reset Filters", key="available_players_reset_filters")
 
     if reset_filters_clicked:
         for _key in [
@@ -1575,11 +1570,6 @@ def render_available_players(state: DraftState) -> None:
         ]:
             st.session_state.pop(_key, None)
         st.rerun()
-
-    if apply_filters_clicked:
-        st.caption("Available Players filters applied.")
-    else:
-        st.caption("Change filters, then click Apply Filters to rebuild this table.")
 
     predraft_qo_keys: set[str] = set()
     predraft_qo_level_by_key: dict[str, int] = {}
