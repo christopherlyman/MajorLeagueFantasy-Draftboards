@@ -439,6 +439,18 @@ def main():
     league_key = os.environ.get("YAHOO_LEAGUE_KEY")
     game_key = os.environ.get("YAHOO_GAME_KEY", "469")
     season_year = env_int("YAHOO_STATS_SEASON", 2025)
+    player_input_source = os.environ.get("YAHOO_PLAYER_INPUT_SOURCE", "yahoo_player").strip().lower()
+    player_universe_season = env_int("YAHOO_PLAYER_UNIVERSE_SEASON", season_year)
+    player_key_limit = env_int("YAHOO_PLAYER_KEY_LIMIT", 0)
+    explicit_player_keys = [
+        p.strip()
+        for p in os.environ.get("YAHOO_PLAYER_KEYS", "").split(",")
+        if p.strip()
+    ]
+    allowed_stat_ids_raw = os.environ.get(
+        "YAHOO_ALLOWED_STAT_IDS",
+        "3,7,12,13,16,18,21,60,26,27,28,42,49,50,83,89",
+    ).strip()
 
     batch_size = env_int("YAHOO_BATCH_SIZE", 25)
     sleep_seconds = env_int("YAHOO_SLEEP_SECONDS", 1)
@@ -457,15 +469,53 @@ def main():
         conn.autocommit = True
         ensure_tables(conn)
 
-        rows = conn.execute(
-            "SELECT yahoo_player_key FROM yahoo_player WHERE source_game_key=%s ORDER BY yahoo_player_key",
-            (str(game_key),)
-        ).fetchall()
+        if player_input_source == "league_player_pool":
+            rows = conn.execute(
+                """
+                SELECT yahoo_player_key
+                FROM public.yahoo_league_player_pool
+                WHERE league_key = %s
+                  AND season_year = %s
+                ORDER BY yahoo_player_key
+                """,
+                (league_key, int(player_universe_season)),
+            ).fetchall()
+            source_label = (
+                f"league_player_pool league_key={league_key} "
+                f"season_year={player_universe_season}"
+            )
+        elif player_input_source == "yahoo_player":
+            rows = conn.execute(
+                "SELECT yahoo_player_key FROM yahoo_player WHERE source_game_key=%s ORDER BY yahoo_player_key",
+                (str(game_key),)
+            ).fetchall()
+            source_label = f"yahoo_player source_game_key={game_key}"
+        else:
+            raise SystemExit(
+                "Invalid YAHOO_PLAYER_INPUT_SOURCE. "
+                "Expected 'yahoo_player' or 'league_player_pool'."
+            )
 
         player_universe = [r[0] for r in rows]
+
+        if explicit_player_keys:
+            source_keys = set(player_universe)
+            missing_keys = [p for p in explicit_player_keys if p not in source_keys]
+            if missing_keys:
+                raise SystemExit(
+                    "YAHOO_PLAYER_KEYS contains keys not found in selected input source: "
+                    + ", ".join(missing_keys)
+                )
+            player_universe = explicit_player_keys
+            print(f"YAHOO_PLAYER_KEYS applied: {len(explicit_player_keys)}")
+        elif player_key_limit > 0:
+            player_universe = player_universe[:player_key_limit]
+
         total = len(player_universe)
 
-        print(f"Players to process (source_game_key={game_key}): {total}")
+        print(f"Players to process ({source_label}): {total}")
+        if player_key_limit > 0 and not explicit_player_keys:
+            print(f"YAHOO_PLAYER_KEY_LIMIT applied: {player_key_limit}")
         if total == 0:
             return
 
@@ -610,7 +660,14 @@ def main():
             blocks = extract_player_blocks(payload)
 
             stat_rows = 0
-            allowed = {3, 7, 12, 13, 16, 18, 21, 60, 26, 27, 28, 42, 49, 50, 83, 89}
+            if allowed_stat_ids_raw.lower() in ("", "all", "*"):
+                allowed = None
+            else:
+                allowed = {
+                    int(part.strip())
+                    for part in allowed_stat_ids_raw.split(",")
+                    if part.strip()
+                }
 
             for block in blocks:
                 pkey = find_player_key(block)
@@ -620,7 +677,7 @@ def main():
                 stats = extract_stats(block)
 
                 for stat_id, value_raw in stats:
-                    if stat_id not in allowed:
+                    if allowed is not None and stat_id not in allowed:
                         continue
 
                     value_num = parse_numeric(value_raw)

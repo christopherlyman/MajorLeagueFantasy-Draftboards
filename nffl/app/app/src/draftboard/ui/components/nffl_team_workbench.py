@@ -443,6 +443,8 @@ def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
             SELECT
                 current_league_key AS league_key,
                 current_season_year AS season_year,
+                prior_league_key,
+                prior_season_year,
                 draft_key
             FROM nffl.v_active_season_context
             LIMIT 1
@@ -487,6 +489,26 @@ def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
              AND fp.team_key = rsp.team_key
              AND fp.yahoo_player_key = rsp.yahoo_player_key
             ORDER BY w.yahoo_player_key, w.is_active_contract DESC, w.player_name
+        ),
+        yahoo_stats AS (
+            SELECT
+                s.league_key,
+                (s.season_year + 1) AS season_year,
+                s.yahoo_player_key,
+                jsonb_object_agg(s.stat_id::text, s.value_raw ORDER BY s.stat_id) AS stats_json,
+                ROUND(
+                    SUM(COALESCE(s.value_num, 0) * COALESCE(m.modifier_value, 0))::numeric,
+                    2
+                ) AS fan_points_2025
+            FROM public.yahoo_player_league_season_stat s
+            JOIN ctx
+              ON s.league_key = ctx.league_key
+             AND s.season_year = ctx.season_year - 1
+            LEFT JOIN nffl.yahoo_stat_modifier m
+              ON m.league_key = ctx.prior_league_key
+             AND m.season_year = ctx.prior_season_year
+             AND m.stat_id = s.stat_id::text
+            GROUP BY s.league_key, s.season_year, s.yahoo_player_key
         ),
         live_source AS (
             SELECT
@@ -547,19 +569,19 @@ def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
             t.team_name,
             t.owner_name,
             ls.yahoo_player_key,
-            COALESCE(pl.player_name, ls.yahoo_player_key) AS player_name,
-            COALESCE(pl.nfl_team_abbr, '') AS nfl_team_abbr,
-            COALESCE(pl.eligible_positions, '[]'::jsonb) AS eligible_positions,
-            pl.percent_rostered,
-            pl.bye_week,
+            COALESCE(pl.player_name, pu.full_name, ls.yahoo_player_key) AS player_name,
+            COALESCE(pl.nfl_team_abbr, pu.nfl_team_abbr, '') AS nfl_team_abbr,
+            COALESCE(pl.eligible_positions, pu.eligible_positions, '[]'::jsonb) AS eligible_positions,
+            COALESCE(pl.percent_rostered, pu.percent_owned::text) AS percent_rostered,
+            COALESCE(pl.bye_week::text, bye.bye_week) AS bye_week,
             ls.contract_years_remaining,
             ls.is_active_contract,
             false AS was_franchise_tagged_prior_season,
             false AS can_select_qo,
             false AS can_select_ft,
             ls.roster_source AS manager_action_status,
-            COALESCE(pl.stats_json, '{}'::jsonb) AS stats_json,
-            pl.fan_points_2025,
+            COALESCE(pl.stats_json, ys.stats_json, '{}'::jsonb) AS stats_json,
+            COALESCE(pl.fan_points_2025, ys.fan_points_2025) AS fan_points_2025,
             ls.roster_source,
             ls.display_label
         FROM live_source ls
@@ -569,11 +591,25 @@ def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
          AND t.team_key = ls.team_key
         LEFT JOIN player_lookup pl
           ON pl.yahoo_player_key = ls.yahoo_player_key
+        LEFT JOIN nffl.player_universe pu
+          ON pu.league_key = ls.league_key
+         AND pu.season_year = ls.season_year
+         AND pu.yahoo_player_key = ls.yahoo_player_key
+        LEFT JOIN LATERAL (
+            SELECT elem->'bye_weeks'->>'week' AS bye_week
+            FROM jsonb_array_elements(COALESCE(pu.raw_payload->0, '[]'::jsonb)) AS raw(elem)
+            WHERE elem ? 'bye_weeks'
+            LIMIT 1
+        ) bye ON true
+        LEFT JOIN yahoo_stats ys
+          ON ys.league_key = ls.league_key
+         AND ys.season_year = ls.season_year
+         AND ys.yahoo_player_key = ls.yahoo_player_key
         ORDER BY
             t.team_name,
             ls.source_order,
-            COALESCE(pl.fan_points_2025, 0) DESC,
-            COALESCE(pl.player_name, ls.yahoo_player_key);
+            COALESCE(pl.fan_points_2025, ys.fan_points_2025, 0) DESC,
+            COALESCE(pl.player_name, pu.full_name, ls.yahoo_player_key);
     """
 
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
