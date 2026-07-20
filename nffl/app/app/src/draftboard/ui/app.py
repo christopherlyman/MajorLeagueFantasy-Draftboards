@@ -591,6 +591,46 @@ def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str
     save_autosave(state)
 
 
+
+def _load_pick_dropdown_protected_keeper_keys(
+    dsn: str | None,
+    league_key: str,
+    season_year: int,
+) -> set[str]:
+    """
+    Pick dropdown legality filter.
+
+    Include free agents and current QOs in the dropdown.
+    Exclude active contracts and FT players.
+    Already-drafted players are filtered separately from DraftState.
+    """
+    if not dsn:
+        raise RuntimeError("Postgres DSN is not configured")
+
+    import psycopg
+
+    sql = """
+        SELECT c.yahoo_player_key
+        FROM nffl.contract c
+        WHERE c.league_key = %s
+          AND c.season_year = %s
+          AND c.status = 'active'
+
+        UNION
+
+        SELECT d.yahoo_player_key
+        FROM nffl.offseason_keeper_decision d
+        WHERE d.league_key = %s
+          AND d.season_year = %s
+          AND d.decision_type = 'FT'
+    """
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (league_key, season_year, league_key, season_year))
+            return {str(row[0]) for row in cur.fetchall() if row and row[0]}
+
+
 def render_pick_controls(state: DraftState) -> None:
     # NFFL_PICK_CONTROLS_PREDRAFT_QOS_SCOPE_FIX_START
     import os
@@ -691,10 +731,23 @@ def render_pick_controls(state: DraftState) -> None:
         contracted_keys = (
             st.session_state.get("contracted_keys", set()) or set()
         ) if keeper_filter_enabled else set()
+        protected_keeper_keys = {str(pk) for pk in (contracted_keys or set())}
+        try:
+            protected_keeper_keys.update(
+                _load_pick_dropdown_protected_keeper_keys(
+                    dsn,
+                    league_key,
+                    season_year,
+                )
+            )
+        except Exception as exc:
+            st.error(f"Could not load contract/FT protected player list: {exc}")
+            return
+
 
         available_players = [
             p for p in state.players.values()
-            if (p.player_key not in drafted and p.player_key not in contracted_keys)
+            if (p.player_key not in drafted and p.player_key not in protected_keeper_keys)
         ]
 
         # Sort the desktop pick dropdown by DB-backed NFFL Actual Rank.
@@ -800,6 +853,9 @@ def render_pick_controls(state: DraftState) -> None:
             if chosen_player_key in drafted:
                 st.error("Player already drafted.")
                 return
+            if chosen_player_key in protected_keeper_keys:
+                st.error("Contract/FT players are not draftable.")
+                return
 
             # ---- QO / POACH / RELEASE LOGIC (pick-driven, replay-aware) ----
             pick_kind = "FA"
@@ -856,6 +912,16 @@ def render_mobile_pick(state: DraftState) -> None:
     dsn = get_postgres_dsn()
     league_key = get_league_key()
     season_year = get_season_year()
+    try:
+        protected_keeper_keys = _load_pick_dropdown_protected_keeper_keys(
+            dsn,
+            league_key,
+            season_year,
+        )
+    except Exception as exc:
+        st.error(f"Could not load contract/FT protected player list: {exc}")
+        return
+
     predraft_qo_keys, predraft_qo_level_by_player, predraft_qo_team_by_player = _load_predraft_qo_player_maps_raw(
         dsn, league_key, season_year
     )
@@ -907,6 +973,8 @@ def render_mobile_pick(state: DraftState) -> None:
     def eligible(p) -> bool:
         if p.player_key in drafted:
             return False
+        if p.player_key in protected_keeper_keys:
+            return False
         if not pos_filter:
             return True
         return any(_pos_label(pp) in pos_filter for pp in p.positions)
@@ -955,6 +1023,9 @@ def render_mobile_pick(state: DraftState) -> None:
             return
         if chosen_player_key in drafted:
             st.error("Player already drafted.")
+            return
+        if chosen_player_key in protected_keeper_keys:
+            st.error("Contract/FT players are not draftable.")
             return
         _apply_pick(state, current_pick_id, chosen_player_key, pick_kind="FA")
         st.success(f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [FA]")
