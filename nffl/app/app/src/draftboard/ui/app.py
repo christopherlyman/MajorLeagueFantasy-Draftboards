@@ -875,7 +875,7 @@ def render_pick_controls(state: DraftState) -> None:
 
             # Match-count caption intentionally hidden in the fixed top dock.
 
-            btn_label = "MAKE" if state.commissioner_mode else "SUBMIT"
+            btn_label = "SUBMIT"
 
             with player_col:
                 chosen_player_key = st.selectbox(
