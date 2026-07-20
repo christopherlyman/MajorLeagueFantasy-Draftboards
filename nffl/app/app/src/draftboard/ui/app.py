@@ -690,220 +690,277 @@ def render_pick_controls(state: DraftState) -> None:
     on_clock_team = state.teams.get(current_pick.owner_team_key)
     hhmm = _clock_hhmm(state)
 
-    st.markdown(
-        """
-        <style>
-        .kpi-line { margin: 0.45rem 0; }
-        .kpi-label { font-size: 2.0rem; opacity: 0.70; font-weight: 850; }
-        .kpi-value { font-size: 2.0rem; color: #0ea5e9; font-weight: 950; line-height: 1.1; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    left, right = st.columns([1, 1], vertical_alignment="top")
-
-    with left:
-        team_name = on_clock_team.name if on_clock_team else "(unknown)"
+    with st.container(key="nffl_fixed_pick_dock"):
         st.markdown(
-            f"""
-            <div class="kpi-line"><span class="kpi-label">Current Pick:</span> <span class="kpi-value">{current_pick_id}</span></div>
-            <div class="kpi-line"><span class="kpi-label">On the clock:</span> <span class="kpi-value">{team_name}</span></div>
-            <div class="kpi-line"><span class="kpi-label">Pick Clock:</span> <span class="kpi-value">{hhmm}</span></div>
+            """
+            <style>
+            .kpi-line { margin: 0; display: inline-flex; align-items: center; gap: 0.28rem; }
+            .kpi-label { font-size: 0.95rem; opacity: 0.78; font-weight: 900; text-transform: uppercase; letter-spacing: 0.045em; }
+            .kpi-value { font-size: 1.72rem; color: #38bdf8; font-weight: 950; line-height: 1.0; }
+              .st-key-nffl_fixed_pick_dock {
+                  position: fixed;
+                  top: 0;
+                  left: 0;
+                  right: 0;
+                  z-index: 999999;
+                  padding: 0.42rem 1.0rem 0.35rem 1.0rem;
+                  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+                  background: rgba(15, 23, 42, 0.98);
+                  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32);
+                  backdrop-filter: blur(8px);
+              }
+              .st-key-nffl_fixed_pick_dock div[data-testid="stVerticalBlock"] {
+                  gap: 0.10rem;
+              }
+              .st-key-nffl_fixed_pick_dock div[data-testid="column"] {
+                  padding-left: 0.16rem;
+                  padding-right: 0.16rem;
+              }
+              .st-key-nffl_fixed_pick_dock div[data-testid="stTextInput"] label,
+              .st-key-nffl_fixed_pick_dock div[data-testid="stSelectbox"] label {
+                  display: none;
+              }
+              .st-key-nffl_fixed_pick_dock div[data-testid="stButton"] button {
+                  width: 100%;
+                  min-height: 2.35rem;
+                  font-weight: 900;
+                  white-space: nowrap;
+              }
+              .nffl-fixed-dock-info {
+                  display: flex;
+                  align-items: center;
+                  gap: 1.05rem;
+                  min-height: 2.35rem;
+                  white-space: nowrap;
+                  overflow: hidden;
+              }
+              .nffl-fixed-dock-pill {
+                  display: inline-flex;
+                  align-items: baseline;
+                  gap: 0.25rem;
+              }
+              div.block-container {
+                  padding-top: 5.15rem !important;
+              }
+            </style>
             """,
             unsafe_allow_html=True,
         )
 
+        pick_info_col, pick_action_col = st.columns([2.85, 3.15], gap="small", vertical_alignment="center")
 
-    with right:
-        # Only treat it as "used" if it was a real pick (ts exists).
-        # Placeholders for QOs/contracts have selected_ts_iso=None and must remain pickable.
-        if current_pick.selected_player_key is not None and current_pick.selected_ts_iso is not None:
-            st.info("This pick is already used.")
-            return
+        with pick_info_col:
+            team_name = on_clock_team.name if on_clock_team else "(unknown)"
+            st.markdown(
+                f"""
+                <div class="nffl-fixed-dock-info">
+                  <span class="nffl-fixed-dock-pill"><span class="kpi-label">Pick</span><span class="kpi-value">{current_pick_id}</span></span>
+                  <span class="nffl-fixed-dock-pill"><span class="kpi-label">Clock</span><span class="kpi-value">{team_name}</span></span>
+                  <span class="nffl-fixed-dock-pill"><span class="kpi-label">Time</span><span class="kpi-value">{hhmm}</span></span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with pick_action_col:
+            # Only treat it as "used" if it was a real pick (ts exists).
+            # Placeholders for QOs/contracts have selected_ts_iso=None and must remain pickable.
+            if current_pick.selected_player_key is not None and current_pick.selected_ts_iso is not None:
+                st.info("This pick is already used.")
+                return
 
-        import os
+            import os
 
-        keeper_filter_enabled = str(
-            os.environ.get("DRAFTBOARD_KEEPER_FILTER_ENABLED", "1")
-        ).strip().lower() in ("1", "true", "yes", "y", "on")
+            keeper_filter_enabled = str(
+                os.environ.get("DRAFTBOARD_KEEPER_FILTER_ENABLED", "1")
+            ).strip().lower() in ("1", "true", "yes", "y", "on")
 
-        contracted_keys = (
-            st.session_state.get("contracted_keys", set()) or set()
-        ) if keeper_filter_enabled else set()
-        protected_keeper_keys = {str(pk) for pk in (contracted_keys or set())}
-        try:
-            protected_keeper_keys.update(
-                _load_pick_dropdown_protected_keeper_keys(
-                    dsn,
-                    league_key,
-                    season_year,
+            contracted_keys = (
+                st.session_state.get("contracted_keys", set()) or set()
+            ) if keeper_filter_enabled else set()
+            protected_keeper_keys = {str(pk) for pk in (contracted_keys or set())}
+            try:
+                protected_keeper_keys.update(
+                    _load_pick_dropdown_protected_keeper_keys(
+                        dsn,
+                        league_key,
+                        season_year,
+                    )
+                )
+            except Exception as exc:
+                st.error(f"Could not load contract/FT protected player list: {exc}")
+                return
+
+
+            available_players = [
+                p for p in state.players.values()
+                if (p.player_key not in drafted and p.player_key not in protected_keeper_keys)
+            ]
+
+            # Sort the desktop pick dropdown by DB-backed NFFL Actual Rank.
+            # state.players.rank_value is not hydrated for NFFL, but nffl.player_universe has rank_value.
+            dropdown_stats_by_player_key = _fetch_available_players_nffl_stats(
+                dsn,
+                league_key,
+                season_year,
+                [str(p.player_key) for p in available_players],
+            )
+            dropdown_rank_by_player_key = {
+                str(pk): row.get("rank_value")
+                for pk, row in (dropdown_stats_by_player_key or {}).items()
+                if row.get("rank_value") is not None
+            }
+
+            def _dropdown_rank_value(p):
+                rv = dropdown_rank_by_player_key.get(str(p.player_key))
+                if rv is None:
+                    rv = getattr(p, "rank_value", None)
+                try:
+                    return float(rv) if rv is not None else None
+                except Exception:
+                    return None
+
+            available_players.sort(
+                key=lambda p: (
+                    _dropdown_rank_value(p) is None,
+                    _dropdown_rank_value(p) if _dropdown_rank_value(p) is not None else 999999,
+                    p.name or "",
                 )
             )
-        except Exception as exc:
-            st.error(f"Could not load contract/FT protected player list: {exc}")
-            return
+            def fmt_player(pk: str) -> str:
+                p = state.players[pk]
+                pos = "/".join([_pos_label(x) for x in getattr(p, "positions", [])])
+                tm = getattr(p, "mlb_team", "") or ""
+                if tm and pos:
+                    return f"{p.name} — {tm} — {pos}"
+                if tm:
+                    return f"{p.name} — {tm}"
+                if pos:
+                    return f"{p.name} — {pos}"
+                return p.name
 
+            player_keys = [p.player_key for p in available_players]
+            select_key = f"selected_player_key_main_{state.clock.current_pick_id}"
+            search_input_key = f"draft_player_query_input_main_{state.clock.current_pick_id}"
+            search_applied_key = f"draft_player_query_applied_main_{state.clock.current_pick_id}"
+            search_form_key = f"draft_player_search_form_main_{state.clock.current_pick_id}"
+            submit_form_key = f"draft_player_submit_form_main_{state.clock.current_pick_id}"
 
-        available_players = [
-            p for p in state.players.values()
-            if (p.player_key not in drafted and p.player_key not in protected_keeper_keys)
-        ]
+            st.session_state.setdefault(search_applied_key, "")
+            search_button_col, search_box_col, player_col, make_pick_col = st.columns([0.46, 1.28, 1.35, 0.36], gap="small", vertical_alignment="center")
 
-        # Sort the desktop pick dropdown by DB-backed NFFL Actual Rank.
-        # state.players.rank_value is not hydrated for NFFL, but nffl.player_universe has rank_value.
-        dropdown_stats_by_player_key = _fetch_available_players_nffl_stats(
-            dsn,
-            league_key,
-            season_year,
-            [str(p.player_key) for p in available_players],
-        )
-        dropdown_rank_by_player_key = {
-            str(pk): row.get("rank_value")
-            for pk, row in (dropdown_stats_by_player_key or {}).items()
-            if row.get("rank_value") is not None
-        }
+            with search_button_col:
+                search_submitted = st.button(
+                    "Search",
+                    key=f"{search_form_key}_button",
+                    use_container_width=True,
+                )
+            with search_box_col:
+                draft_player_query_main = st.text_input(
+                    "Search player",
+                    value=str(st.session_state.get(search_applied_key, "") or ""),
+                    placeholder="Type a player name to search...",
+                    key=search_input_key,
+                    label_visibility="collapsed",
+                )
 
-        def _dropdown_rank_value(p):
-            rv = dropdown_rank_by_player_key.get(str(p.player_key))
-            if rv is None:
-                rv = getattr(p, "rank_value", None)
-            try:
-                return float(rv) if rv is not None else None
-            except Exception:
-                return None
+            if search_submitted:
+                st.session_state[search_applied_key] = str(draft_player_query_main or "")
+                st.session_state.pop(select_key, None)
+                st.rerun()
 
-        available_players.sort(
-            key=lambda p: (
-                _dropdown_rank_value(p) is None,
-                _dropdown_rank_value(p) if _dropdown_rank_value(p) is not None else 999999,
-                p.name or "",
-            )
-        )
-        def fmt_player(pk: str) -> str:
-            p = state.players[pk]
-            pos = "/".join([_pos_label(x) for x in getattr(p, "positions", [])])
-            tm = getattr(p, "mlb_team", "") or ""
-            if tm and pos:
-                return f"{p.name} — {tm} — {pos}"
-            if tm:
-                return f"{p.name} — {tm}"
-            if pos:
-                return f"{p.name} — {pos}"
-            return p.name
+            draft_player_query_applied = str(st.session_state.get(search_applied_key, "") or "")
+            player_options = filter_player_keys_by_query(player_keys, draft_player_query_applied, fmt_player)
 
-        player_keys = [p.player_key for p in available_players]
-        select_key = f"selected_player_key_main_{state.clock.current_pick_id}"
-        search_input_key = f"draft_player_query_input_main_{state.clock.current_pick_id}"
-        search_applied_key = f"draft_player_query_applied_main_{state.clock.current_pick_id}"
-        search_form_key = f"draft_player_search_form_main_{state.clock.current_pick_id}"
-        submit_form_key = f"draft_player_submit_form_main_{state.clock.current_pick_id}"
+            # Match-count caption intentionally hidden in the fixed top dock.
 
-        st.session_state.setdefault(search_applied_key, "")
+            btn_label = "MAKE" if state.commissioner_mode else "SUBMIT"
 
-        with st.form(search_form_key, clear_on_submit=False):
-            draft_player_query_main = st.text_input(
-                "Search player",
-                value=str(st.session_state.get(search_applied_key, "") or ""),
-                placeholder="Type a player name...",
-                key=search_input_key,
-            )
-            search_submitted = st.form_submit_button("Search")
+            with player_col:
+                chosen_player_key = st.selectbox(
+                    "Select player to draft",
+                    options=player_options,
+                    format_func=fmt_player,
+                    index=None,
+                    placeholder="Draft a player…",
+                    help="Search above. Player search is case-insensitive and accent-insensitive.",
+                    key=select_key,
+                    label_visibility="collapsed",
+                )
+            with make_pick_col:
+                submit_pick_clicked = st.button(
+                    btn_label,
+                    type="primary",
+                    key=f"{submit_form_key}_button",
+                    use_container_width=True,
+                )
 
-        if search_submitted:
-            st.session_state[search_applied_key] = str(draft_player_query_main or "")
-            st.session_state.pop(select_key, None)
-            st.rerun()
+            if submit_pick_clicked:
+                if not _user_can_submit_pick(state):
+                    st.error("You are not authorized to submit this pick.")
+                    return
 
-        draft_player_query_applied = str(st.session_state.get(search_applied_key, "") or "")
-        player_options = filter_player_keys_by_query(player_keys, draft_player_query_applied, fmt_player)
+                if chosen_player_key is None:
+                    st.warning("Pick a player first.")
+                    return
 
-        if draft_player_query_applied:
-            st.caption(f"Search: {draft_player_query_applied} · {len(player_options)} matching players")
-        else:
-            st.caption(f"Showing {len(player_options)} draftable players")
+                pick = state.picks[state.clock.current_pick_id]
+                if pick.selected_player_key is not None and pick.selected_ts_iso is not None:
+                    st.error("That pick is already used.")
+                    return
+                if chosen_player_key in drafted:
+                    st.error("Player already drafted.")
+                    return
+                if chosen_player_key in protected_keeper_keys:
+                    st.error("Contract/FT players are not draftable.")
+                    return
 
-        btn_label = "MAKE PICK" if state.commissioner_mode else "SUBMIT PICK"
+                # ---- QO / POACH / RELEASE LOGIC (pick-driven, replay-aware) ----
+                pick_kind = "FA"
 
-        with st.form(submit_form_key, clear_on_submit=False):
-            chosen_player_key = st.selectbox(
-                "Select player to draft",
-                options=player_options,
-                format_func=fmt_player,
-                index=None,
-                placeholder="Choose a player…",
-                help="Search above. Player search is case-insensitive and accent-insensitive.",
-                key=select_key,
-            )
-            submit_pick_clicked = st.form_submit_button(btn_label, type="primary")
+                cur_pick = state.picks[state.clock.current_pick_id]
+                cur_round = int(cur_pick.round_number)
+                cur_team_key = str(cur_pick.owner_team_key)
 
-        if submit_pick_clicked:
-            if not _user_can_submit_pick(state):
-                st.error("You are not authorized to submit this pick.")
-                return
+                current_qos_for_pick = _compute_current_qos_from_log(predraft_qos, state.pick_log)
 
-            if chosen_player_key is None:
-                st.warning("Pick a player first.")
-                return
+                current_qo_level_by_player: dict[str, int] = {}
+                current_qo_team_by_player: dict[str, str] = {}
+                for _tk, _lvls in (current_qos_for_pick or {}).items():
+                    for _lvl, _pk in (_lvls or {}).items():
+                        if _pk:
+                            current_qo_level_by_player[str(_pk)] = int(_lvl)
+                            current_qo_team_by_player[str(_pk)] = str(_tk)
 
-            pick = state.picks[state.clock.current_pick_id]
-            if pick.selected_player_key is not None and pick.selected_ts_iso is not None:
-                st.error("That pick is already used.")
-                return
-            if chosen_player_key in drafted:
-                st.error("Player already drafted.")
-                return
-            if chosen_player_key in protected_keeper_keys:
-                st.error("Contract/FT players are not draftable.")
-                return
+                if 1 <= cur_round <= get_active_qo_rounds():
+                    if chosen_player_key in current_qo_level_by_player:
+                        holder_lvl = int(current_qo_level_by_player[chosen_player_key])
+                        holder_team_key = str(current_qo_team_by_player.get(chosen_player_key, ""))
 
-            # ---- QO / POACH / RELEASE LOGIC (pick-driven, replay-aware) ----
-            pick_kind = "FA"
-
-            cur_pick = state.picks[state.clock.current_pick_id]
-            cur_round = int(cur_pick.round_number)
-            cur_team_key = str(cur_pick.owner_team_key)
-
-            current_qos_for_pick = _compute_current_qos_from_log(predraft_qos, state.pick_log)
-
-            current_qo_level_by_player: dict[str, int] = {}
-            current_qo_team_by_player: dict[str, str] = {}
-            for _tk, _lvls in (current_qos_for_pick or {}).items():
-                for _lvl, _pk in (_lvls or {}).items():
-                    if _pk:
-                        current_qo_level_by_player[str(_pk)] = int(_lvl)
-                        current_qo_team_by_player[str(_pk)] = str(_tk)
-
-            if 1 <= cur_round <= get_active_qo_rounds():
-                if chosen_player_key in current_qo_level_by_player:
-                    holder_lvl = int(current_qo_level_by_player[chosen_player_key])
-                    holder_team_key = str(current_qo_team_by_player.get(chosen_player_key, ""))
-
-                    if cur_team_key == holder_team_key and holder_lvl >= cur_round:
-                        # Own same-level QO retention and own lower-QO promotion are both legal.
-                        pick_kind = "QO"
-                    elif holder_team_key != cur_team_key and holder_lvl > cur_round:
-                        pick_kind = "POACH"
+                        if cur_team_key == holder_team_key and holder_lvl >= cur_round:
+                            # Own same-level QO retention and own lower-QO promotion are both legal.
+                            pick_kind = "QO"
+                        elif holder_team_key != cur_team_key and holder_lvl > cur_round:
+                            pick_kind = "POACH"
+                        else:
+                            holder_nm = state.teams.get(holder_team_key).name if holder_team_key in state.teams else holder_team_key
+                            st.error(f"Not poach-eligible. Reserved for {holder_nm} at QO{holder_lvl}.")
+                            return
                     else:
-                        holder_nm = state.teams.get(holder_team_key).name if holder_team_key in state.teams else holder_team_key
-                        st.error(f"Not poach-eligible. Reserved for {holder_nm} at QO{holder_lvl}.")
-                        return
+                        pick_kind = "FA"
                 else:
                     pick_kind = "FA"
-            else:
-                pick_kind = "FA"
-            # ---- END QO / POACH / RELEASE LOGIC ----
+                # ---- END QO / POACH / RELEASE LOGIC ----
 
-            _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
-            st.success(
-                f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [{pick_kind}]"
-            )
+                _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
+                st.success(
+                    f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [{pick_kind}]"
+                )
 
-            # Clear selection/search for THIS pick + rerun so UI updates immediately
-            st.session_state.pop(select_key, None)
-            st.session_state.pop(search_input_key, None)
-            st.session_state.pop(search_applied_key, None)
-            st.rerun()
+                # Clear selection/search for THIS pick + rerun so UI updates immediately
+                st.session_state.pop(select_key, None)
+                st.session_state.pop(search_input_key, None)
+                st.session_state.pop(search_applied_key, None)
+                st.rerun()
 def render_mobile_pick(state: DraftState) -> None:
     drafted = {ps.selected_player_key for ps in state.picks.values()
     if ps.selected_player_key and ps.selected_ts_iso is not None}
