@@ -863,12 +863,14 @@ def render_pick_controls(state: DraftState) -> None:
                     label_visibility="collapsed",
                 )
 
-            if search_submitted:
-                st.session_state[search_applied_key] = str(draft_player_query_main or "")
-                st.session_state.pop(select_key, None)
-                st.rerun()
+            draft_player_query_current = str(draft_player_query_main or "")
+            draft_player_query_previous = str(st.session_state.get(search_applied_key, "") or "")
 
-            draft_player_query_applied = str(st.session_state.get(search_applied_key, "") or "")
+            if search_submitted or draft_player_query_current != draft_player_query_previous:
+                st.session_state[search_applied_key] = draft_player_query_current
+                st.session_state.pop(select_key, None)
+
+            draft_player_query_applied = draft_player_query_current
             player_options = filter_player_keys_by_query(player_keys, draft_player_query_applied, fmt_player)
 
             # Match-count caption intentionally hidden in the fixed top dock.
