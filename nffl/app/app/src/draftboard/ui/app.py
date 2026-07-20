@@ -3119,9 +3119,20 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
     )
 
     base_url = os.environ.get("NFFL_PUBLIC_URL", "https://nffl.majorleaguefantasy.app").rstrip("/")
+    draft_key = os.environ.get("DRAFTBOARD_DRAFT_KEY", "nffl_2026_preseason")
 
     sql = """
+        WITH draft_slots AS (
+            SELECT
+                dp.current_owner_team_key AS team_key,
+                MIN(dp.slot_number) AS draft_slot
+            FROM nffl.draft_pick dp
+            WHERE dp.draft_key = %(draft_key)s
+              AND dp.round_number = 1
+            GROUP BY dp.current_owner_team_key
+        )
         SELECT
+            ds.draft_slot,
             t.team_name,
             t.owner_name,
             l.is_active,
@@ -3136,13 +3147,15 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
         JOIN nffl.v_active_season_context ctx
           ON ctx.current_league_key=l.league_key
          AND ctx.current_season_year=l.season_year
-        ORDER BY t.team_name;
+        LEFT JOIN draft_slots ds
+          ON ds.team_key = t.team_key
+        ORDER BY ds.draft_slot NULLS LAST, t.team_name;
     """
 
     try:
         with psycopg.connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, {"draft_key": draft_key})
                 rows = list(cur.fetchall())
     except Exception as exc:
         st.error(f"Could not load manager links: {exc}")
@@ -3168,6 +3181,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
 
         out.append(
             {
+                "Draft Slot": row.get("draft_slot") or "",
                 "Team": row["team_name"],
                 "Manager": row["owner_name"],
                 "Active": row["is_active"],
@@ -3188,7 +3202,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
         manager_url = str(link_row.get("Manager Link") or "")
         html_rows.append(
             "<tr>"
-            f"<td>{idx}</td>"
+            f"<td>{_esc(link_row.get('Draft Slot'))}</td>"
             f"<td>{_esc(link_row.get('Team'))}</td>"
             f"<td>{_esc(link_row.get('Manager'))}</td>"
             f"<td>{_esc(link_row.get('Active'))}</td>"
@@ -3232,7 +3246,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
       }}
       .manager-links-table th:nth-child(1),
       .manager-links-table td:nth-child(1) {{
-        width: 42px;
+        width: 86px;
         text-align: right;
       }}
       .manager-links-table th:nth-child(4),
@@ -3278,7 +3292,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
       <table class="manager-links-table">
         <thead>
           <tr>
-            <th>#</th>
+            <th>Draft Slot</th>
             <th>Team</th>
             <th>Manager</th>
             <th>Active</th>
@@ -3346,7 +3360,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
     </script>
     """
 
-    manager_links_height = 115 + (len(out) * 64)
+    manager_links_height = 220 + (len(out) * 82)
     components.html(html_doc, height=manager_links_height, scrolling=False)
 
 
