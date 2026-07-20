@@ -3177,7 +3177,177 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
             }
         )
 
-    st.dataframe(pd.DataFrame(out), hide_index=True, use_container_width=True)
+    import html as html_lib
+    import streamlit.components.v1 as components
+
+    def _esc(value: object) -> str:
+        return html_lib.escape("" if value is None else str(value), quote=True)
+
+    html_rows = []
+    for idx, link_row in enumerate(out, start=1):
+        manager_url = str(link_row.get("Manager Link") or "")
+        html_rows.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td>{_esc(link_row.get('Team'))}</td>"
+            f"<td>{_esc(link_row.get('Manager'))}</td>"
+            f"<td>{_esc(link_row.get('Active'))}</td>"
+            f"<td>{_esc(link_row.get('Claims'))}</td>"
+            f"<td>{_esc(link_row.get('Last Claimed Eastern'))}</td>"
+            "<td>"
+            f"<button class='copy-btn' type='button' data-copy='{_esc(manager_url)}' onclick='copyManagerLink(this)'>Copy</button>"
+            "<span class='copy-status' aria-live='polite'></span>"
+            "</td>"
+            f"<td><code class='manager-link'>{_esc(manager_url)}</code></td>"
+            "</tr>"
+        )
+
+    html_doc = f"""
+    <style>
+      .manager-links-wrap {{
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        width: 100%;
+        color: #f8fafc;
+      }}
+      table.manager-links-table {{
+        border-collapse: collapse;
+        width: 100%;
+        table-layout: fixed;
+        font-size: 14px;
+        background: #0f172a;
+        color: #f8fafc;
+      }}
+      .manager-links-table th,
+      .manager-links-table td {{
+        border: 1px solid rgba(226, 232, 240, 0.24);
+        padding: 8px 10px;
+        vertical-align: top;
+        text-align: left;
+        color: #f8fafc;
+      }}
+      .manager-links-table th {{
+        background: #1e293b;
+        font-weight: 700;
+        color: #f8fafc;
+      }}
+      .manager-links-table th:nth-child(1),
+      .manager-links-table td:nth-child(1) {{
+        width: 42px;
+        text-align: right;
+      }}
+      .manager-links-table th:nth-child(4),
+      .manager-links-table td:nth-child(4),
+      .manager-links-table th:nth-child(5),
+      .manager-links-table td:nth-child(5) {{
+        width: 70px;
+      }}
+      .manager-links-table th:nth-child(7),
+      .manager-links-table td:nth-child(7) {{
+        width: 120px;
+      }}
+      .copy-btn {{
+        cursor: pointer;
+        border: 1px solid rgba(226, 232, 240, 0.45);
+        border-radius: 6px;
+        padding: 5px 10px;
+        background: #f8fafc;
+        color: #0f172a;
+        font-weight: 700;
+      }}
+      .copy-btn:hover {{
+        background: #e2e8f0;
+      }}
+      .copy-status {{
+        display: block;
+        margin-top: 4px;
+        font-size: 12px;
+        color: #86efac;
+        min-height: 16px;
+        font-weight: 700;
+      }}
+      .manager-link {{
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        color: #bae6fd;
+        background: rgba(15, 23, 42, 0.75);
+      }}
+    </style>
+
+    <div class="manager-links-wrap">
+      <table class="manager-links-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Team</th>
+            <th>Manager</th>
+            <th>Active</th>
+            <th>Claims</th>
+            <th>Last Claimed Eastern</th>
+            <th>Copy</th>
+            <th>Manager Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(html_rows)}
+        </tbody>
+      </table>
+    </div>
+
+    <script>
+      function copyManagerLink(button) {{
+        const text = button.getAttribute("data-copy") || "";
+        const status = button.parentElement.querySelector(".copy-status");
+
+        function markDone(message) {{
+          const originalText = button.getAttribute("data-original-text") || button.textContent || "Copy";
+          button.setAttribute("data-original-text", originalText);
+          button.textContent = message;
+          if (status) {{
+            status.textContent = message;
+          }}
+          window.setTimeout(() => {{
+            button.textContent = originalText;
+            if (status) {{
+              status.textContent = "";
+            }}
+          }}, 1800);
+        }}
+
+        function fallbackCopy() {{
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          ta.style.top = "0";
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+
+          try {{
+            const ok = document.execCommand("copy");
+            markDone(ok ? "Copied" : "Copy failed");
+          }} catch (err) {{
+            markDone("Copy failed");
+          }} finally {{
+            document.body.removeChild(ta);
+          }}
+        }}
+
+        if (navigator.clipboard && window.isSecureContext) {{
+          navigator.clipboard.writeText(text)
+            .then(() => markDone("Copied"))
+            .catch(() => fallbackCopy());
+        }} else {{
+          fallbackCopy();
+        }}
+      }}
+    </script>
+    """
+
+    manager_links_height = 115 + (len(out) * 64)
+    components.html(html_doc, height=manager_links_height, scrolling=False)
 
 
 def _render_nffl_team_gateway(dsn: str) -> dict[str, object]:
