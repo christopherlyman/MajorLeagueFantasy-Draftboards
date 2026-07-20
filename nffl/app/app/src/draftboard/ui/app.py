@@ -4537,58 +4537,76 @@ def render_app() -> None:
     if mobile_mode:
         render_mobile_pick(state)
     else:
-        # Top header row
-        header_left, header_right = st.columns([1,1], vertical_alignment="center")
-
-        with header_left:
-            pass  # keeps spacing aligned with layout
-
-        with header_right:
-            now = datetime.now(ZoneInfo("UTC"))
-
-            clocks = {
-                "EST": now.astimezone(ZoneInfo("America/New_York")),
-                "PST": now.astimezone(ZoneInfo("America/Los_Angeles")),
-                "JST": now.astimezone(ZoneInfo("Asia/Tokyo")),
-                "Spain": now.astimezone(ZoneInfo("Europe/Madrid")),
-                "London": now.astimezone(ZoneInfo("Europe/London")),
-            }
-
-            clock_cols = st.columns(len(clocks), gap="small")
-
-            for col, (label, t) in zip(clock_cols, clocks.items()):
-                with col:
-                    st.markdown(
-                        f"""
-                        <div style="
-                            border:1px solid rgba(255,255,255,0.14);
-                            border-radius:12px;
-                            padding:8px 10px;
-                            background:rgba(255,255,255,0.03);
-                            text-align:center;
-                            min-height:64px;
-                        ">
-                            <div style="
-                                font-size:0.68rem;
-                                font-weight:800;
-                                letter-spacing:0.04em;
-                                opacity:0.72;
-                                margin-bottom:4px;
-                                text-transform:uppercase;
-                            ">
-                                {label}
-                            </div>
-                            <div style="
-                                font-size:1.05rem;
-                                font-weight:900;
-                                line-height:1.15;
-                            ">
-                                {t.strftime('%-I:%M %p')}
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+        # Full-width compact clock row
+        now = datetime.now(ZoneInfo("UTC"))
+        clocks = {
+            "EST": now.astimezone(ZoneInfo("America/New_York")),
+            "PST": now.astimezone(ZoneInfo("America/Los_Angeles")),
+            "JST": now.astimezone(ZoneInfo("Asia/Tokyo")),
+            "SPAIN": now.astimezone(ZoneInfo("Europe/Madrid")),
+            "LONDON": now.astimezone(ZoneInfo("Europe/London")),
+        }
+        clock_items = "\n".join(
+            f"""
+            <div class="nffl-clock-chip">
+              <span class="nffl-clock-label">{label}</span>
+              <span class="nffl-clock-time">{t.strftime('%-I:%M %p')}</span>
+            </div>
+            """
+            for label, t in clocks.items()
+        )
+        st.markdown(
+            """
+            <style>
+              div[data-testid="stElementContainer"]:has(.nffl-clock-strip),
+              div[data-testid="stMarkdownContainer"]:has(.nffl-clock-strip) {
+                width: 100% !important;
+                max-width: none !important;
+              }
+              .nffl-clock-strip {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 8px;
+                width: 100%;
+                margin: 0 0 0.40rem 0;
+              }
+              .nffl-clock-chip {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.45rem;
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 10px;
+                padding: 4px 8px;
+                min-height: 34px;
+                background: rgba(255,255,255,0.03);
+                box-sizing: border-box;
+                white-space: nowrap;
+              }
+              .nffl-clock-label {
+                font-size: 0.68rem;
+                font-weight: 850;
+                letter-spacing: 0.05em;
+                opacity: 0.72;
+                text-transform: uppercase;
+              }
+              .nffl-clock-time {
+                font-size: 0.94rem;
+                font-weight: 900;
+                line-height: 1.0;
+              }
+              @media (max-width: 900px) {
+                .nffl-clock-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+              }
+            </style>
+            <div class="nffl-clock-strip">
+            """
+            + clock_items
+            + """
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         render_pick_controls(state)
 
