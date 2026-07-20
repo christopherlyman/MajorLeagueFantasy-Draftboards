@@ -2819,7 +2819,8 @@ def render_pick_tracker(state: DraftState, owner_name_by_team_key: dict[str, str
             }
         )
 
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    import pandas as pd
+    st.markdown(pd.DataFrame(rows).to_html(index=False, escape=False), unsafe_allow_html=True)
 
 
 NFFL_GATEWAY_COOKIE_NAME = "nffl_team_gateway"
