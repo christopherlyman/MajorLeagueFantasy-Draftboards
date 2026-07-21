@@ -57,19 +57,51 @@ def _real_pick_rows(state: DraftState) -> list[dict[str, Any]]:
 
 
 def is_draft_complete(state: DraftState) -> bool:
-    total_pick_slots = len(list(state.pick_order or []))
-    if total_pick_slots == 0:
+    """
+    Return True only for the terminal post-draft clock state.
+
+    After the final live selection, advancement finds no next open
+    pick, leaves current_pick_id on that real selection, and fully
+    stops and clears the clock. Every active or rewound draft state
+    points at an unselected current pick instead.
+    """
+    current_pick_id = str(
+        getattr(state.clock, "current_pick_id", "") or ""
+    )
+    current_pick = state.picks.get(current_pick_id)
+
+    if current_pick is None:
         return False
-    return len(_real_pick_rows(state)) == total_pick_slots
+
+    return bool(
+        getattr(current_pick, "selected_player_key", None)
+        and getattr(current_pick, "selected_ts_iso", None)
+        and not bool(getattr(state.clock, "is_running", False))
+        and getattr(state.clock, "pick_started_ts_iso", None) is None
+        and getattr(state.clock, "pick_paused_ts_iso", None) is None
+        and int(
+            getattr(
+                state.clock,
+                "elapsed_paused_seconds",
+                0,
+            )
+            or 0
+        ) == 0
+    )
 
 
 def render_draft_complete_banner(state: DraftState, *, league_name: str, season_year: int) -> None:
     if not is_draft_complete(state):
         return
 
+    st.markdown("## \U0001F3C6 CONGRATULATIONS! \U0001F3C6")
+    st.markdown(
+        f"### THE {season_year} {league_name} DRAFT IS COMPLETE"
+    )
     st.success(
-        f"Congratulations! The {season_year} {league_name} Draft has concluded. "
-        f"Best of luck to everyone this season."
+        "The rosters are set and the chase for the championship "
+        "begins. Good luck this season\u2014may your starters stay "
+        "healthy and your waiver claims clear! \U0001F3C8"
     )
 
 

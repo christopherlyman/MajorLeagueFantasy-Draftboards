@@ -36,6 +36,7 @@ from draftboard.ui.components.nffl_team_workbench import render_nffl_team_workbe
 from draftboard.ui.components.commissioner_tools import render_commissioner_actions
 from draftboard.ui.components.draft_lottery import render_draft_lottery_tab
 from draftboard.ui.components.draft_statistics import (
+    is_draft_complete,
     render_draft_complete_banner,
     render_draft_statistics_tab,
 )
@@ -469,13 +470,12 @@ def _record_draft_selection_to_db(
     yahoo_player_key: str,
     pick_kind: str,
     selected_at_utc: str,
-) -> None:
+) -> set[str]:
     """
-    Canonical write path for real draft picks.
+    Write a real draft selection and return canonical occupied pick IDs.
 
-    Board rendering reads nffl.v_draft_board_current, which depends on
-    nffl.draft_selection. Therefore Make Pick must write here before
-    local Streamlit/autosave state is trusted.
+    The selection write and board-occupancy read share one transaction.
+    If either operation fails, local Streamlit/autosave state is untouched.
     """
     import os
     import psycopg
@@ -534,9 +534,54 @@ def _record_draft_selection_to_db(
                 """,
                 (draft_key, pk, tk, ypk, kind, ts),
             )
+
+            # Read canonical occupancy before committing. PostgreSQL
+            # exposes this transaction's new selection through the view.
+            cur.execute(
+                """
+                SELECT pick_id
+                FROM nffl.v_draft_board_current
+                WHERE draft_key = %s
+                  AND (
+                        selected_at_utc IS NOT NULL
+                        OR placeholder_source IN ('CONTRACT', 'FT')
+                      )
+                """,
+                (draft_key,),
+            )
+
+            occupied_pick_ids = {
+                str(row[0])
+                for row in cur.fetchall()
+                if row and row[0]
+            }
+
+            if pk not in occupied_pick_ids:
+                raise RuntimeError(
+                    "Cannot record draft selection: canonical board view "
+                    f"did not expose recorded pick {pk!r}."
+                )
+
         conn.commit()
 
+    return occupied_pick_ids
+
 # NFFL_DRAFT_SELECTION_DB_WRITE_HELPER_END
+
+
+def _next_open_pick_id(
+    pick_order: list[str],
+    current_pick_id: str,
+    occupied_pick_ids: set[str],
+) -> str | None:
+    """Return the first canonical unoccupied pick after the current pick."""
+    current_index = pick_order.index(current_pick_id)
+
+    for candidate_pick_id in pick_order[current_index + 1:]:
+        if candidate_pick_id not in occupied_pick_ids:
+            return candidate_pick_id
+
+    return None
 
 
 def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
@@ -547,7 +592,7 @@ def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str
 
     # NFFL_DRAFT_SELECTION_DB_WRITE_CALL_START
     # Write canonical DB truth before mutating local/autosave state.
-    _record_draft_selection_to_db(
+    occupied_pick_ids = _record_draft_selection_to_db(
         pick_id=pick.pick_id,
         selecting_team_key=pick.owner_team_key,
         yahoo_player_key=player.player_key,
@@ -571,9 +616,13 @@ def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str
         )
     )
 
-    idx = state.pick_order.index(pick.pick_id)
-    if idx + 1 < len(state.pick_order):
-        next_pick_id = state.pick_order[idx + 1]
+    next_pick_id = _next_open_pick_id(
+        state.pick_order,
+        pick.pick_id,
+        occupied_pick_ids,
+    )
+
+    if next_pick_id is not None:
         state.clock.current_pick_id = next_pick_id
 
         if bool(getattr(state.clock, "auto_advance", True)):
@@ -632,6 +681,9 @@ def _load_pick_dropdown_protected_keeper_keys(
 
 
 def render_pick_controls(state: DraftState) -> None:
+    if is_draft_complete(state):
+        return
+
     # NFFL_PICK_CONTROLS_PREDRAFT_QOS_SCOPE_FIX_START
     import os
     # render_pick_controls is called independently from render_app's main QO load.
@@ -964,6 +1016,9 @@ def render_pick_controls(state: DraftState) -> None:
                 st.session_state.pop(search_applied_key, None)
                 st.rerun()
 def render_mobile_pick(state: DraftState) -> None:
+    if is_draft_complete(state):
+        return
+
     drafted = {ps.selected_player_key for ps in state.picks.values()
     if ps.selected_player_key and ps.selected_ts_iso is not None}
 
