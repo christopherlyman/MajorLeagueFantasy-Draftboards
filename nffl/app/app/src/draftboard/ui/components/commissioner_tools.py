@@ -22,7 +22,7 @@ from draftboard.state.runtime import (
 
 from draftboard.domain.clock import compute_clock_status, start_pick_clock
 from draftboard.state.autosave import save_autosave
-from draftboard.state.store import DraftState, set_current_pick
+from draftboard.state.store import DraftState
 
 
 
@@ -1683,6 +1683,10 @@ def delete_pick(state: DraftState, pick_id: str, rewind_clock: bool) -> int:
 
     if rewind_clock:
         state.clock.current_pick_id = pick_id
+        state.clock.is_running = False
+        state.clock.pick_started_ts_iso = None
+        state.clock.pick_paused_ts_iso = None
+        state.clock.elapsed_paused_seconds = 0
 
     save_autosave(state)
     return deleted_rows
@@ -4254,22 +4258,6 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
 
         
     with st.expander("Draft Tools", expanded=False):
-        # (keep your current Draft Tools section exactly as-is)
-        st.subheader("Set Current Pick")
-        current_pick_id = state.clock.current_pick_id
-        current_idx = state.pick_order.index(current_pick_id) if current_pick_id in state.pick_order else 0
-        new_pick = st.selectbox(
-            "Commissioner: set current pick",
-            options=state.pick_order,
-            index=current_idx,
-            key="current_pick_select_commissioner_tools",
-        )
-        if new_pick != state.clock.current_pick_id:
-            set_current_pick(new_pick)
-            save_autosave(state)
-            st.success(f"Current pick set to {new_pick}.")
-            st.rerun()
-        st.divider()
 
         st.subheader("Draft Clock")
 
