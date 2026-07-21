@@ -1026,7 +1026,9 @@ def render_mobile_pick(state: DraftState) -> None:
         st.success(f"This pick is already used: {pl.name} — {pl.mlb_team}")
         return
 
-    pos_options = [p.value for p in Position]
+    # NFFL mobile drafting supports football roster positions only.
+    # Do not use the shared cross-sport Position enum here.
+    pos_options = ["QB", "RB", "WR", "TE", "K", "DEF"]
     pos_filter = st.multiselect("Position filter", options=pos_options, default=[])
 
     def eligible(p) -> bool:
@@ -1039,10 +1041,34 @@ def render_mobile_pick(state: DraftState) -> None:
         return any(_pos_label(pp) in pos_filter for pp in p.positions)
 
     available_players = [p for p in state.players.values() if eligible(p)]
+
+    # Use the same DB-backed NFFL Actual Rank source as the desktop picker.
+    # Player.rank_value is not reliably hydrated for the NFFL player universe.
+    mobile_stats_by_player_key = _fetch_available_players_nffl_stats(
+        dsn,
+        league_key,
+        season_year,
+        [str(p.player_key) for p in available_players],
+    )
+    mobile_rank_by_player_key = {
+        str(player_key): row.get("rank_value")
+        for player_key, row in (mobile_stats_by_player_key or {}).items()
+        if row.get("rank_value") is not None
+    }
+
+    def mobile_actual_rank(p):
+        rank_value = mobile_rank_by_player_key.get(str(p.player_key))
+        if rank_value is None:
+            rank_value = getattr(p, "rank_value", None)
+        try:
+            return float(rank_value) if rank_value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     available_players.sort(
         key=lambda p: (
-            getattr(p, "rank_value", None) is None,
-            getattr(p, "rank_value", None) if getattr(p, "rank_value", None) is not None else 999999,
+            mobile_actual_rank(p) is None,
+            mobile_actual_rank(p) if mobile_actual_rank(p) is not None else 999999,
             p.name or "",
         )
     )
