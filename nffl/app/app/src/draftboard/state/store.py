@@ -74,6 +74,16 @@ def init_state(state: DraftState) -> None:
         st.session_state[SESSION_KEY] = state
 
 
+def replace_state(state: DraftState) -> None:
+    """
+    Replace the current session DraftState with a canonical persisted state.
+
+    This intentionally replaces only DraftState. Other Streamlit session
+    values, including widget selections and authentication state, are kept.
+    """
+    st.session_state[SESSION_KEY] = state
+
+
 def set_commissioner_mode(is_on: bool) -> None:
     s = get_state()
     s.commissioner_mode = is_on

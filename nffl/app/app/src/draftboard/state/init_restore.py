@@ -6,10 +6,20 @@ from draftboard.data.picks_grid import build_picks_grid
 from draftboard.domain.models import PickSlot, Team
 from draftboard.domain.rules import QO_ROUNDS, ROUNDS_TOTAL
 from draftboard.domain.rules import DEFAULT_QO_ALLOWS_FREE_AGENTS
-from draftboard.state.autosave import try_load_autosave, save_autosave
+from draftboard.state.autosave import (
+    get_canonical_state_sha256,
+    save_autosave,
+    try_load_autosave,
+)
 from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
 from draftboard.state.league_profile import get_active_draft_order_mode, get_active_first_standard_round, get_active_qualifying_offers_enabled, get_active_rounds_total, get_active_manager_count, get_active_qo_rounds
-from draftboard.state.store import DraftClock, DraftState, has_state, init_state
+from draftboard.state.store import (
+    DraftClock,
+    DraftState,
+    has_state,
+    init_state,
+    replace_state,
+)
 
 
 def _team_to_slot_from_order(order: list[str] | None) -> dict[str, int]:
@@ -534,16 +544,43 @@ def _build_mlf_initial_state() -> DraftState:
     )
     return initial
 
+CANONICAL_SHA_SESSION_KEY = "draftboard_canonical_state_sha256"
+
+
+def _remember_canonical_state_sha256() -> None:
+    canonical_sha = get_canonical_state_sha256()
+    if canonical_sha is not None:
+        st.session_state[CANONICAL_SHA_SESSION_KEY] = canonical_sha
+
+
 def ensure_initialized() -> None:
     if has_state():
+        canonical_sha = get_canonical_state_sha256()
+        if canonical_sha is None:
+            return
+
+        session_sha = st.session_state.get(CANONICAL_SHA_SESSION_KEY)
+
+        if session_sha == canonical_sha:
+            return
+
+        restored = try_load_autosave()
+        if restored is None:
+            return
+
+        restored = _restore_mlf_state_from_autosave(restored)
+        replace_state(restored)
+        _remember_canonical_state_sha256()
         return
 
     restored = try_load_autosave()
     if restored is not None:
         restored = _restore_mlf_state_from_autosave(restored)
         init_state(restored)
+        _remember_canonical_state_sha256()
         return
 
     # ---- fresh boot (no autosave) ----
     initial = _build_mlf_initial_state()
     init_state(initial)
+    _remember_canonical_state_sha256()
