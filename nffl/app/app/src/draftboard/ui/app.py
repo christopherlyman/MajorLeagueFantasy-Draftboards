@@ -4834,7 +4834,14 @@ def render_app() -> None:
         render_pick_tracker(state, owner_name_by_team_key)
 
     with tab_stats:
-        render_draft_statistics_tab(state)
+        render_draft_statistics_tab(
+            state,
+            dsn=get_postgres_dsn(),
+            draft_key=os.environ.get(
+                "DRAFTBOARD_DRAFT_KEY",
+                "nffl_2026_preseason",
+            ),
+        )
 
     if tab_manager_links is not None:
         with tab_manager_links:

@@ -5,11 +5,22 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
+import psycopg
 import streamlit as st
 
 from draftboard.state.store import DraftState
+from draftboard.state.league_schedule import (
+    DRAFT_COMPLETION_DEADLINE_EVENT_CODE,
+    DRAFT_START_EVENT_CODE,
+    load_draft_schedule,
+)
+from draftboard.state.runtime import (
+    get_league_key,
+    get_season_year,
+)
 
 NFL_OPENING_DAY_FALLBACK = date(2026, 9, 9)
+DRAFT_START_FALLBACK = date(2026, 8, 1)
 
 
 def parse_opening_day_date_from_env() -> date | None:
@@ -20,6 +31,49 @@ def parse_opening_day_date_from_env() -> date | None:
         return date.fromisoformat(raw)
     except Exception:
         return NFL_OPENING_DAY_FALLBACK
+
+
+def parse_draft_start_date_from_env() -> date:
+    raw = str(
+        os.environ.get("DRAFTBOARD_DRAFT_START_DATE", "") or ""
+    ).strip()
+
+    if not raw:
+        return DRAFT_START_FALLBACK
+
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return DRAFT_START_FALLBACK
+
+
+def _load_statistics_schedule_dates(
+    dsn: str,
+) -> tuple[date | None, date | None, str | None]:
+    """
+    Load the canonical start and completion dates for Draft Statistics.
+
+    Missing events return None so existing environment fallbacks remain
+    available. Database failures are returned as a displayable warning.
+    """
+    try:
+        schedule = load_draft_schedule(
+            dsn,
+            get_league_key(),
+            get_season_year(),
+        )
+    except Exception as exc:
+        return None, None, str(exc)
+
+    return (
+        schedule.active_event_date(
+            DRAFT_START_EVENT_CODE
+        ),
+        schedule.active_event_date(
+            DRAFT_COMPLETION_DEADLINE_EVENT_CODE
+        ),
+        None,
+    )
 
 
 def _real_pick_rows(state: DraftState) -> list[dict[str, Any]]:
@@ -54,6 +108,72 @@ def _real_pick_rows(state: DraftState) -> list[dict[str, Any]]:
 
     rows.sort(key=lambda r: (r["selected_ts"], order_index.get(r["pick_id"], 999999)))
     return rows
+
+
+
+def _load_canonical_draft_counts(
+    dsn: str,
+    draft_key: str,
+) -> dict[str, int]:
+    """
+    Load draft counts from canonical PostgreSQL board truth.
+
+    Contract and FT placeholders occupy board slots without requiring a
+    live manager selection. QO placeholders remain live selections.
+    """
+    sql = """
+        SELECT
+            COUNT(*) AS board_slots,
+            COUNT(*) FILTER (
+                WHERE placeholder_source = 'CONTRACT'
+            ) AS contract_slots,
+            COUNT(*) FILTER (
+                WHERE placeholder_source = 'FT'
+            ) AS ft_slots,
+            COUNT(*) FILTER (
+                WHERE selected_at_utc IS NOT NULL
+            ) AS completed_live_picks,
+            COUNT(*) FILTER (
+                WHERE selected_at_utc IS NULL
+                  AND COALESCE(placeholder_source, '')
+                      NOT IN ('CONTRACT', 'FT')
+            ) AS live_picks_remaining
+        FROM nffl.v_draft_board_current
+        WHERE draft_key = %s
+    """
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (str(draft_key),))
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            f"Canonical draft counts were not returned for {draft_key!r}."
+        )
+
+    counts = {
+        "board_slots": int(row[0] or 0),
+        "contract_slots": int(row[1] or 0),
+        "ft_slots": int(row[2] or 0),
+        "completed_live_picks": int(row[3] or 0),
+        "live_picks_remaining": int(row[4] or 0),
+    }
+
+    accounted = (
+        counts["contract_slots"]
+        + counts["ft_slots"]
+        + counts["completed_live_picks"]
+        + counts["live_picks_remaining"]
+    )
+
+    if accounted != counts["board_slots"]:
+        raise RuntimeError(
+            "Canonical draft-count integrity failed: "
+            f"board_slots={counts['board_slots']}, accounted={accounted}."
+        )
+
+    return counts
 
 
 def is_draft_complete(state: DraftState) -> bool:
@@ -170,8 +290,11 @@ def _render_draft_kpis(
     avg_seconds_per_pick: float | None,
 ) -> None:
     kpi_cols = st.columns(6)
-    kpi_cols[0].metric("Total Picks", f"{int(total_pick_slots):,}")
-    kpi_cols[1].metric("Picks Remaining", f"{int(total_picks_remaining):,}")
+    kpi_cols[0].metric("Live Picks", f"{int(total_pick_slots):,}")
+    kpi_cols[1].metric(
+        "Live Picks Remaining",
+        f"{int(total_picks_remaining):,}",
+    )
     kpi_cols[2].metric(
         "Avg Picks / Day",
         "—" if avg_picks_per_day is None else f"{float(avg_picks_per_day):.2f}",
@@ -194,21 +317,91 @@ def _render_draft_kpis(
     )
 
 
-def render_draft_statistics_tab(state: DraftState) -> None:
+def render_draft_statistics_tab(
+    state: DraftState,
+    *,
+    dsn: str,
+    draft_key: str,
+) -> None:
     st.subheader("Draft Statistics")
 
-    opening_day_date = parse_opening_day_date_from_env()
+    opening_day_fallback_date = (
+        parse_opening_day_date_from_env()
+    )
+    draft_start_fallback_date = (
+        parse_draft_start_date_from_env()
+    )
+
+    (
+        saved_draft_start_date,
+        saved_completion_target_date,
+        schedule_load_error,
+    ) = _load_statistics_schedule_dates(dsn)
+
+    draft_start_date = (
+        saved_draft_start_date
+        or draft_start_fallback_date
+    )
+
+    completion_target_date = (
+        saved_completion_target_date
+    )
+
+    if (
+        completion_target_date is None
+        and opening_day_fallback_date is not None
+    ):
+        completion_target_date = (
+            opening_day_fallback_date
+            - timedelta(days=1)
+        )
+
+    pace_as_of_date = max(
+        date.today(),
+        draft_start_date,
+    )
+
+    if schedule_load_error:
+        st.warning(
+            "Draft schedule could not be loaded from PostgreSQL. "
+            "Draft Statistics is using fallback dates. "
+            f"Details: {schedule_load_error}"
+        )
+    elif (
+        saved_draft_start_date is None
+        or saved_completion_target_date is None
+    ):
+        st.caption(
+            "Draft schedule is incomplete. Draft Statistics is "
+            "using fallback dates until the Commissioner saves "
+            "all four schedule events."
+        )
+
     real_picks = _real_pick_rows(state)
 
-    total_pick_slots = len(list(state.pick_order or []))
-    completed_picks = len(real_picks)
-    total_picks_remaining = max(0, total_pick_slots - completed_picks)
+    canonical = _load_canonical_draft_counts(dsn, draft_key)
 
-    completion_target_date = opening_day_date - timedelta(days=1) if opening_day_date is not None else None
+    completed_picks = canonical["completed_live_picks"]
+    total_picks_remaining = canonical["live_picks_remaining"]
+    total_pick_slots = completed_picks + total_picks_remaining
+
+    st.caption(
+        f"Board slots: {canonical['board_slots']:,} | "
+        f"Contract reserved: {canonical['contract_slots']:,} | "
+        f"FT reserved: {canonical['ft_slots']:,} | "
+        f"Live selections: {total_pick_slots:,}"
+    )
+
+    if completed_picks != len(real_picks):
+        st.warning(
+            "Draft Statistics state is temporarily out of sync with "
+            "canonical PostgreSQL pick history. Refresh the page."
+        )
+
     required_picks_per_day_to_target, required_picks_overdue = _required_picks_per_day_to_target(
         total_picks_remaining=total_picks_remaining,
         target_completion_date=completion_target_date,
-        today_date=date.today(),
+        today_date=pace_as_of_date,
     )
 
     if not real_picks:
@@ -257,8 +450,8 @@ def render_draft_statistics_tab(state: DraftState) -> None:
     )
 
     chart_end_date = last_pick_date
-    if opening_day_date is not None and opening_day_date > chart_end_date:
-        chart_end_date = opening_day_date
+    if completion_target_date is not None and completion_target_date > chart_end_date:
+        chart_end_date = completion_target_date
 
     chart_dates = pd.date_range(first_pick_date, chart_end_date, freq="D")
     daily_pick_counts: dict[date, int] = {}
@@ -276,22 +469,22 @@ def render_draft_statistics_tab(state: DraftState) -> None:
     chart_df = pd.DataFrame(index=chart_dates)
     chart_df["Actual Cumulative Picks"] = actual_cumulative
 
-    if opening_day_date is not None and opening_day_date >= first_pick_date:
-        total_days_inclusive = (opening_day_date - first_pick_date).days + 1
+    if completion_target_date is not None and completion_target_date >= first_pick_date:
+        total_days_inclusive = (completion_target_date - first_pick_date).days + 1
         required_values: list[float] = []
         for d in chart_dates:
             day_num = (d.date() - first_pick_date).days + 1
-            if d.date() <= opening_day_date:
+            if d.date() <= completion_target_date:
                 required_values.append(
                     min(float(total_pick_slots), float(total_pick_slots) * float(day_num) / float(total_days_inclusive))
                 )
             else:
                 required_values.append(float(total_pick_slots))
-        chart_df["Required Pace to Opening Day"] = required_values
-        st.caption(f"Opening Day target: {opening_day_date.isoformat()}")
+        chart_df["Required Pace to Completion Deadline"] = required_values
+        st.caption(f"Completion target: {completion_target_date.isoformat()}")
     else:
         st.info(
-            "Required pace line is hidden because DRAFTBOARD_OPENING_DAY_DATE is missing/invalid or earlier than the first recorded pick date."
+            "Required pace line is hidden because the draft completion deadline is missing/invalid or earlier than the first recorded pick date."
         )
 
     elapsed_days_inclusive = max(1, (last_pick_date - first_pick_date).days + 1)

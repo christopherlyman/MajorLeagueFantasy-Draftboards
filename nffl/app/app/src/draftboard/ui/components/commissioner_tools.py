@@ -7,7 +7,7 @@ import subprocess
 import time
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import psycopg
 from psycopg import sql as pg_sql
@@ -18,6 +18,18 @@ from draftboard.state.runtime import (
     get_league_key,
     get_postgres_dsn,
     get_season_year,
+)
+
+from draftboard.state.league_schedule import (
+    DEFAULT_SCHEDULE_TIMEZONE,
+    DRAFT_COMPLETION_DEADLINE_EVENT_CODE,
+    DRAFT_LOTTERY_EVENT_CODE,
+    DRAFT_START_EVENT_CODE,
+    QO_FT_DEADLINE_EVENT_CODE,
+    LeagueScheduleEvent,
+    load_draft_schedule,
+    save_draft_schedule,
+    validate_schedule_events,
 )
 
 from draftboard.domain.clock import compute_clock_status, start_pick_clock
@@ -2083,237 +2095,518 @@ def _load_nffl_contract_readiness(
 
 
 def _render_nffl_contract_readiness_panel() -> None:
-    dsn = _get_dsn()
-    league_key = _get_league_key()
-    season_year = _get_season_year()
+    with st.expander("Contract Readiness", expanded=False):
+        dsn = _get_dsn()
+        league_key = _get_league_key()
+        season_year = _get_season_year()
 
-    st.markdown("#### NFFL Contract / Roster Readiness")
-
-    try:
-        readiness = _load_nffl_contract_readiness(
-            dsn=dsn,
-            league_key=league_key,
-            season_year=season_year,
-        )
-    except Exception as exc:
-        st.error(f"Could not load NFFL contract readiness: {exc}")
-        return
-
-    counts = dict(readiness.get("counts") or {})
-    blockers = list(readiness.get("blockers") or [])
-
-    active_contracts = int(counts.get("contract_status:active", 0))
-    void_contracts = int(counts.get("contract_status:void", 0))
-    invalid_active = int(counts.get("current_invalid_active_contracts:invalid_active_contracts", 0))
-    eligible_import = int(counts.get("import_reconciliation:ACTIVE_ELIGIBLE_SAME_TEAM", 0))
-    import_blockers = sum(
-        value
-        for key, value in counts.items()
-        if key.startswith("import_reconciliation:")
-        and not key.endswith(":ACTIVE_ELIGIBLE_SAME_TEAM")
-    )
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Active Contracts", active_contracts)
-    c2.metric("Voided Contracts", void_contracts)
-    c3.metric("Invalid Active", invalid_active)
-    c4.metric("Import Eligible", eligible_import)
-    c5.metric("Import Blockers", import_blockers)
-
-    if invalid_active > 0:
-        st.error(
-            "Blocking issue: active contracts include players not found on the same team "
-            "in the end-of-prior-season roster snapshot."
-        )
-    else:
-        st.success("Current active contracts pass same-team end-of-prior-season roster reconciliation.")
-
-    if blockers:
-        with st.expander("Import reconciliation blockers", expanded=False):
-            st.caption(
-                "These are contract-sheet staging rows that should not become active contracts unless reviewed. "
-                "They are not a current DraftBoard blocker if the current Invalid Active count is zero."
-            )
-            st.dataframe(
-                blockers,
-                hide_index=True,
-                use_container_width=True,
-            )
-    else:
-        st.info("No active-contract import blockers found.")
-
-
-def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None = None) -> None:
-    dsn = _get_dsn()
-    league_key = _get_league_key()
-    season_year = _get_season_year()
-
-    st.markdown("##### Publish / Reveal Status")
-    st.caption(
-        "Publishes Teams-tab QO selections into the DraftBoard QO source, reveals QO/FT choices, "
-        "and locks the current QO/FT decision rows."
-    )
-
-    try:
-        with psycopg.connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        count(*) FILTER (WHERE decision_type IN ('QO1','QO2','QO3','QO4')) AS qo_rows,
-                        count(*) FILTER (WHERE decision_type = 'FT') AS ft_rows,
-                        count(*) FILTER (WHERE decision_status='LOCKED') AS locked_rows
-                    FROM nffl.offseason_keeper_decision
-                    WHERE league_key=%s
-                      AND season_year=%s;
-                    """,
-                    (str(league_key), int(season_year)),
-                )
-                counts = cur.fetchone() or (0, 0, 0)
-
-                cur.execute(
-                    """
-                    SELECT count(*)
-                    FROM public.qualifying_offer
-                    WHERE league_key=%s
-                      AND season_year=%s;
-                    """,
-                    (str(league_key), int(season_year)),
-                )
-                published_qos = int((cur.fetchone() or [0])[0] or 0)
-
-                cur.execute(
-                    """
-                    SELECT COALESCE(qoft_revealed,false), revealed_at_utc, revealed_by
-                    FROM nffl.league_visibility_state
-                    WHERE league_key=%s
-                      AND season_year=%s;
-                    """,
-                    (str(league_key), int(season_year)),
-                )
-                visibility = cur.fetchone()
-    except Exception as exc:
-        st.error(f"Could not load QO/FT publish status: {exc}")
-        return
-
-    qo_rows = int(counts[0] or 0)
-    ft_rows = int(counts[1] or 0)
-    locked_rows = int(counts[2] or 0)
-    revealed = bool(visibility and visibility[0])
-    revealed_at = visibility[1] if visibility else None
-    revealed_by = visibility[2] if visibility else ""
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Saved QOs", qo_rows)
-    c2.metric("Saved FT", ft_rows)
-    c3.metric("Published QOs", published_qos)
-    c4.metric("Locked Decisions", locked_rows)
-
-    if revealed:
-        st.success(f"QO/FT is currently revealed. Revealed by {revealed_by or 'unknown'} at {revealed_at}.")
-    else:
-        st.warning("QO/FT is currently private and not yet published to the DraftBoard QO source.")
-
-    publish_blockers: list[str] = []
-
-    try:
-        readiness = _load_nffl_contract_readiness(
-            dsn=dsn,
-            league_key=league_key,
-            season_year=season_year,
-        )
-        readiness_counts = dict(readiness.get("counts") or {})
-        invalid_active_contracts = int(
-            readiness_counts.get("current_invalid_active_contracts:invalid_active_contracts", 0)
-        )
-        if invalid_active_contracts > 0:
-            publish_blockers.append(
-                f"{invalid_active_contracts} active contract(s) failed same-team end-roster reconciliation"
-            )
-    except Exception as exc:
-        publish_blockers.append(f"could not verify contract readiness: {exc}")
-
-    if publish_blockers:
-        st.error("Publish / Reveal is blocked: " + "; ".join(publish_blockers) + ".")
-
-    with st.form("nffl_publish_reveal_qoft_form", clear_on_submit=False):
-        confirm = st.checkbox(
-            "Confirm publish/reveal QO-FT",
-            value=False,
-            key="nffl_confirm_publish_reveal_qoft",
-        )
-        publish_clicked = st.form_submit_button(
-            "Publish / Reveal QO-FT",
-            type="primary",
-            disabled=bool(publish_blockers),
-        )
-
-    if publish_clicked:
-        if not confirm:
-            st.warning("Confirm publish/reveal QO-FT first.")
-            return
-
-        actor = "commissioner"
-        if isinstance(auth_ctx, dict):
-            actor = str(auth_ctx.get("acting_as") or auth_ctx.get("display_name") or "commissioner")
+        st.markdown("#### NFFL Contract / Roster Readiness")
 
         try:
-            result = _publish_nffl_qoft_to_predraft_qos(
+            readiness = _load_nffl_contract_readiness(
                 dsn=dsn,
                 league_key=league_key,
                 season_year=season_year,
-                published_by=actor,
             )
-            st.success(f"Published/revealed QO-FT: {result}")
-            try:
-                save_autosave(state)
-            except Exception:
-                pass
-            st.rerun()
         except Exception as exc:
-            st.error(f"Publish/reveal failed: {exc}")
+            st.error(f"Could not load NFFL contract readiness: {exc}")
+            return
 
-    with st.expander("Reset QO/FT reveal to private", expanded=False):
-        st.caption(
-            "This clears published QO rows for this league/year and returns QO/FT to private. "
-            "It does not delete saved Teams-tab QO/FT decisions."
+        counts = dict(readiness.get("counts") or {})
+        blockers = list(readiness.get("blockers") or [])
+
+        active_contracts = int(counts.get("contract_status:active", 0))
+        void_contracts = int(counts.get("contract_status:void", 0))
+        invalid_active = int(counts.get("current_invalid_active_contracts:invalid_active_contracts", 0))
+        eligible_import = int(counts.get("import_reconciliation:ACTIVE_ELIGIBLE_SAME_TEAM", 0))
+        import_blockers = sum(
+            value
+            for key, value in counts.items()
+            if key.startswith("import_reconciliation:")
+            and not key.endswith(":ACTIVE_ELIGIBLE_SAME_TEAM")
         )
-        with st.form("nffl_reset_qoft_publish_form", clear_on_submit=False):
-            reset_confirm = st.checkbox(
-                "Confirm reset QO/FT reveal",
-                value=False,
-                key="nffl_confirm_reset_qoft_publish",
-            )
-            reset_clicked = st.form_submit_button("Reset QO/FT Reveal to Private")
 
-        if reset_clicked:
-            if not reset_confirm:
-                st.warning("Confirm reset QO/FT reveal first.")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Active Contracts", active_contracts)
+        c2.metric("Voided Contracts", void_contracts)
+        c3.metric("Invalid Active", invalid_active)
+        c4.metric("Import Eligible", eligible_import)
+        c5.metric("Import Blockers", import_blockers)
+
+        if invalid_active > 0:
+            st.error(
+                "Blocking issue: active contracts include players not found on the same team "
+                "in the end-of-prior-season roster snapshot."
+            )
+        else:
+            st.success("Current active contracts pass same-team end-of-prior-season roster reconciliation.")
+
+        if blockers:
+            with st.container(border=True):
+                st.markdown('**Import reconciliation blockers**')
+                st.caption(
+                    "These are contract-sheet staging rows that should not become active contracts unless reviewed. "
+                    "They are not a current DraftBoard blocker if the current Invalid Active count is zero."
+                )
+                st.dataframe(
+                    blockers,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+        else:
+            st.info("No active-contract import blockers found.")
+
+
+def _render_nffl_qoft_publish_controls(state: DraftState, auth_ctx: dict | None = None) -> None:
+    with st.expander("QO/FT Publish and Reveal", expanded=False):
+        dsn = _get_dsn()
+        league_key = _get_league_key()
+        season_year = _get_season_year()
+
+        st.markdown("##### Publish / Reveal Status")
+        st.caption(
+            "Publishes Teams-tab QO selections into the DraftBoard QO source, reveals QO/FT choices, "
+            "and locks the current QO/FT decision rows."
+        )
+
+        try:
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            count(*) FILTER (WHERE decision_type IN ('QO1','QO2','QO3','QO4')) AS qo_rows,
+                            count(*) FILTER (WHERE decision_type = 'FT') AS ft_rows,
+                            count(*) FILTER (WHERE decision_status='LOCKED') AS locked_rows
+                        FROM nffl.offseason_keeper_decision
+                        WHERE league_key=%s
+                          AND season_year=%s;
+                        """,
+                        (str(league_key), int(season_year)),
+                    )
+                    counts = cur.fetchone() or (0, 0, 0)
+
+                    cur.execute(
+                        """
+                        SELECT count(*)
+                        FROM public.qualifying_offer
+                        WHERE league_key=%s
+                          AND season_year=%s;
+                        """,
+                        (str(league_key), int(season_year)),
+                    )
+                    published_qos = int((cur.fetchone() or [0])[0] or 0)
+
+                    cur.execute(
+                        """
+                        SELECT COALESCE(qoft_revealed,false), revealed_at_utc, revealed_by
+                        FROM nffl.league_visibility_state
+                        WHERE league_key=%s
+                          AND season_year=%s;
+                        """,
+                        (str(league_key), int(season_year)),
+                    )
+                    visibility = cur.fetchone()
+        except Exception as exc:
+            st.error(f"Could not load QO/FT publish status: {exc}")
+            return
+
+        qo_rows = int(counts[0] or 0)
+        ft_rows = int(counts[1] or 0)
+        locked_rows = int(counts[2] or 0)
+        revealed = bool(visibility and visibility[0])
+        revealed_at = visibility[1] if visibility else None
+        revealed_by = visibility[2] if visibility else ""
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Saved QOs", qo_rows)
+        c2.metric("Saved FT", ft_rows)
+        c3.metric("Published QOs", published_qos)
+        c4.metric("Locked Decisions", locked_rows)
+
+        if revealed:
+            st.success(f"QO/FT is currently revealed. Revealed by {revealed_by or 'unknown'} at {revealed_at}.")
+        else:
+            st.warning("QO/FT is currently private and not yet published to the DraftBoard QO source.")
+
+        publish_blockers: list[str] = []
+
+        try:
+            readiness = _load_nffl_contract_readiness(
+                dsn=dsn,
+                league_key=league_key,
+                season_year=season_year,
+            )
+            readiness_counts = dict(readiness.get("counts") or {})
+            invalid_active_contracts = int(
+                readiness_counts.get("current_invalid_active_contracts:invalid_active_contracts", 0)
+            )
+            if invalid_active_contracts > 0:
+                publish_blockers.append(
+                    f"{invalid_active_contracts} active contract(s) failed same-team end-roster reconciliation"
+                )
+        except Exception as exc:
+            publish_blockers.append(f"could not verify contract readiness: {exc}")
+
+        if publish_blockers:
+            st.error("Publish / Reveal is blocked: " + "; ".join(publish_blockers) + ".")
+
+        with st.form("nffl_publish_reveal_qoft_form", clear_on_submit=False):
+            confirm = st.checkbox(
+                "Confirm publish/reveal QO-FT",
+                value=False,
+                key="nffl_confirm_publish_reveal_qoft",
+            )
+            publish_clicked = st.form_submit_button(
+                "Publish / Reveal QO-FT",
+                type="primary",
+                disabled=bool(publish_blockers),
+            )
+
+        if publish_clicked:
+            if not confirm:
+                st.warning("Confirm publish/reveal QO-FT first.")
                 return
 
+            actor = "commissioner"
+            if isinstance(auth_ctx, dict):
+                actor = str(auth_ctx.get("acting_as") or auth_ctx.get("display_name") or "commissioner")
+
             try:
-                result = _reset_nffl_qoft_publish_for_testing(
+                result = _publish_nffl_qoft_to_predraft_qos(
                     dsn=dsn,
                     league_key=league_key,
                     season_year=season_year,
+                    published_by=actor,
                 )
-                st.success(f"Reset QO/FT reveal state: {result}")
+                st.success(f"Published/revealed QO-FT: {result}")
+                try:
+                    save_autosave(state)
+                except Exception:
+                    pass
                 st.rerun()
             except Exception as exc:
-                st.error(f"QO/FT reveal reset failed: {exc}")
+                st.error(f"Publish/reveal failed: {exc}")
+
+        with st.container(border=True):
+            st.markdown('**Reset QO/FT reveal to private**')
+            st.caption(
+                "This clears published QO rows for this league/year and returns QO/FT to private. "
+                "It does not delete saved Teams-tab QO/FT decisions."
+            )
+            with st.form("nffl_reset_qoft_publish_form", clear_on_submit=False):
+                reset_confirm = st.checkbox(
+                    "Confirm reset QO/FT reveal",
+                    value=False,
+                    key="nffl_confirm_reset_qoft_publish",
+                )
+                reset_clicked = st.form_submit_button("Reset QO/FT Reveal to Private")
+
+            if reset_clicked:
+                if not reset_confirm:
+                    st.warning("Confirm reset QO/FT reveal first.")
+                    return
+
+                try:
+                    result = _reset_nffl_qoft_publish_for_testing(
+                        dsn=dsn,
+                        league_key=league_key,
+                        season_year=season_year,
+                    )
+                    st.success(f"Reset QO/FT reveal state: {result}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"QO/FT reveal reset failed: {exc}")
+
+
+def _render_nffl_draft_schedule_controls() -> None:
+    """
+    Render the Commissioner-managed draft schedule.
+
+    These dates are informational/configurational only. Saving them does
+    not run the lottery, lock QO/FT submissions, start the draft, or
+    complete the draft.
+    """
+    dsn = _get_dsn()
+    league_key = _get_league_key()
+    season_year = _get_season_year()
+
+    try:
+        schedule = load_draft_schedule(
+            dsn,
+            league_key,
+            season_year,
+        )
+    except Exception as exc:
+        st.error(f"Failed to load draft schedule: {exc}")
+        return
+
+    saved_start = schedule.active_event(
+        DRAFT_START_EVENT_CODE
+    )
+    saved_qoft = schedule.active_event(
+        QO_FT_DEADLINE_EVENT_CODE
+    )
+    saved_lottery = schedule.active_event(
+        DRAFT_LOTTERY_EVENT_CODE
+    )
+    saved_completion = schedule.active_event(
+        DRAFT_COMPLETION_DEADLINE_EVENT_CODE
+    )
+
+    today = date.today()
+
+    draft_start_date = (
+        saved_start.event_date
+        if saved_start is not None
+        else today
+    )
+    draft_start_time = (
+        saved_start.event_time_local
+        if (
+            saved_start is not None
+            and saved_start.event_time_local is not None
+        )
+        else time(9, 0)
+    )
+
+    qo_ft_date = (
+        saved_qoft.event_date
+        if saved_qoft is not None
+        else draft_start_date - timedelta(days=1)
+    )
+    qo_ft_time = (
+        saved_qoft.event_time_local
+        if (
+            saved_qoft is not None
+            and saved_qoft.event_time_local is not None
+        )
+        else time(23, 59)
+    )
+
+    lottery_date = (
+        saved_lottery.event_date
+        if saved_lottery is not None
+        else qo_ft_date - timedelta(days=6)
+    )
+    lottery_time = (
+        saved_lottery.event_time_local
+        if (
+            saved_lottery is not None
+            and saved_lottery.event_time_local is not None
+        )
+        else time(19, 0)
+    )
+
+    completion_date = (
+        saved_completion.event_date
+        if saved_completion is not None
+        else draft_start_date + timedelta(days=38)
+    )
+    completion_time = (
+        saved_completion.event_time_local
+        if (
+            saved_completion is not None
+            and saved_completion.event_time_local is not None
+        )
+        else time(23, 59)
+    )
+
+    with st.expander(
+        "Draft Schedule",
+        expanded=False,
+    ):
+        st.caption(
+            f"League season: {season_year} | "
+            f"Timezone: {DEFAULT_SCHEDULE_TIMEZONE}. "
+            "Saving this schedule does not automatically trigger "
+            "lottery, QO/FT locking, draft start, or draft completion."
+        )
+
+        with st.form(
+            "nffl_draft_schedule_form",
+            clear_on_submit=False,
+        ):
+            lottery_cols = st.columns(2)
+
+            with lottery_cols[0]:
+                entered_lottery_date = st.date_input(
+                    "Draft Lottery Date",
+                    value=lottery_date,
+                    format="MM/DD/YYYY",
+                )
+
+            with lottery_cols[1]:
+                entered_lottery_time = st.time_input(
+                    "Draft Lottery Time",
+                    value=lottery_time,
+                    step=60,
+                )
+
+            qo_cols = st.columns(2)
+
+            with qo_cols[0]:
+                entered_qo_date = st.date_input(
+                    "QO/FT Declaration Deadline",
+                    value=qo_ft_date,
+                    format="MM/DD/YYYY",
+                )
+
+            with qo_cols[1]:
+                entered_qo_time = st.time_input(
+                    "QO/FT Deadline Time",
+                    value=qo_ft_time,
+                    step=60,
+                )
+
+            start_cols = st.columns(2)
+
+            with start_cols[0]:
+                entered_start_date = st.date_input(
+                    "Draft Start Date",
+                    value=draft_start_date,
+                    format="MM/DD/YYYY",
+                )
+
+            with start_cols[1]:
+                entered_start_time = st.time_input(
+                    "Draft Start Time",
+                    value=draft_start_time,
+                    step=60,
+                )
+
+            completion_cols = st.columns(2)
+
+            with completion_cols[0]:
+                entered_completion_date = st.date_input(
+                    "Draft Completion Deadline",
+                    value=completion_date,
+                    format="MM/DD/YYYY",
+                )
+
+            with completion_cols[1]:
+                entered_completion_time = st.time_input(
+                    "Completion Deadline Time",
+                    value=completion_time,
+                    step=60,
+                )
+
+            submitted = st.form_submit_button(
+                "Save Draft Schedule",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if not submitted:
+            return
+
+        entered_events = {
+            DRAFT_LOTTERY_EVENT_CODE: LeagueScheduleEvent(
+                event_code=DRAFT_LOTTERY_EVENT_CODE,
+                event_label="Draft Lottery",
+                event_date=entered_lottery_date,
+                event_time_local=entered_lottery_time,
+                timezone_name=DEFAULT_SCHEDULE_TIMEZONE,
+                is_active=True,
+                note=(
+                    "Commissioner-managed draft lottery "
+                    "date and time."
+                ),
+            ),
+            QO_FT_DEADLINE_EVENT_CODE: LeagueScheduleEvent(
+                event_code=QO_FT_DEADLINE_EVENT_CODE,
+                event_label="QO/FT Submission Deadline",
+                event_date=entered_qo_date,
+                event_time_local=entered_qo_time,
+                timezone_name=DEFAULT_SCHEDULE_TIMEZONE,
+                is_active=True,
+                note=(
+                    "Managers may revise QO/FT choices until "
+                    "the Commissioner-managed deadline."
+                ),
+            ),
+            DRAFT_START_EVENT_CODE: LeagueScheduleEvent(
+                event_code=DRAFT_START_EVENT_CODE,
+                event_label="Draft Start",
+                event_date=entered_start_date,
+                event_time_local=entered_start_time,
+                timezone_name=DEFAULT_SCHEDULE_TIMEZONE,
+                is_active=True,
+                note="Commissioner-managed draft start.",
+            ),
+            DRAFT_COMPLETION_DEADLINE_EVENT_CODE: (
+                LeagueScheduleEvent(
+                    event_code=(
+                        DRAFT_COMPLETION_DEADLINE_EVENT_CODE
+                    ),
+                    event_label="Draft Completion Deadline",
+                    event_date=entered_completion_date,
+                    event_time_local=entered_completion_time,
+                    timezone_name=DEFAULT_SCHEDULE_TIMEZONE,
+                    is_active=True,
+                    note=(
+                        "Commissioner-managed target deadline "
+                        "for completing the draft."
+                    ),
+                )
+            ),
+        }
+
+        validation_errors = validate_schedule_events(
+            entered_events,
+            require_all=True,
+        )
+
+        if validation_errors:
+            st.error(
+                "Schedule was not saved:\n\n"
+                + "\n".join(
+                    f"- {error}"
+                    for error in validation_errors
+                )
+            )
+            return
+
+        try:
+            saved = save_draft_schedule(
+                dsn,
+                league_key,
+                season_year,
+                entered_events,
+            )
+        except Exception as exc:
+            st.error(f"Draft schedule save failed: {exc}")
+            return
+
+        saved_start_date = saved.active_event_date(
+            DRAFT_START_EVENT_CODE
+        )
+        saved_completion_date = saved.active_event_date(
+            DRAFT_COMPLETION_DEADLINE_EVENT_CODE
+        )
+
+        st.success(
+            "Draft schedule saved. "
+            f"Draft starts {saved_start_date}; "
+            f"completion deadline {saved_completion_date}."
+        )
+        st.rerun()
 
 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
     st.subheader("Commissioner Tools")
 
+    st.caption(
+        "All Commissioner tools are collapsed by default. "
+        "Open only the section you need."
+    )
+
+    _render_nffl_draft_schedule_controls()
     _render_nffl_contract_readiness_panel()
-
-    st.divider()
-
-    st.markdown("#### NFFL QO/FT Publish + Reveal")
-    _render_nffl_qoft_publish_controls(state, auth_ctx=auth_ctx)
-
-    st.divider()
+    _render_nffl_qoft_publish_controls(
+        state,
+        auth_ctx=auth_ctx,
+    )
 
     auth_ctx = dict(auth_ctx or {})
     is_site_admin = bool(auth_ctx.get("is_site_admin", False))
