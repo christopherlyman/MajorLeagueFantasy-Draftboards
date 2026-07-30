@@ -594,6 +594,29 @@ def _fetch_live_roster_display_rows(dsn: str) -> list[dict[str, Any]]:
             FROM nffl.draft_selection ds
             JOIN ctx
               ON ctx.draft_key = ds.draft_key
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM nffl.contract c
+                WHERE c.league_key = ctx.league_key
+                  AND c.season_year = ctx.season_year
+                  AND c.team_key =
+                      ds.selecting_team_key
+                  AND c.yahoo_player_key =
+                      ds.yahoo_player_key
+                  AND c.status = 'active'
+            )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM nffl.offseason_keeper_decision ft
+                WHERE ft.league_key = ctx.league_key
+                  AND ft.season_year = ctx.season_year
+                  AND ft.team_key =
+                      ds.selecting_team_key
+                  AND ft.yahoo_player_key =
+                      ds.yahoo_player_key
+                  AND ft.decision_type = 'FT'
+                  AND ft.decision_status = 'LOCKED'
+            )
         )
         SELECT
             ls.league_key,
@@ -666,6 +689,116 @@ def _percent_label(value: Any) -> str:
         return f"{float(text):.0f}%"
     except Exception:
         return text
+
+
+
+def _fetch_contract_history_rows(
+    dsn: str,
+) -> list[dict[str, Any]]:
+    sql = """
+        WITH ctx AS (
+            SELECT
+                current_league_key AS league_key
+            FROM nffl.v_active_season_context
+            LIMIT 1
+        )
+        SELECT
+            h.contract_episode_id,
+            h.league_key,
+            h.season_year,
+            h.draft_key,
+            h.team_key,
+            h.yahoo_player_key,
+            COALESCE(
+                pu.full_name,
+                h.yahoo_player_key
+            ) AS player_name,
+            h.contract_years_awarded,
+            h.source_pick_id,
+            h.source_pick_kind,
+            h.published_at_utc
+        FROM nffl.contract_history_episode h
+        JOIN ctx
+          ON ctx.league_key = h.league_key
+        LEFT JOIN nffl.player_universe pu
+          ON pu.league_key = h.league_key
+         AND pu.season_year = h.season_year
+         AND pu.yahoo_player_key =
+             h.yahoo_player_key
+        ORDER BY
+            h.team_key,
+            h.published_at_utc DESC,
+            h.contract_episode_id DESC
+    """
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+
+            return [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+
+def _contract_history_df(
+    rows: list[dict[str, Any]],
+) -> pd.DataFrame:
+    display_rows = []
+
+    for row in rows:
+        published_at = row.get(
+            "published_at_utc"
+        )
+
+        published_label = (
+            published_at.strftime(
+                "%Y-%m-%d %H:%M UTC"
+            )
+            if hasattr(published_at, "strftime")
+            else str(published_at or "")
+        )
+
+        pick_id = str(
+            row.get("source_pick_id") or ""
+        )
+
+        pick_kind = str(
+            row.get("source_pick_kind") or ""
+        ).upper()
+
+        display_rows.append(
+            {
+                "Season": int(
+                    row["season_year"]
+                ),
+                "Player": str(
+                    row.get("player_name")
+                    or row["yahoo_player_key"]
+                ),
+                "Contract": (
+                    f"{int(row['contract_years_awarded'])} yr"
+                ),
+                "Draft Pick": (
+                    f"{pick_id} ({pick_kind})"
+                ),
+                "Published": published_label,
+            }
+        )
+
+    return pd.DataFrame(
+        display_rows,
+        columns=[
+            "Season",
+            "Player",
+            "Contract",
+            "Draft Pick",
+            "Published",
+        ],
+    )
 
 
 def _contract_label(row: dict[str, Any]) -> str:
@@ -960,6 +1093,11 @@ def _load_new_contract_plan(
                 WHERE s.league_key=%s
                   AND s.season_year=%s
                   AND s.team_key=%s
+                  AND s.draft_key=(
+                      SELECT draft_key
+                      FROM nffl.v_active_season_context
+                      LIMIT 1
+                  )
                 ORDER BY
                     d.contract_years DESC
                 """,
@@ -1635,6 +1773,950 @@ def _reset_team_decisions(
         conn.commit()
 
 
+
+def _publish_new_contracts(
+    dsn: str,
+    published_by: str = "commissioner_ui",
+) -> dict[str, int]:
+    actor = (
+        str(published_by or "").strip()
+        or "commissioner_ui"
+    )
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(
+            row_factory=dict_row
+        ) as cur:
+            cur.execute(
+                """
+                SELECT
+                    current_league_key
+                        AS league_key,
+                    current_season_year
+                        AS season_year,
+                    draft_key
+                FROM nffl.v_active_season_context
+                LIMIT 1
+                """
+            )
+
+            context = cur.fetchone()
+
+            if not context:
+                raise ValueError(
+                    "The active NFFL draft "
+                    "could not be found."
+                )
+
+            league_key = str(
+                context["league_key"]
+            )
+            season_year = int(
+                context["season_year"]
+            )
+            draft_key = str(
+                context["draft_key"]
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    qoft_revealed,
+                    post_draft_contracts_revealed
+                FROM
+                    nffl.league_visibility_state
+                WHERE league_key=%s
+                  AND season_year=%s
+                FOR UPDATE
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            visibility = cur.fetchone()
+
+            if not visibility:
+                raise ValueError(
+                    "League visibility settings "
+                    "could not be found."
+                )
+
+            if not bool(
+                visibility["qoft_revealed"]
+            ):
+                raise ValueError(
+                    "QO/FT selections must be "
+                    "revealed before new contracts "
+                    "can be finalized."
+                )
+
+            if bool(
+                visibility[
+                    "post_draft_contracts_revealed"
+                ]
+            ):
+                raise ValueError(
+                    "New contracts have already "
+                    "been finalized and revealed."
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    count(*) AS draft_pick_count
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+
+            draft_pick_count = int(
+                cur.fetchone()[
+                    "draft_pick_count"
+                ]
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    count(*) AS selection_count
+                FROM nffl.draft_selection
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+
+            selection_count = int(
+                cur.fetchone()[
+                    "selection_count"
+                ]
+            )
+
+            if draft_pick_count <= 0:
+                raise ValueError(
+                    "The active draft has no picks."
+                )
+
+            if selection_count != draft_pick_count:
+                raise ValueError(
+                    "The draft must be complete "
+                    "before new contracts can be "
+                    "finalized. "
+                    f"{selection_count} of "
+                    f"{draft_pick_count} picks "
+                    "have selections."
+                )
+
+            cur.execute(
+                """
+                SELECT DISTINCT
+                    column_team_key AS team_key
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                ORDER BY column_team_key
+                """,
+                (draft_key,),
+            )
+
+            active_team_keys = [
+                str(row["team_key"])
+                for row in cur.fetchall()
+                if row["team_key"]
+            ]
+
+            if not active_team_keys:
+                raise ValueError(
+                    "No teams were found in the "
+                    "active draft."
+                )
+
+            active_team_key_set = set(
+                active_team_keys
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    team_key,
+                    draft_key,
+                    submission_status,
+                    revision_number
+                FROM
+                    nffl.post_draft_contract_submission
+                WHERE league_key=%s
+                  AND season_year=%s
+                ORDER BY team_key
+                FOR UPDATE
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            submission_rows = [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+            submission_by_team = {
+                str(row["team_key"]): row
+                for row in submission_rows
+            }
+
+            submission_team_keys = set(
+                submission_by_team
+            )
+
+            missing_teams = sorted(
+                active_team_key_set
+                - submission_team_keys
+            )
+
+            extra_teams = sorted(
+                submission_team_keys
+                - active_team_key_set
+            )
+
+            if missing_teams:
+                raise ValueError(
+                    "Every team must save its new "
+                    "contract plan before publication. "
+                    "Missing teams: "
+                    + ", ".join(missing_teams)
+                )
+
+            if extra_teams:
+                raise ValueError(
+                    "Contract submissions exist for "
+                    "teams outside the active draft: "
+                    + ", ".join(extra_teams)
+                )
+
+            for team_key in active_team_keys:
+                submission = (
+                    submission_by_team[team_key]
+                )
+
+                if (
+                    str(
+                        submission["draft_key"]
+                    )
+                    != draft_key
+                ):
+                    raise ValueError(
+                        "A saved contract submission "
+                        "belongs to a different draft: "
+                        f"{team_key}."
+                    )
+
+                if (
+                    str(
+                        submission[
+                            "submission_status"
+                        ]
+                    ).upper()
+                    != "DRAFT"
+                ):
+                    raise ValueError(
+                        "Every submission must still "
+                        "be in DRAFT status before "
+                        "publication."
+                    )
+
+                if int(
+                    submission[
+                        "revision_number"
+                    ]
+                ) <= 0:
+                    raise ValueError(
+                        "Every team must explicitly "
+                        "save its plan, including an "
+                        "empty plan. Unsaved team: "
+                        f"{team_key}."
+                    )
+
+            cur.execute(
+                """
+                SELECT
+                    team_key,
+                    contract_years,
+                    yahoo_player_key,
+                    source_pick_id,
+                    UPPER(source_pick_kind)
+                        AS source_pick_kind,
+                    revision_number
+                FROM
+                    nffl.post_draft_contract_decision
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND draft_key=%s
+                ORDER BY
+                    team_key,
+                    contract_years DESC
+                """,
+                (
+                    league_key,
+                    season_year,
+                    draft_key,
+                ),
+            )
+
+            decision_rows = [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+            decisions_by_team: dict[
+                str,
+                list[dict[str, Any]],
+            ] = {
+                team_key: []
+                for team_key in active_team_keys
+            }
+
+            for row in decision_rows:
+                team_key = str(
+                    row["team_key"]
+                )
+
+                if (
+                    team_key
+                    not in active_team_key_set
+                ):
+                    raise ValueError(
+                        "A contract decision belongs "
+                        "to a team outside the active "
+                        f"draft: {team_key}."
+                    )
+
+                decisions_by_team[
+                    team_key
+                ].append(row)
+
+            cur.execute(
+                """
+                SELECT
+                    selecting_team_key
+                        AS team_key,
+                    pick_id,
+                    yahoo_player_key,
+                    UPPER(pick_kind)
+                        AS pick_kind
+                FROM nffl.draft_selection
+                WHERE draft_key=%s
+                ORDER BY
+                    selecting_team_key,
+                    pick_id
+                FOR SHARE
+                """,
+                (draft_key,),
+            )
+
+            draft_rows = [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+            draft_row_by_team_player = {
+                (
+                    str(row["team_key"]),
+                    str(
+                        row["yahoo_player_key"]
+                    ),
+                ): row
+                for row in draft_rows
+                if (
+                    row["team_key"]
+                    and row["yahoo_player_key"]
+                )
+            }
+
+            cur.execute(
+                """
+                SELECT yahoo_player_key
+                FROM nffl.contract
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND status='active'
+                FOR UPDATE
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            active_contract_keys = {
+                str(row["yahoo_player_key"])
+                for row in cur.fetchall()
+                if row["yahoo_player_key"]
+            }
+
+            cur.execute(
+                """
+                SELECT
+                    team_key,
+                    yahoo_player_key
+                FROM
+                    nffl.offseason_keeper_decision
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND decision_type='FT'
+                  AND decision_status='LOCKED'
+                ORDER BY team_key
+                FOR SHARE
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            locked_ft_rows = [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+            locked_ft_team_keys = {
+                str(row["team_key"])
+                for row in locked_ft_rows
+                if row["team_key"]
+            }
+
+            locked_ft_player_keys = {
+                str(row["yahoo_player_key"])
+                for row in locked_ft_rows
+                if row["yahoo_player_key"]
+            }
+
+            selected_player_keys: set[
+                str
+            ] = set()
+
+            payload_by_team: dict[
+                str,
+                list[dict[str, Any]],
+            ] = {}
+
+            for team_key in active_team_keys:
+                submission = (
+                    submission_by_team[
+                        team_key
+                    ]
+                )
+
+                revision_number = int(
+                    submission[
+                        "revision_number"
+                    ]
+                )
+
+                allowed_years = (
+                    {3, 4}
+                    if team_key
+                    in locked_ft_team_keys
+                    else {2, 3, 4}
+                )
+
+                seen_years: set[int] = set()
+                seen_team_players: set[
+                    str
+                ] = set()
+                payload: list[
+                    dict[str, Any]
+                ] = []
+
+                for decision in (
+                    decisions_by_team[
+                        team_key
+                    ]
+                ):
+                    years = int(
+                        decision[
+                            "contract_years"
+                        ]
+                    )
+
+                    player_key = str(
+                        decision[
+                            "yahoo_player_key"
+                        ]
+                    )
+
+                    if (
+                        int(
+                            decision[
+                                "revision_number"
+                            ]
+                        )
+                        != revision_number
+                    ):
+                        raise ValueError(
+                            "A contract decision does "
+                            "not match its team's saved "
+                            f"revision: {team_key}."
+                        )
+
+                    if years not in allowed_years:
+                        raise ValueError(
+                            f"{team_key} is not "
+                            f"eligible for a {years}-year "
+                            "contract slot."
+                        )
+
+                    if years in seen_years:
+                        raise ValueError(
+                            "A team has more than one "
+                            f"{years}-year decision: "
+                            f"{team_key}."
+                        )
+
+                    if (
+                        player_key
+                        in seen_team_players
+                    ):
+                        raise ValueError(
+                            "A player appears in more "
+                            "than one contract slot for "
+                            f"{team_key}."
+                        )
+
+                    if (
+                        player_key
+                        in selected_player_keys
+                    ):
+                        raise ValueError(
+                            "A player appears in more "
+                            "than one team's new "
+                            f"contracts: {player_key}."
+                        )
+
+                    if (
+                        player_key
+                        in active_contract_keys
+                    ):
+                        raise ValueError(
+                            "A selected player already "
+                            "has an active contract: "
+                            f"{player_key}."
+                        )
+
+                    if (
+                        player_key
+                        in locked_ft_player_keys
+                    ):
+                        raise ValueError(
+                            "A selected player is "
+                            "already a locked franchise "
+                            f"tag: {player_key}."
+                        )
+
+                    source_row = (
+                        draft_row_by_team_player.get(
+                            (
+                                team_key,
+                                player_key,
+                            )
+                        )
+                    )
+
+                    if not source_row:
+                        raise ValueError(
+                            "A selected player was not "
+                            "actually drafted by the "
+                            f"team: {player_key}."
+                        )
+
+                    actual_pick_kind = str(
+                        source_row["pick_kind"]
+                    ).upper()
+
+                    if actual_pick_kind not in {
+                        "QO",
+                        "POACH",
+                        "FA",
+                    }:
+                        raise ValueError(
+                            "Only QO, POACH, and FA "
+                            "draft selections may "
+                            "receive new contracts."
+                        )
+
+                    if (
+                        str(
+                            decision[
+                                "source_pick_id"
+                            ]
+                        )
+                        != str(
+                            source_row["pick_id"]
+                        )
+                    ):
+                        raise ValueError(
+                            "A decision's source pick "
+                            "does not match the actual "
+                            f"draft pick: {player_key}."
+                        )
+
+                    if (
+                        str(
+                            decision[
+                                "source_pick_kind"
+                            ]
+                        ).upper()
+                        != actual_pick_kind
+                    ):
+                        raise ValueError(
+                            "A decision's source kind "
+                            "does not match the actual "
+                            f"draft result: {player_key}."
+                        )
+
+                    seen_years.add(years)
+                    seen_team_players.add(
+                        player_key
+                    )
+                    selected_player_keys.add(
+                        player_key
+                    )
+
+                    payload.append(
+                        {
+                            "contract_years": years,
+                            "yahoo_player_key": (
+                                player_key
+                            ),
+                            "source_pick_id": str(
+                                source_row["pick_id"]
+                            ),
+                            "source_pick_kind": (
+                                actual_pick_kind
+                            ),
+                        }
+                    )
+
+                payload_by_team[
+                    team_key
+                ] = payload
+
+            published_contract_count = 0
+
+            for team_key in active_team_keys:
+                submission = (
+                    submission_by_team[
+                        team_key
+                    ]
+                )
+
+                revision_number = int(
+                    submission[
+                        "revision_number"
+                    ]
+                )
+
+                payload = payload_by_team[
+                    team_key
+                ]
+
+                for decision in payload:
+                    player_key = str(
+                        decision[
+                            "yahoo_player_key"
+                        ]
+                    )
+
+                    years = int(
+                        decision[
+                            "contract_years"
+                        ]
+                    )
+
+                    note = (
+                        "Published from the NFFL "
+                        "post-draft contract "
+                        f"submission, revision "
+                        f"{revision_number}."
+                    )
+
+                    cur.execute(
+                        """
+                        INSERT INTO nffl.contract (
+                            league_key,
+                            season_year,
+                            team_key,
+                            yahoo_player_key,
+                            contract_years_remaining,
+                            contract_source,
+                            source_snapshot_id,
+                            status,
+                            note,
+                            created_at_utc,
+                            updated_at_utc
+                        )
+                        VALUES (
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            'post_draft_contract_submission',
+                            %s,
+                            'active',
+                            %s,
+                            now(),
+                            now()
+                        )
+                        ON CONFLICT (
+                            league_key,
+                            season_year,
+                            yahoo_player_key
+                        )
+                        DO UPDATE
+                        SET
+                            team_key=EXCLUDED.team_key,
+                            contract_years_remaining=
+                                EXCLUDED.contract_years_remaining,
+                            contract_source=
+                                EXCLUDED.contract_source,
+                            source_snapshot_id=
+                                EXCLUDED.source_snapshot_id,
+                            status='active',
+                            note=EXCLUDED.note,
+                            updated_at_utc=now()
+                        WHERE
+                            nffl.contract.status
+                            <> 'active'
+                        RETURNING yahoo_player_key
+                        """,
+                        (
+                            league_key,
+                            season_year,
+                            team_key,
+                            player_key,
+                            years,
+                            draft_key,
+                            note,
+                        ),
+                    )
+
+                    if not cur.fetchone():
+                        raise ValueError(
+                            "A new contract could not "
+                            "be written because the "
+                            "player already has an "
+                            "active contract: "
+                            f"{player_key}."
+                        )
+
+                    cur.execute(
+                        """
+                        INSERT INTO
+                            nffl.contract_history_episode (
+                                league_key,
+                                season_year,
+                                draft_key,
+                                team_key,
+                                yahoo_player_key,
+                                contract_years_awarded,
+                                source_pick_id,
+                                source_pick_kind,
+                                source_revision_number,
+                                published_at_utc,
+                                published_by
+                            )
+                        VALUES (
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            now(),
+                            %s
+                        )
+                        """,
+                        (
+                            league_key,
+                            season_year,
+                            draft_key,
+                            team_key,
+                            player_key,
+                            years,
+                            decision[
+                                "source_pick_id"
+                            ],
+                            decision[
+                                "source_pick_kind"
+                            ],
+                            revision_number,
+                            actor,
+                        ),
+                    )
+
+                    published_contract_count += 1
+
+                cur.execute(
+                    """
+                    UPDATE
+                        nffl.post_draft_contract_submission
+                    SET
+                        submission_status='PUBLISHED',
+                        published_at_utc=now(),
+                        published_by=%s,
+                        note=%s,
+                        updated_at_utc=now()
+                    WHERE league_key=%s
+                      AND season_year=%s
+                      AND draft_key=%s
+                      AND team_key=%s
+                      AND submission_status='DRAFT'
+                      AND revision_number=%s
+                    """,
+                    (
+                        actor,
+                        (
+                            "Finalized and revealed "
+                            "with all league "
+                            "submissions."
+                        ),
+                        league_key,
+                        season_year,
+                        draft_key,
+                        team_key,
+                        revision_number,
+                    ),
+                )
+
+                if cur.rowcount != 1:
+                    raise ValueError(
+                        "A team submission changed "
+                        "during publication: "
+                        f"{team_key}."
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO
+                        nffl.post_draft_contract_audit (
+                            league_key,
+                            season_year,
+                            draft_key,
+                            team_key,
+                            action_type,
+                            revision_number,
+                            action_by,
+                            action_at_utc,
+                            decision_payload,
+                            note
+                        )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        'PUBLISH',
+                        %s,
+                        %s,
+                        now(),
+                        %s::jsonb,
+                        %s
+                    )
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        draft_key,
+                        team_key,
+                        revision_number,
+                        actor,
+                        json.dumps(payload),
+                        (
+                            "Finalized and revealed "
+                            "all new post-draft "
+                            "contracts."
+                        ),
+                    ),
+                )
+
+            cur.execute(
+                """
+                UPDATE nffl.league_visibility_state
+                SET
+                    post_draft_contracts_revealed=true,
+                    post_draft_contracts_revealed_at_utc=
+                        now(),
+                    post_draft_contracts_revealed_by=%s
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND post_draft_contracts_revealed=false
+                """,
+                (
+                    actor,
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            if cur.rowcount != 1:
+                raise ValueError(
+                    "The contract visibility state "
+                    "changed during publication."
+                )
+
+        conn.commit()
+
+    return {
+        "team_count": len(
+            active_team_keys
+        ),
+        "contract_count": (
+            published_contract_count
+        ),
+    }
+
+
+def _post_draft_contracts_revealed(
+    dsn: str,
+) -> bool:
+    sql = """
+        SELECT COALESCE(
+            v.post_draft_contracts_revealed,
+            false
+        ) AS contracts_revealed
+        FROM nffl.v_active_season_context ctx
+        LEFT JOIN nffl.league_visibility_state v
+          ON v.league_key =
+             ctx.current_league_key
+         AND v.season_year =
+             ctx.current_season_year
+        LIMIT 1;
+    """
+
+    try:
+        with psycopg.connect(
+            dsn,
+            row_factory=dict_row,
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+
+                return bool(
+                    row
+                    and row[
+                        "contracts_revealed"
+                    ]
+                )
+    except Exception:
+        return False
+
+
 def _qoft_revealed(dsn: str) -> bool:
     sql = """
         SELECT COALESCE(v.qoft_revealed, false) AS qoft_revealed
@@ -1874,6 +2956,9 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     gateway_team_name = str(gateway_context.get("team_name") or "")
     acting_as_base = str(gateway_context.get("acting_as") or gateway_role)
     qoft_revealed = _qoft_revealed(dsn)
+    contracts_revealed = (
+        _post_draft_contracts_revealed(dsn)
+    )
 
     display_rows_by_team = rows_by_team
     if qoft_revealed:
@@ -1887,6 +2972,25 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
         except Exception as exc:
             st.warning(f"Could not load live roster display rows; falling back to offseason pool: {exc}")
 
+    contract_history_by_team: dict[
+        str,
+        list[dict[str, Any]],
+    ] = defaultdict(list)
+
+    if contracts_revealed:
+        try:
+            for history_row in (
+                _fetch_contract_history_rows(dsn)
+            ):
+                contract_history_by_team[
+                    str(history_row["team_key"])
+                ].append(history_row)
+        except Exception as exc:
+            st.warning(
+                "Could not load contract history: "
+                f"{exc}"
+            )
+
     if gateway_role == "commissioner":
         visible_math_rows = math_rows
         st.caption("Team Gateway: Commissioner")
@@ -1899,6 +3003,72 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     else:
         st.info("Choose your team in the Team Gateway.")
         return
+
+    if (
+        gateway_role == "commissioner"
+        and qoft_revealed
+        and not contracts_revealed
+    ):
+        st.warning(
+            "Finalize & Reveal New Contracts is "
+            "irreversible. Every team must first "
+            "save its plan, including teams making "
+            "no new contracts."
+        )
+
+        confirm_contract_publication = st.checkbox(
+            "I confirm that the draft is complete "
+            "and all team contract plans are ready.",
+            key=(
+                "nffl_finalize_new_contracts_"
+                "confirmation"
+            ),
+        )
+
+        if st.button(
+            "Finalize & Reveal New Contracts",
+            type="primary",
+            disabled=(
+                not confirm_contract_publication
+            ),
+            key=(
+                "nffl_finalize_new_contracts_"
+                "button"
+            ),
+        ):
+            try:
+                publication_result = (
+                    _publish_new_contracts(
+                        dsn,
+                        published_by=(
+                            acting_as_base
+                            or "commissioner_ui"
+                        ),
+                    )
+                )
+            except Exception as exc:
+                st.error(
+                    "New contracts were not "
+                    f"published: {exc}"
+                )
+            else:
+                st.success(
+                    "Finalized and revealed "
+                    f"{publication_result['contract_count']} "
+                    "new contracts across "
+                    f"{publication_result['team_count']} "
+                    "teams."
+                )
+                st.rerun()
+
+    elif (
+        gateway_role == "commissioner"
+        and contracts_revealed
+    ):
+        st.success(
+            "New contracts are finalized "
+            "and revealed."
+        )
 
     def _load_active_draft_team_order() -> list[str]:
         try:
@@ -1967,8 +3137,22 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
         display_team_rows = display_rows_by_team.get(team_key, [])
         has_locked_ft = team_key in locked_ft_team_keys
         is_own_team = gateway_role == "manager" and team_key == gateway_team_key
-        can_manage_qoft = gateway_role == "commissioner" or (is_own_team and not qoft_revealed)
-        can_see_qoft = gateway_role == "commissioner" or is_own_team or qoft_revealed
+        can_manage_qoft = (
+            not contracts_revealed
+            and not qoft_revealed
+            and (
+                gateway_role == "commissioner"
+                or is_own_team
+            )
+        )
+        can_see_qoft = (
+            not contracts_revealed
+            and (
+                gateway_role == "commissioner"
+                or is_own_team
+                or qoft_revealed
+            )
+        )
         acting_as = acting_as_base if gateway_role == "manager" else f"commissioner:{math['team_name']}"
 
         with tab:
@@ -2012,7 +3196,8 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
                     )
 
             if (
-                (
+                not contracts_revealed
+                and (
                     gateway_role == "commissioner"
                     or is_own_team
                 )
@@ -2060,7 +3245,7 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
                     team_rows,
                     decisions_by_team.get(team_key, {}),
                 )
-            else:
+            elif not contracts_revealed:
                 st.caption("QO/FT selections are hidden until the commissioner starts the draft.")
 
             rows_by_pos: dict[str, list[dict[str, Any]]] = {pos: [] for pos in POSITION_ORDER}
@@ -2076,3 +3261,26 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
                 st.markdown(f"#### {pos}")
                 df = _team_position_df(rows, pos, stat_meta)
                 _render_html_table(df)
+
+            if contracts_revealed:
+                st.markdown("#### Contract History")
+
+                history_rows = (
+                    contract_history_by_team.get(
+                        team_key,
+                        [],
+                    )
+                )
+
+                if history_rows:
+                    _render_html_table(
+                        _contract_history_df(
+                            history_rows
+                        )
+                    )
+                else:
+                    st.caption(
+                        "No published new-contract "
+                        "episodes are available for "
+                        "this team."
+                    )
