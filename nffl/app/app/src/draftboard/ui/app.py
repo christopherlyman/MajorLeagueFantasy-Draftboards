@@ -17,6 +17,7 @@ import extra_streamlit_components as stx
 
 from draftboard.data.picks_grid import build_picks_grid
 from draftboard.domain.clock import compute_clock_status
+from draftboard.domain.live_pick_kind import classify_live_pick_kind
 from draftboard.domain.models import Position, PickLogEntry, PickSlot, Team
 from draftboard.state.autosave import try_load_autosave, save_autosave
 from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
@@ -584,6 +585,38 @@ def _next_open_pick_id(
     return None
 
 
+def _classify_live_pick_kind(
+    state: DraftState,
+    chosen_player_key: str,
+    predraft_qos: dict[str, dict[int, str]],
+) -> str:
+    """Classify a selection from replayed live QO state."""
+    current_pick = state.picks[
+        state.clock.current_pick_id
+    ]
+
+    current_qos = _compute_current_qos_from_log(
+        predraft_qos,
+        state.pick_log,
+    )
+
+    return classify_live_pick_kind(
+        current_round=int(
+            current_pick.round_number
+        ),
+        current_team_key=str(
+            current_pick.owner_team_key
+        ),
+        chosen_player_key=chosen_player_key,
+        current_qos=current_qos,
+        active_qo_rounds=get_active_qo_rounds(),
+        team_name_by_key={
+            str(team_key): team.name
+            for team_key, team in state.teams.items()
+        },
+    )
+
+
 def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
     pick = state.picks[pick_id]
     ts = datetime.utcnow().isoformat()
@@ -968,42 +1001,15 @@ def render_pick_controls(state: DraftState) -> None:
                     st.error("Contract/FT players are not draftable.")
                     return
 
-                # ---- QO / POACH / RELEASE LOGIC (pick-driven, replay-aware) ----
-                pick_kind = "FA"
-
-                cur_pick = state.picks[state.clock.current_pick_id]
-                cur_round = int(cur_pick.round_number)
-                cur_team_key = str(cur_pick.owner_team_key)
-
-                current_qos_for_pick = _compute_current_qos_from_log(predraft_qos, state.pick_log)
-
-                current_qo_level_by_player: dict[str, int] = {}
-                current_qo_team_by_player: dict[str, str] = {}
-                for _tk, _lvls in (current_qos_for_pick or {}).items():
-                    for _lvl, _pk in (_lvls or {}).items():
-                        if _pk:
-                            current_qo_level_by_player[str(_pk)] = int(_lvl)
-                            current_qo_team_by_player[str(_pk)] = str(_tk)
-
-                if 1 <= cur_round <= get_active_qo_rounds():
-                    if chosen_player_key in current_qo_level_by_player:
-                        holder_lvl = int(current_qo_level_by_player[chosen_player_key])
-                        holder_team_key = str(current_qo_team_by_player.get(chosen_player_key, ""))
-
-                        if cur_team_key == holder_team_key and holder_lvl >= cur_round:
-                            # Own same-level QO retention and own lower-QO promotion are both legal.
-                            pick_kind = "QO"
-                        elif holder_team_key != cur_team_key and holder_lvl > cur_round:
-                            pick_kind = "POACH"
-                        else:
-                            holder_nm = state.teams.get(holder_team_key).name if holder_team_key in state.teams else holder_team_key
-                            st.error(f"Not poach-eligible. Reserved for {holder_nm} at QO{holder_lvl}.")
-                            return
-                    else:
-                        pick_kind = "FA"
-                else:
-                    pick_kind = "FA"
-                # ---- END QO / POACH / RELEASE LOGIC ----
+                try:
+                    pick_kind = _classify_live_pick_kind(
+                        state=state,
+                        chosen_player_key=chosen_player_key,
+                        predraft_qos=predraft_qos,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
 
                 _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
                 st.success(
@@ -1039,6 +1045,18 @@ def render_mobile_pick(state: DraftState) -> None:
     predraft_qo_keys, predraft_qo_level_by_player, predraft_qo_team_by_player = _load_predraft_qo_player_maps_raw(
         dsn, league_key, season_year
     )
+
+    try:
+        predraft_qos = _load_predraft_qos(
+            dsn,
+            league_key,
+            season_year,
+        )
+    except Exception as exc:
+        st.error(
+            f"Could not load predraft QOs: {exc}"
+        )
+        return
 
     current_pick_id = state.clock.current_pick_id
     current_pick = state.picks[current_pick_id]
@@ -1167,8 +1185,28 @@ def render_mobile_pick(state: DraftState) -> None:
         if chosen_player_key in protected_keeper_keys:
             st.error("Contract/FT players are not draftable.")
             return
-        _apply_pick(state, current_pick_id, chosen_player_key, pick_kind="FA")
-        st.success(f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [FA]")
+        try:
+            pick_kind = _classify_live_pick_kind(
+                state=state,
+                chosen_player_key=chosen_player_key,
+                predraft_qos=predraft_qos,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+
+        _apply_pick(
+            state,
+            current_pick_id,
+            chosen_player_key,
+            pick_kind=pick_kind,
+        )
+        st.success(
+            f"Picked "
+            f"{state.players[chosen_player_key].name} "
+            f"at {state.clock.current_pick_id} "
+            f"[{pick_kind}]"
+        )
 
 def _build_players_df(
     players: list["Player"],
