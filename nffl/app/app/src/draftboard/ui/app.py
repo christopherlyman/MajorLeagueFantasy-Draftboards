@@ -585,6 +585,54 @@ def _next_open_pick_id(
     return None
 
 
+# NFFL_AUTOPICK_TARGET_LEGALITY_START
+def _classify_pick_kind_for_context(
+    *,
+    state: DraftState,
+    current_round: int,
+    current_team_key: str,
+    chosen_player_key: str,
+    predraft_qos: dict[str, dict[int, str]],
+    current_qos=None,
+    active_qo_rounds: int | None = None,
+) -> str:
+    """
+    Classify one player using the canonical live QO rules for an
+    explicitly supplied draft round and team.
+
+    The normal picker can calculate QO state on demand. Bulk queue
+    validation supplies one already-replayed QO state and reuses it.
+    """
+    # NFFL_AUTOPICK_QO_REPLAY_CACHE
+    effective_current_qos = (
+        current_qos
+        if current_qos is not None
+        else _compute_current_qos_from_log(
+            predraft_qos,
+            state.pick_log,
+        )
+    )
+
+    # NFFL_AUTOPICK_QO_ROUNDS_CACHE
+    effective_active_qo_rounds = int(
+        active_qo_rounds
+        if active_qo_rounds is not None
+        else get_active_qo_rounds()
+    )
+
+    return classify_live_pick_kind(
+        current_round=int(current_round),
+        current_team_key=str(current_team_key),
+        chosen_player_key=str(chosen_player_key),
+        current_qos=effective_current_qos,
+        active_qo_rounds=effective_active_qo_rounds,
+        team_name_by_key={
+            str(team_key): team.name
+            for team_key, team in state.teams.items()
+        },
+    )
+
+
 def _classify_live_pick_kind(
     state: DraftState,
     chosen_player_key: str,
@@ -595,26 +643,16 @@ def _classify_live_pick_kind(
         state.clock.current_pick_id
     ]
 
-    current_qos = _compute_current_qos_from_log(
-        predraft_qos,
-        state.pick_log,
-    )
-
-    return classify_live_pick_kind(
-        current_round=int(
-            current_pick.round_number
-        ),
+    return _classify_pick_kind_for_context(
+        state=state,
+        current_round=int(current_pick.round_number),
         current_team_key=str(
             current_pick.owner_team_key
         ),
         chosen_player_key=chosen_player_key,
-        current_qos=current_qos,
-        active_qo_rounds=get_active_qo_rounds(),
-        team_name_by_key={
-            str(team_key): team.name
-            for team_key, team in state.teams.items()
-        },
+        predraft_qos=predraft_qos,
     )
+# NFFL_AUTOPICK_TARGET_LEGALITY_END
 
 
 def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
@@ -711,6 +749,649 @@ def _load_pick_dropdown_protected_keeper_keys(
         with conn.cursor() as cur:
             cur.execute(sql, (league_key, season_year, league_key, season_year))
             return {str(row[0]) for row in cur.fetchall() if row and row[0]}
+
+
+
+# NFFL_DRAFT_AUTOPICK_PANEL_START
+def _render_draft_autopick_panel(
+    *,
+    state: DraftState,
+    dsn: str | None,
+    player_keys: list[str],
+    fmt_player,
+    predraft_qos: dict[str, dict[int, str]],
+) -> None:
+    """
+    Shared Draft Queue & Auto-Pick controls.
+
+    Managers may manage only their own next open pick.
+    Commissioners may manage any open team/pick.
+
+    Auto-Pick execution is handled only by the guarded database
+    executor invoked by the Discord bot.
+    """
+    gateway = st.session_state.get("nffl_gateway_context") or {}
+
+    role = str(
+        gateway.get("role") or ""
+    ).strip().lower()
+
+    if role not in {"commissioner", "manager"}:
+        return
+
+    manager_team_key = str(
+        gateway.get("team_key") or ""
+    ).strip()
+
+    if role == "manager" and not manager_team_key:
+        return
+
+    if not dsn:
+        st.error(
+            "Draft queue unavailable: "
+            "Postgres DSN is not configured."
+        )
+        return
+
+    import os
+    import psycopg
+
+    draft_key = (
+        os.environ.get("DRAFTBOARD_DRAFT_KEY")
+        or "nffl_2026_preseason"
+    )
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        v.pick_id,
+                        v.current_owner_team_key,
+                        v.round_number,
+                        v.slot_number
+                    FROM nffl.v_draft_board_current v
+                    WHERE v.draft_key = %s
+                      AND v.selected_at_utc IS NULL
+                      AND COALESCE(
+                          v.placeholder_source,
+                          ''
+                      ) NOT IN ('CONTRACT', 'FT')
+                    ORDER BY
+                        v.round_number,
+                        v.slot_number
+                    """,
+                    (draft_key,),
+                )
+                open_rows = cur.fetchall()
+
+    except Exception as exc:
+        st.error(
+            f"Could not load draft queue: {exc}"
+        )
+        return
+
+    open_meta = {
+        str(row[0]): {
+            "team_key": str(row[1]),
+            "round_number": int(row[2]),
+            "slot_number": int(row[3]),
+        }
+        for row in open_rows
+        if row and row[0] and row[1]
+    }
+
+    if role == "manager":
+        open_meta = {
+            pick_id: metadata
+            for pick_id, metadata in open_meta.items()
+            if str(metadata["team_key"]) == manager_team_key
+        }
+
+    open_pick_ids = list(open_meta)
+
+    if not open_pick_ids:
+        return
+
+    current_pick_id = str(
+        getattr(
+            state.clock,
+            "current_pick_id",
+            "",
+        )
+        or ""
+    )
+
+    default_pick_id = (
+        current_pick_id
+        if (
+            role == "commissioner"
+            and current_pick_id in open_meta
+        )
+        else open_pick_ids[0]
+    )
+
+    if role == "commissioner":
+        current_widget_target = st.session_state.get(
+            "draft_autopick_target_pick"
+        )
+
+        if (
+            current_widget_target is not None
+            and current_widget_target not in open_pick_ids
+        ):
+            st.session_state[
+                "draft_autopick_target_pick"
+            ] = default_pick_id
+
+    def _fmt_target(
+        pick_id: str,
+    ) -> str:
+        team_key = open_meta[pick_id]["team_key"]
+        team = state.teams.get(team_key)
+
+        return (
+            f"{pick_id} — "
+            f"{team.name if team else team_key}"
+        )
+
+    with st.expander(
+        "Draft Queue & Auto-Pick",
+        expanded=False,
+    ):
+        st.caption(
+            "Rank up to five players. Auto-Pick is one-shot "
+            "and applies only to the exact pick shown here."
+        )
+
+        if role == "commissioner":
+            target_pick_id = st.selectbox(
+                "Target pick",
+                options=open_pick_ids,
+                index=open_pick_ids.index(
+                    default_pick_id
+                ),
+                format_func=_fmt_target,
+                key="draft_autopick_target_pick",
+            )
+        else:
+            target_pick_id = open_pick_ids[0]
+
+            manager_target_team = state.teams.get(
+                manager_team_key
+            )
+
+            manager_target_name = (
+                manager_target_team.name
+                if manager_target_team
+                else manager_team_key
+            )
+
+            st.caption(
+                f"Your next open pick: "
+                f"{target_pick_id} — "
+                f"{manager_target_name}"
+            )
+
+        team_key = str(
+            open_meta[target_pick_id]["team_key"]
+        )
+
+        # Defense in depth against stale or manipulated state.
+        if (
+            role == "manager"
+            and team_key != manager_team_key
+        ):
+            st.error(
+                "You may manage only your own draft queue."
+            )
+            return
+
+        try:
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                            enabled,
+                            armed_pick_id
+                        FROM nffl.draft_autopick_control
+                        WHERE draft_key = %s
+                          AND team_key = %s
+                        """,
+                        (
+                            draft_key,
+                            team_key,
+                        ),
+                    )
+                    control_row = cur.fetchone()
+
+                    cur.execute(
+                        """
+                        SELECT
+                            queue_rank,
+                            yahoo_player_key
+                        FROM nffl.draft_autopick_queue
+                        WHERE draft_key = %s
+                          AND team_key = %s
+                        ORDER BY queue_rank
+                        """,
+                        (
+                            draft_key,
+                            team_key,
+                        ),
+                    )
+
+                    queue_rows = [
+                        (
+                            int(row[0]),
+                            str(row[1]),
+                        )
+                        for row in cur.fetchall()
+                    ]
+
+        except Exception as exc:
+            st.error(
+                f"Could not load queue settings: {exc}"
+            )
+            return
+
+        enabled = (
+            bool(control_row[0])
+            if control_row
+            else False
+        )
+
+        saved_armed_pick = (
+            str(control_row[1])
+            if control_row
+            and control_row[1]
+            else ""
+        )
+
+        # Reconcile the saved queue against what is legal for
+        # THIS selected future pick, not merely the current clock.
+        target_round_number = int(
+            open_meta[target_pick_id]["round_number"]
+        )
+
+        # Replay live QO state ONCE for the whole queue render.
+        # Previously this happened once per available player.
+        target_current_qos = _compute_current_qos_from_log(
+            predraft_qos,
+            state.pick_log,
+        )
+
+        # get_active_qo_rounds() loads the DB-backed league profile.
+        # Resolve it ONCE here rather than once per available player.
+        target_active_qo_rounds = int(
+            get_active_qo_rounds()
+        )
+
+        target_legal_player_keys: list[str] = []
+
+        for candidate_player_key in player_keys:
+            candidate_player_key = str(
+                candidate_player_key
+            )
+
+            try:
+                _classify_pick_kind_for_context(
+                    state=state,
+                    current_round=target_round_number,
+                    current_team_key=team_key,
+                    chosen_player_key=(
+                        candidate_player_key
+                    ),
+                    predraft_qos=predraft_qos,
+                    current_qos=target_current_qos,
+                    active_qo_rounds=(
+                        target_active_qo_rounds
+                    ),
+                )
+            except ValueError:
+                # A currently reserved QO that cannot legally be
+                # selected at this target round/team is excluded.
+                continue
+
+            target_legal_player_keys.append(
+                candidate_player_key
+            )
+
+        target_legal_player_key_set = set(
+            target_legal_player_keys
+        )
+
+        saved_queue_player_keys = [
+            player_key
+            for _rank, player_key in queue_rows
+        ]
+
+        cleaned_queue_player_keys = [
+            player_key
+            for player_key in saved_queue_player_keys
+            if player_key in target_legal_player_key_set
+        ][:5]
+
+        removed_saved_count = (
+            len(saved_queue_player_keys)
+            - len(cleaned_queue_player_keys)
+        )
+
+        # Compact survivors upward so stale #1/#3 entries do not
+        # leave holes in the next queue.
+        existing = {
+            rank: player_key
+            for rank, player_key in enumerate(
+                cleaned_queue_player_keys,
+                start=1,
+            )
+        }
+
+        if removed_saved_count:
+            st.caption(
+                f"Removed {removed_saved_count} unavailable "
+                "saved queue "
+                f"{'player' if removed_saved_count == 1 else 'players'} "
+                f"for {target_pick_id}. Saving the queue will "
+                "persist this cleanup."
+            )
+
+        status = (
+            f"ARMED for {saved_armed_pick}"
+            if enabled
+            else "OFF"
+        )
+
+        st.caption(
+            f"Status: {status}. "
+            "A successful auto-pick automatically turns it OFF."
+        )
+
+        # NFFL_AUTOPICK_POPULATED_QUEUE_START
+        # Legality has already been calculated once above.
+        # Reuse the same populated options list for all five ranks.
+        columns = st.columns(5)
+        edited = []
+
+        def _fmt_queue(
+            player_key,
+        ):
+            if player_key is None:
+                return "— empty —"
+
+            if player_key in state.players:
+                return fmt_player(
+                    player_key
+                )
+
+            return str(player_key)
+
+        queue_options: list[str | None] = [
+            None,
+            *target_legal_player_keys,
+        ]
+
+        for rank, column in enumerate(
+            columns,
+            start=1,
+        ):
+            existing_key = existing.get(
+                rank
+            )
+
+            slot_key = (
+                "draft_autopick_slot_"
+                f"{target_pick_id}_"
+                f"{rank}"
+            )
+
+            # Discard stale browser widget state if that player
+            # is no longer legal for this exact target pick.
+            widget_value = st.session_state.get(
+                slot_key
+            )
+
+            if (
+                widget_value is not None
+                and widget_value not in queue_options
+            ):
+                st.session_state.pop(
+                    slot_key,
+                    None,
+                )
+
+            with column:
+                edited.append(
+                    st.selectbox(
+                        f"#{rank}",
+                        options=queue_options,
+                        index=(
+                            queue_options.index(
+                                existing_key
+                            )
+                            if existing_key in queue_options
+                            else 0
+                        ),
+                        format_func=_fmt_queue,
+                        key=slot_key,
+                    )
+                )
+
+        enable_requested = st.toggle(
+            "Enable Auto-pick",
+            value=(
+                enabled
+                and saved_armed_pick
+                == target_pick_id
+            ),
+            key=(
+                "draft_autopick_enable_"
+                f"{target_pick_id}"
+            ),
+        )
+
+        save_settings = st.button(
+            "Save Queue Settings",
+            type="primary",
+            use_container_width=True,
+            key=(
+                "draft_autopick_save_"
+                f"{target_pick_id}"
+            ),
+        )
+        # NFFL_AUTOPICK_POPULATED_QUEUE_END
+
+        if save_settings:
+            queued = [
+                str(player_key)
+                for player_key in edited
+                if player_key
+            ]
+
+            if len(queued) != len(
+                set(queued)
+            ):
+                st.error(
+                    "The same player cannot "
+                    "appear twice in the queue."
+                )
+                return
+
+            if (
+                enable_requested
+                and not queued
+            ):
+                st.error(
+                    "Add at least one player "
+                    "before enabling the queue."
+                )
+                return
+
+            try:
+                with psycopg.connect(
+                    dsn
+                ) as conn:
+                    with conn.cursor() as cur:
+
+                        cur.execute(
+                            """
+                            INSERT INTO
+                                nffl.draft_autopick_control (
+                                    draft_key,
+                                    team_key,
+                                    enabled,
+                                    one_shot,
+                                    armed_pick_id,
+                                    updated_at_utc,
+                                    updated_by
+                                )
+                            VALUES (
+                                %s,
+                                %s,
+                                %s,
+                                true,
+                                %s,
+                                now(),
+                                'draft_queue_ui'
+                            )
+                            ON CONFLICT (
+                                draft_key,
+                                team_key
+                            )
+                            DO UPDATE SET
+                                enabled =
+                                    EXCLUDED.enabled,
+                                one_shot = true,
+                                armed_pick_id =
+                                    EXCLUDED.armed_pick_id,
+                                updated_at_utc = now(),
+                                updated_by =
+                                    'draft_queue_ui'
+                            """,
+                            (
+                                draft_key,
+                                team_key,
+                                enable_requested,
+                                (
+                                    target_pick_id
+                                    if enable_requested
+                                    else None
+                                ),
+                            ),
+                        )
+
+                        cur.execute(
+                            """
+                            DELETE FROM
+                                nffl.draft_autopick_queue
+                            WHERE draft_key = %s
+                              AND team_key = %s
+                            """,
+                            (
+                                draft_key,
+                                team_key,
+                            ),
+                        )
+
+                        for (
+                            rank,
+                            player_key,
+                        ) in enumerate(
+                            queued,
+                            start=1,
+                        ):
+                            cur.execute(
+                                """
+                                INSERT INTO
+                                    nffl.draft_autopick_queue (
+                                        draft_key,
+                                        team_key,
+                                        queue_rank,
+                                        yahoo_player_key
+                                    )
+                                VALUES (
+                                    %s,
+                                    %s,
+                                    %s,
+                                    %s
+                                )
+                                """,
+                                (
+                                    draft_key,
+                                    team_key,
+                                    rank,
+                                    player_key,
+                                ),
+                            )
+
+                        cur.execute(
+                            """
+                            INSERT INTO
+                                nffl.draft_autopick_audit (
+                                    draft_key,
+                                    team_key,
+                                    pick_id,
+                                    result,
+                                    detail,
+                                    initiated_by
+                                )
+                            VALUES (
+                                %s,
+                                %s,
+                                %s,
+                                'SETTINGS_SAVED',
+                                %s,
+                                'draft_queue_ui'
+                            )
+                            """,
+                            (
+                                draft_key,
+                                team_key,
+                                target_pick_id,
+                                (
+                                    "queue_size="
+                                    f"{len(queued)};"
+                                    "enabled="
+                                    f"{enable_requested}"
+                                ),
+                            ),
+                        )
+
+                    conn.commit()
+
+            except Exception as exc:
+                st.error(
+                    f"Could not save queue "
+                    f"settings: {exc}"
+                )
+                return
+
+            st.success(
+                "Queue settings saved."
+            )
+            st.rerun()
+
+        if (
+            enabled
+            and saved_armed_pick == target_pick_id
+        ):
+            if current_pick_id == target_pick_id:
+                st.info(
+                    "Auto-Pick is armed for this pick. "
+                    "The unattended executor will use the "
+                    "highest-ranked legal player remaining "
+                    "in your queue."
+                )
+            else:
+                st.info(
+                    f"Armed for {target_pick_id}; "
+                    f"currently waiting on "
+                    f"{current_pick_id}."
+                )
+
+# NFFL_DRAFT_AUTOPICK_PANEL_END
 
 
 def render_pick_controls(state: DraftState) -> None:
@@ -1021,6 +1702,16 @@ def render_pick_controls(state: DraftState) -> None:
                 st.session_state.pop(search_input_key, None)
                 st.session_state.pop(search_applied_key, None)
                 st.rerun()
+
+    # NFFL_COMMISSIONER_AUTOPICK_PILOT_CALL
+    _render_draft_autopick_panel(
+        state=state,
+        dsn=dsn,
+        player_keys=player_keys,
+        fmt_player=fmt_player,
+        predraft_qos=predraft_qos,
+    )
+
 def render_mobile_pick(state: DraftState) -> None:
     if is_draft_complete(state):
         return

@@ -132,7 +132,12 @@ def run_database_check(settings: Settings) -> None:
                 current_user,
                 'nffl.draft_selection',
                 'DELETE'
-            ) AS can_delete
+            ) AS can_delete,
+            has_function_privilege(
+                current_user,
+                'nffl.execute_armed_autopick(text)',
+                'EXECUTE'
+            ) AS can_execute_autopick
     """
 
     with connect(settings) as connection:
@@ -175,6 +180,11 @@ def run_database_check(settings: Settings) -> None:
             "The bot unexpectedly has draft write access."
         )
 
+    if not result["can_execute_autopick"]:
+        raise RuntimeError(
+            "The bot cannot execute the guarded auto-pick function."
+        )
+
     print("DATABASE_CONNECTION=PASS")
     print(
         f"database_user={result['database_user']}"
@@ -182,7 +192,62 @@ def run_database_check(settings: Settings) -> None:
     print(f"board_rows={result['board_rows']}")
     print("DRAFT_READ_ACCESS=PASS")
     print("DRAFT_WRITE_ACCESS=DENIED")
+    print("AUTOPICK_EXECUTE_ACCESS=PASS")
 
+
+
+# NFFL_UNATTENDED_AUTOPICK_START
+def run_autopick_check(
+    settings: Settings,
+) -> dict[str, Any]:
+    """
+    Ask PostgreSQL whether the team currently on the clock has
+    an armed queue.
+
+    ALL draft-order, player-availability, QO/POACH, locking,
+    state-update, clock, and one-shot logic lives in PostgreSQL.
+    The bot does not duplicate any drafting rules.
+    """
+    query = """
+        SELECT
+            result_status,
+            executed_pick_id,
+            selecting_team_key,
+            selected_player_key,
+            selected_queue_rank,
+            selected_pick_kind,
+            next_pick_id
+        FROM nffl.execute_armed_autopick(%s)
+    """
+
+    with connect(settings) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (settings.draft_key,),
+            )
+            result = cursor.fetchone()
+
+        connection.commit()
+
+    if result is None:
+        raise RuntimeError(
+            "Auto-pick executor returned no result."
+        )
+
+    if result["result_status"] == "EXECUTED":
+        print(
+            "AUTOPICK_EXECUTED "
+            f"pick_id={result['executed_pick_id']} "
+            f"team_key={result['selecting_team_key']} "
+            f"player_key={result['selected_player_key']} "
+            f"queue_rank={result['selected_queue_rank']} "
+            f"pick_kind={result['selected_pick_kind']} "
+            f"next_pick_id={result['next_pick_id']}"
+        )
+
+    return result
+# NFFL_UNATTENDED_AUTOPICK_END
 
 def fetch_one(
     cursor: psycopg.Cursor,
@@ -727,6 +792,11 @@ def run_runtime() -> None:
         poll_started = time.monotonic()
 
         try:
+            # NFFL_UNATTENDED_AUTOPICK_POLL_CALL
+            run_autopick_check(settings)
+
+            # Build the snapshot AFTER any successful auto-pick so
+            # the existing Discord announcement engine sees it.
             snapshot = build_event_snapshot(settings)
 
             announcements = build_announcements(
