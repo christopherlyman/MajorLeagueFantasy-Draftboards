@@ -464,26 +464,33 @@ def _sync_qo_placeholders(state: DraftState, predraft: dict[str, dict[int, str]]
 
 # NFFL_DRAFT_SELECTION_DB_WRITE_HELPER_START
 
-def _record_draft_selection_to_db(
+def _submit_draft_pick_atomic(
     *,
+    state: DraftState,
     pick_id: str,
-    selecting_team_key: str,
     yahoo_player_key: str,
-    pick_kind: str,
-    selected_at_utc: str,
-) -> set[str]:
+    expected_pick_kind: str,
+    initiated_by: str = "draftboard_manual",
+) -> dict[str, str | None]:
     """
-    Write a real draft selection and return canonical occupied pick IDs.
+    Submit one manual draft pick through the canonical atomic
+    PostgreSQL executor.
 
-    The selection write and board-occupancy read share one transaction.
-    If either operation fails, local Streamlit/autosave state is untouched.
+    PostgreSQL owns the real selection, legality enforcement,
+    concurrency protection, pick-log mutation, clock advancement,
+    and canonical DraftState persistence.
+
+    expected_pick_kind is the existing Python preflight result.
+    PostgreSQL independently classifies the pick, and this transaction
+    is rolled back if the two classifiers disagree.
     """
-    import os
-    import psycopg
-
     dsn = get_postgres_dsn()
+
     if not dsn:
-        raise RuntimeError("Cannot record draft selection: POSTGRES_DSN / MLF_POSTGRES_DSN is not configured.")
+        raise RuntimeError(
+            "Cannot submit draft pick: "
+            "POSTGRES_DSN / MLF_POSTGRES_DSN is not configured."
+        )
 
     draft_key = (
         os.environ.get("DRAFTBOARD_DRAFT_KEY")
@@ -491,98 +498,153 @@ def _record_draft_selection_to_db(
     )
 
     pk = str(pick_id or "").strip()
-    tk = str(selecting_team_key or "").strip()
     ypk = str(yahoo_player_key or "").strip()
-    kind = str(pick_kind or "FA").strip().upper()
-    ts = str(selected_at_utc or "").strip()
+    kind = str(
+        expected_pick_kind or "FA"
+    ).strip().upper()
 
-    if not pk or not tk or not ypk:
+    if not pk or not ypk:
         raise RuntimeError(
-            f"Cannot record draft selection: missing pick/team/player "
-            f"(pick_id={pk!r}, selecting_team_key={tk!r}, yahoo_player_key={ypk!r})."
+            "Cannot submit draft pick: "
+            f"missing pick/player "
+            f"(pick_id={pk!r}, yahoo_player_key={ypk!r})."
         )
 
     if kind not in {"FA", "QO", "POACH"}:
-        kind = "FA"
+        raise RuntimeError(
+            "Cannot submit draft pick: "
+            f"invalid expected pick kind {kind!r}."
+        )
+
+    pick = state.picks.get(pk)
+
+    if pick is None:
+        raise RuntimeError(
+            f"Cannot submit draft pick: "
+            f"pick {pk!r} is missing from DraftState."
+        )
+
+    team_key = str(
+        getattr(pick, "owner_team_key", "") or ""
+    ).strip()
+
+    if not team_key:
+        raise RuntimeError(
+            f"Cannot submit draft pick: "
+            f"pick {pk!r} has no owner team."
+        )
+
+    league_key = str(get_league_key())
+    season_year = int(get_season_year())
+
+    sql = """
+        SELECT
+            result_status,
+            executed_pick_id,
+            selecting_team_key,
+            selected_player_key,
+            selected_pick_kind,
+            next_pick_id,
+            new_state_sha256
+        FROM nffl.submit_draft_pick_atomic(
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s,
+            %s
+        )
+    """
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            # Avoid relying on an unknown unique constraint shape.
-            # UI guards already prevent overwriting a used pick.
             cur.execute(
-                """
-                DELETE FROM nffl.draft_selection
-                WHERE draft_key = %s
-                  AND pick_id = %s
-                """,
-                (draft_key, pk),
-            )
-            cur.execute(
-                """
-                INSERT INTO nffl.draft_selection (
+                sql,
+                (
                     draft_key,
-                    pick_id,
-                    selecting_team_key,
-                    yahoo_player_key,
-                    pick_kind,
-                    selected_at_utc,
-                    selected_by,
-                    note
-                )
-                VALUES (
-                    %s, %s, %s, %s, %s, %s::timestamp, NULL, NULL
-                )
-                """,
-                (draft_key, pk, tk, ypk, kind, ts),
+                    league_key,
+                    season_year,
+                    pk,
+                    team_key,
+                    ypk,
+                    initiated_by,
+                ),
             )
 
-            # Read canonical occupancy before committing. PostgreSQL
-            # exposes this transaction's new selection through the view.
-            cur.execute(
-                """
-                SELECT pick_id
-                FROM nffl.v_draft_board_current
-                WHERE draft_key = %s
-                  AND (
-                        selected_at_utc IS NOT NULL
-                        OR placeholder_source IN ('CONTRACT', 'FT')
-                      )
-                """,
-                (draft_key,),
+            row = cur.fetchone()
+
+        if row is None:
+            raise RuntimeError(
+                "Atomic draft executor returned no result."
             )
 
-            occupied_pick_ids = {
-                str(row[0])
-                for row in cur.fetchall()
-                if row and row[0]
-            }
+        result = {
+            "result_status": (
+                str(row[0]) if row[0] is not None else None
+            ),
+            "executed_pick_id": (
+                str(row[1]) if row[1] is not None else None
+            ),
+            "selecting_team_key": (
+                str(row[2]) if row[2] is not None else None
+            ),
+            "selected_player_key": (
+                str(row[3]) if row[3] is not None else None
+            ),
+            "selected_pick_kind": (
+                str(row[4]) if row[4] is not None else None
+            ),
+            "next_pick_id": (
+                str(row[5]) if row[5] is not None else None
+            ),
+            "new_state_sha256": (
+                str(row[6]) if row[6] is not None else None
+            ),
+        }
 
-            if pk not in occupied_pick_ids:
-                raise RuntimeError(
-                    "Cannot record draft selection: canonical board view "
-                    f"did not expose recorded pick {pk!r}."
-                )
+        if result["result_status"] != "EXECUTED":
+            raise RuntimeError(
+                "Atomic draft executor did not return EXECUTED: "
+                f"{result['result_status']!r}."
+            )
 
-        conn.commit()
+        if result["executed_pick_id"] != pk:
+            raise RuntimeError(
+                "Atomic draft executor returned unexpected pick: "
+                f"{result['executed_pick_id']!r}."
+            )
 
-    return occupied_pick_ids
+        if result["selecting_team_key"] != team_key:
+            raise RuntimeError(
+                "Atomic draft executor returned unexpected team: "
+                f"{result['selecting_team_key']!r}."
+            )
 
-# NFFL_DRAFT_SELECTION_DB_WRITE_HELPER_END
+        if result["selected_player_key"] != ypk:
+            raise RuntimeError(
+                "Atomic draft executor returned unexpected player: "
+                f"{result['selected_player_key']!r}."
+            )
+
+        actual_kind = str(
+            result["selected_pick_kind"] or ""
+        ).upper()
+
+        if actual_kind != kind:
+            raise RuntimeError(
+                "Manual pick classifier mismatch: "
+                f"Python expected {kind!r}, "
+                f"PostgreSQL returned {actual_kind!r}."
+            )
+
+        # All assertions occur inside the connection context.
+        # Any mismatch above raises and rolls the transaction back.
+
+    return result
 
 
-def _next_open_pick_id(
-    pick_order: list[str],
-    current_pick_id: str,
-    occupied_pick_ids: set[str],
-) -> str | None:
-    """Return the first canonical unoccupied pick after the current pick."""
-    current_index = pick_order.index(current_pick_id)
-
-    for candidate_pick_id in pick_order[current_index + 1:]:
-        if candidate_pick_id not in occupied_pick_ids:
-            return candidate_pick_id
-
-    return None
+# NFFL_ATOMIC_MANUAL_PICK_HELPER_END
 
 
 # NFFL_AUTOPICK_TARGET_LEGALITY_START
@@ -655,61 +717,39 @@ def _classify_live_pick_kind(
 # NFFL_AUTOPICK_TARGET_LEGALITY_END
 
 
-def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
-    pick = state.picks[pick_id]
-    ts = datetime.utcnow().isoformat()
+def _apply_pick(
+    state: DraftState,
+    pick_id: str,
+    player_key: str,
+    pick_kind: str = "FA",
+) -> dict[str, str | None]:
+    """
+    Commit one manual pick through the canonical atomic executor.
 
-    player = state.players[player_key]
+    Do not mutate DraftState locally here. PostgreSQL updates
+    public.draftboard_state atomically. The caller reruns Streamlit,
+    and ensure_initialized() reloads the changed state by SHA.
+    """
+    pk = str(pick_id or "").strip()
+    ypk = str(player_key or "").strip()
 
-    # NFFL_DRAFT_SELECTION_DB_WRITE_CALL_START
-    # Write canonical DB truth before mutating local/autosave state.
-    occupied_pick_ids = _record_draft_selection_to_db(
-        pick_id=pick.pick_id,
-        selecting_team_key=pick.owner_team_key,
-        yahoo_player_key=player.player_key,
-        pick_kind=pick_kind,
-        selected_at_utc=ts,
-    )
-    # NFFL_DRAFT_SELECTION_DB_WRITE_CALL_END
-
-    pick.selected_player_key = player_key
-    pick.selected_ts_iso = ts
-    state.pick_log.append(
-        PickLogEntry(
-            event_id=str(uuid4()),
-            pick_id=pick.pick_id,
-            owner_team_key=pick.owner_team_key,
-            player_key=player.player_key,
-            player_name=player.name,
-            primary_position=player.primary_position if isinstance(player.primary_position, Position) else Position(str(player.primary_position)),
-            pick_kind=pick_kind,
-            ts_iso=ts,
+    if pk not in state.picks:
+        raise RuntimeError(
+            f"Cannot submit draft pick: unknown pick {pk!r}."
         )
+
+    if ypk not in state.players:
+        raise RuntimeError(
+            f"Cannot submit draft pick: unknown player {ypk!r}."
+        )
+
+    return _submit_draft_pick_atomic(
+        state=state,
+        pick_id=pk,
+        yahoo_player_key=ypk,
+        expected_pick_kind=pick_kind,
+        initiated_by="draftboard_manual",
     )
-
-    next_pick_id = _next_open_pick_id(
-        state.pick_order,
-        pick.pick_id,
-        occupied_pick_ids,
-    )
-
-    if next_pick_id is not None:
-        state.clock.current_pick_id = next_pick_id
-
-        if bool(getattr(state.clock, "auto_advance", True)):
-            from draftboard.domain.clock import start_pick_clock
-            state.clock.pick_started_ts_iso = start_pick_clock()
-            state.clock.pick_paused_ts_iso = None
-            state.clock.elapsed_paused_seconds = 0
-            state.clock.is_running = True
-    else:
-        state.clock.is_running = False
-        state.clock.pick_started_ts_iso = None
-        state.clock.pick_paused_ts_iso = None
-        state.clock.elapsed_paused_seconds = 0
-
-    save_autosave(state)
-
 
 
 def _load_pick_dropdown_protected_keeper_keys(
@@ -1692,9 +1732,25 @@ def render_pick_controls(state: DraftState) -> None:
                     st.error(str(exc))
                     return
 
-                _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
+                result = _apply_pick(
+                    state,
+                    state.clock.current_pick_id,
+                    chosen_player_key,
+                    pick_kind=pick_kind,
+                )
+
+                executed_pick_id = str(
+                    result["executed_pick_id"] or ""
+                )
+                selected_pick_kind = str(
+                    result["selected_pick_kind"] or ""
+                )
+
                 st.success(
-                    f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [{pick_kind}]"
+                    f"Picked "
+                    f"{state.players[chosen_player_key].name} "
+                    f"at {executed_pick_id} "
+                    f"[{selected_pick_kind}]"
                 )
 
                 # Clear selection/search for THIS pick + rerun so UI updates immediately
@@ -1886,18 +1942,35 @@ def render_mobile_pick(state: DraftState) -> None:
             st.error(str(exc))
             return
 
-        _apply_pick(
+        result = _apply_pick(
             state,
             current_pick_id,
             chosen_player_key,
             pick_kind=pick_kind,
         )
+
+        executed_pick_id = str(
+            result["executed_pick_id"] or ""
+        )
+        selected_pick_kind = str(
+            result["selected_pick_kind"] or ""
+        )
+
         st.success(
             f"Picked "
             f"{state.players[chosen_player_key].name} "
-            f"at {state.clock.current_pick_id} "
-            f"[{pick_kind}]"
+            f"at {executed_pick_id} "
+            f"[{selected_pick_kind}]"
         )
+
+        st.session_state.pop(
+            "mobile_selected_player_key",
+            None,
+        )
+
+        # The atomic executor changed the canonical state SHA.
+        # Rerun so ensure_initialized() immediately reloads it.
+        st.rerun()
 
 def _build_players_df(
     players: list["Player"],
