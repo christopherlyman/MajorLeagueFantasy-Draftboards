@@ -15,6 +15,7 @@ from event_engine import (
     Announcement,
     DeliveryState,
     announcement_as_dict,
+    format_draft_clock_announcement,
     format_draft_pick_announcement,
     format_draft_start_announcement,
     format_lottery_announcement,
@@ -137,7 +138,12 @@ def run_database_check(settings: Settings) -> None:
                 current_user,
                 'nffl.execute_armed_autopick(text)',
                 'EXECUTE'
-            ) AS can_execute_autopick
+            ) AS can_execute_autopick,
+            has_function_privilege(
+                current_user,
+                'nffl.process_draft_clock(text)',
+                'EXECUTE'
+            ) AS can_execute_clock
     """
 
     with connect(settings) as connection:
@@ -185,6 +191,11 @@ def run_database_check(settings: Settings) -> None:
             "The bot cannot execute the guarded auto-pick function."
         )
 
+    if not result["can_execute_clock"]:
+        raise RuntimeError(
+            "The bot cannot execute the guarded draft-clock function."
+        )
+
     print("DATABASE_CONNECTION=PASS")
     print(
         f"database_user={result['database_user']}"
@@ -193,7 +204,62 @@ def run_database_check(settings: Settings) -> None:
     print("DRAFT_READ_ACCESS=PASS")
     print("DRAFT_WRITE_ACCESS=DENIED")
     print("AUTOPICK_EXECUTE_ACCESS=PASS")
+    print("CLOCK_EXECUTE_ACCESS=PASS")
 
+
+
+# NFFL_DRAFT_CLOCK_PROCESSOR_START
+def run_clock_check(
+    settings: Settings,
+) -> dict[str, Any]:
+    """
+    Ask PostgreSQL to process the authoritative draft clock.
+
+    Reminder thresholds, pause/resume accounting, expiration,
+    catch-up, locking, and clock handoff all remain in PostgreSQL.
+    """
+    query = """
+        SELECT
+            result_status,
+            active_pick_id,
+            elapsed_seconds,
+            events_created,
+            expired_count,
+            next_pick_id,
+            state_sha256
+        FROM nffl.process_draft_clock(%s)
+    """
+
+    with connect(settings) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (settings.draft_key,),
+            )
+            result = cursor.fetchone()
+
+        connection.commit()
+
+    if result is None:
+        raise RuntimeError(
+            "Draft-clock processor returned no result."
+        )
+
+    events_created = int(result["events_created"] or 0)
+    expired_count = int(result["expired_count"] or 0)
+
+    if events_created or expired_count:
+        print(
+            "CLOCK_PROCESSED "
+            f"status={result['result_status']} "
+            f"active_pick_id={result['active_pick_id']} "
+            f"events_created={events_created} "
+            f"expired_count={expired_count} "
+            f"next_pick_id={result['next_pick_id']}"
+        )
+
+    return result
+# NFFL_DRAFT_CLOCK_PROCESSOR_END
 
 
 # NFFL_UNATTENDED_AUTOPICK_START
@@ -278,6 +344,7 @@ def build_event_snapshot(
                 SELECT
                     draft_key,
                     draft_label,
+                    season_year,
                     status,
                     updated_at_utc
                 FROM nffl.draft
@@ -361,58 +428,26 @@ def build_event_snapshot(
                 (settings.draft_key,),
             )
 
-            board_order = fetch_all(
+            clock_events = fetch_all(
                 cursor,
                 """
                 SELECT
-                    pick_id,
-                    round_number,
-                    round_label,
-                    slot_number,
-                    pick_type,
-                    current_owner_team_key,
-                    current_owner_team_name
-                FROM nffl.v_draft_board_current
-                WHERE draft_key = %s
+                    event.pick_id,
+                    event.event_type,
+                    event.team_key,
+                    COALESCE(
+                        team.team_name,
+                        event.team_key
+                    ) AS team_name,
+                    event.occurred_at_utc AS occurred_at
+                FROM nffl.draft_clock_event event
+                LEFT JOIN nffl.team team
+                  ON team.team_key = event.team_key
+                WHERE event.draft_key = %s
                 ORDER BY
-                    round_number,
-                    slot_number
-                """,
-                (settings.draft_key,),
-            )
-
-            next_pick = fetch_one(
-                cursor,
-                """
-                SELECT
-                    board.pick_id,
-                    board.round_number,
-                    board.round_label,
-                    board.slot_number,
-                    board.pick_type,
-                    board.current_owner_team_key,
-                    board.current_owner_team_name
-                FROM nffl.v_draft_board_current board
-                WHERE board.draft_key = %s
-                  AND (
-                        board.placeholder_source = 'QO'
-                        OR (
-                            board.yahoo_player_key IS NULL
-                            AND board.placeholder_source IS NULL
-                        )
-                  )
-                  AND NOT EXISTS (
-                        SELECT 1
-                        FROM nffl.draft_selection selection
-                        WHERE selection.draft_key =
-                              board.draft_key
-                          AND selection.pick_id =
-                              board.pick_id
-                  )
-                ORDER BY
-                    board.round_number,
-                    board.slot_number
-                LIMIT 1
+                    event.occurred_at_utc,
+                    event.pick_id,
+                    event.event_type
                 """,
                 (settings.draft_key,),
             )
@@ -424,8 +459,7 @@ def build_event_snapshot(
             revealed_lottery_picks,
         "completed_draft_selections":
             completed_selections,
-        "board_order": board_order,
-        "next_pick": next_pick,
+        "clock_events": clock_events,
     }
 
 
@@ -588,61 +622,25 @@ def build_announcements(
             format_draft_start_announcement(draft)
         )
 
-        board_order = list(
-            snapshot.get("board_order") or []
-        )
-
-        board_index = {
-            str(row["pick_id"]): index
-            for index, row in enumerate(board_order)
-        }
-
-        completed_selections = list(
-            snapshot.get(
-                "completed_draft_selections"
-            )
+        for selection in (
+            snapshot.get("completed_draft_selections")
             or []
-        )
-
-        for selection in completed_selections:
-            pick_id = str(selection["pick_id"])
-
-            if pick_id not in board_index:
-                raise RuntimeError(
-                    "Completed selection is missing from "
-                    f"board order: {pick_id}"
-                )
-
-        completed_selections.sort(
-            key=lambda selection: board_index[
-                str(selection["pick_id"])
-            ]
-        )
-
-        for selection_index, selection in enumerate(
-            completed_selections
         ):
-            if (
-                selection_index + 1
-                < len(completed_selections)
-            ):
-                next_completed = completed_selections[
-                    selection_index + 1
-                ]
-
-                next_pick = board_order[
-                    board_index[
-                        str(next_completed["pick_id"])
-                    ]
-                ]
-            else:
-                next_pick = snapshot.get("next_pick")
-
             announcements.append(
                 format_draft_pick_announcement(
                     settings.draft_key,
                     selection,
-                    next_pick,
+                )
+            )
+
+        for clock_event in (
+            snapshot.get("clock_events")
+            or []
+        ):
+            announcements.append(
+                format_draft_clock_announcement(
+                    settings.draft_key,
+                    clock_event,
                     manager_mentions,
                 )
             )
@@ -651,6 +649,7 @@ def build_announcements(
         "DRAFT_START": 0,
         "LOTTERY_REVEAL": 1,
         "DRAFT_SELECTION": 2,
+        "DRAFT_CLOCK": 3,
     }
 
     announcements.sort(
@@ -792,11 +791,16 @@ def run_runtime() -> None:
         poll_started = time.monotonic()
 
         try:
+            # PostgreSQL advances any clock that has reached
+            # its exact deadline before Auto-Pick is considered.
+            run_clock_check(settings)
+
             # NFFL_UNATTENDED_AUTOPICK_POLL_CALL
             run_autopick_check(settings)
 
-            # Build the snapshot AFTER any successful auto-pick so
-            # the existing Discord announcement engine sees it.
+            # Snapshot after all authoritative DB processing so the
+            # existing announcement engine sees selections and
+            # durable clock events from the same resulting state.
             snapshot = build_event_snapshot(settings)
 
             announcements = build_announcements(

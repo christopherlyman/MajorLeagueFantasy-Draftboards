@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 
 from event_engine import (
     DeliveryState,
+    format_draft_clock_announcement,
     format_draft_pick_announcement,
     format_lottery_announcement,
     ordinal,
@@ -65,14 +66,61 @@ new_selection = format_draft_pick_announcement(
         "selected_primary_position": "QB",
         "selected_at_utc": "2026-07-26T01:00:00+00:00",
     },
-    next_pick={
+)
+
+manager_mentions = {
+    "team-two": "123456789012345678",
+}
+
+clock_event_inputs = [
+    {
         "pick_id": "QO1-02",
-        "current_owner_team_key": "team-two",
-        "current_owner_team_name": "Skol",
+        "event_type": "ON_CLOCK",
+        "team_key": "team-two",
+        "team_name": "Skol",
+        "occurred_at": "2026-07-26T01:00:00+00:00",
     },
-    manager_mentions={
-        "team-two": "123456789012345678",
+    {
+        "pick_id": "QO1-02",
+        "event_type": "REMINDER_12H",
+        "team_key": "team-two",
+        "team_name": "Skol",
+        "occurred_at": "2026-07-26T13:00:00+00:00",
     },
+    {
+        "pick_id": "QO1-02",
+        "event_type": "REMINDER_6H",
+        "team_key": "team-two",
+        "team_name": "Skol",
+        "occurred_at": "2026-07-26T19:00:00+00:00",
+    },
+    {
+        "pick_id": "QO1-02",
+        "event_type": "REMINDER_1H",
+        "team_key": "team-two",
+        "team_name": "Skol",
+        "occurred_at": "2026-07-27T00:00:00+00:00",
+    },
+    {
+        "pick_id": "QO1-02",
+        "event_type": "EXPIRED",
+        "team_key": "team-two",
+        "team_name": "Skol",
+        "occurred_at": "2026-07-27T01:00:00+00:00",
+    },
+]
+
+clock_announcements = [
+    format_draft_clock_announcement(
+        "nffl_2026_preseason",
+        event,
+        manager_mentions,
+    )
+    for event in clock_event_inputs
+]
+
+on_clock, reminder_12h, reminder_6h, reminder_1h, expired = (
+    clock_announcements
 )
 
 if "Party On Wayne" not in new_lottery.content:
@@ -92,17 +140,70 @@ if "Example Quarterback (QB)" not in (
         "Draft message is missing player details."
     )
 
-if "<@123456789012345678>" not in (
-    new_selection.content
-):
+if "<@123456789012345678>" in new_selection.content:
     raise AssertionError(
-        "Draft message is missing the manager mention."
+        "Selection message must not infer the next manager."
     )
 
-if "QO1-02" not in new_selection.content:
+if "QO1-02" in new_selection.content:
     raise AssertionError(
-        "Draft message is missing the next pick."
+        "Selection message must not infer the next pick."
     )
+
+if "<@123456789012345678>" not in on_clock.content:
+    raise AssertionError(
+        "On-clock message is missing the manager mention."
+    )
+
+if "QO1-02" not in on_clock.content:
+    raise AssertionError(
+        "On-clock message is missing the pick ID."
+    )
+
+if "24 hours" not in on_clock.content:
+    raise AssertionError(
+        "On-clock message is missing the 24-hour window."
+    )
+
+clock_expectations = [
+    (reminder_12h, "12 Hours Remaining"),
+    (reminder_6h, "6 Hours Remaining"),
+    (reminder_1h, "1 Hour Remaining"),
+    (expired, "Clock Expired"),
+]
+
+for announcement, expected_text in clock_expectations:
+    if expected_text not in announcement.content:
+        raise AssertionError(
+            "Clock message missing expected text: "
+            f"{expected_text}"
+        )
+
+expected_clock_ids = [
+    "clock:nffl_2026_preseason:QO1-02:ON_CLOCK",
+    "clock:nffl_2026_preseason:QO1-02:REMINDER_12H",
+    "clock:nffl_2026_preseason:QO1-02:REMINDER_6H",
+    "clock:nffl_2026_preseason:QO1-02:REMINDER_1H",
+    "clock:nffl_2026_preseason:QO1-02:EXPIRED",
+]
+
+assert_equal(
+    [item.event_id for item in clock_announcements],
+    expected_clock_ids,
+    "clock event IDs",
+)
+
+duplicate_on_clock = format_draft_clock_announcement(
+    "nffl_2026_preseason",
+    clock_event_inputs[0],
+    manager_mentions,
+)
+
+assert_equal(
+    duplicate_on_clock.event_id,
+    on_clock.event_id,
+    "deterministic clock event ID",
+)
 
 with TemporaryDirectory() as temporary_directory:
     state_path = (
@@ -131,12 +232,13 @@ with TemporaryDirectory() as temporary_directory:
             historical_lottery,
             new_lottery,
             new_selection,
+            *clock_announcements,
         ]
     )
 
     assert_equal(
         len(unseen),
-        2,
+        7,
         "new announcement count",
     )
 
@@ -151,6 +253,7 @@ with TemporaryDirectory() as temporary_directory:
             historical_lottery,
             new_lottery,
             new_selection,
+            *clock_announcements,
         ]
     ):
         raise AssertionError(
@@ -160,7 +263,10 @@ with TemporaryDirectory() as temporary_directory:
 print("ORDINAL_FORMATTING=PASS")
 print("LOTTERY_MESSAGE_FORMAT=PASS")
 print("DRAFT_MESSAGE_FORMAT=PASS")
-print("MANAGER_MENTION_FORMAT=PASS")
+print("DRAFT_SELECTION_HAS_NO_CLOCK_INFERENCE=PASS")
+print("CLOCK_MESSAGE_FORMAT=PASS")
+print("CLOCK_MANAGER_MENTION_FORMAT=PASS")
+print("CLOCK_EVENT_ID_DETERMINISM=PASS")
 print("FIRST_START_BASELINE=PASS")
 print("DUPLICATE_SUPPRESSION=PASS")
 print()
@@ -169,6 +275,12 @@ print(new_lottery.content)
 print()
 print("=== SIMULATED DRAFT ANNOUNCEMENT ===")
 print(new_selection.content)
+print()
+print("=== SIMULATED ON-CLOCK ANNOUNCEMENT ===")
+print(on_clock.content)
+print()
+print("=== SIMULATED EXPIRED ANNOUNCEMENT ===")
+print(expired.content)
 print()
 print("DISCORD_CONTACT=SKIPPED")
 print("EVENT_ENGINE_SELF_TEST=PASS")

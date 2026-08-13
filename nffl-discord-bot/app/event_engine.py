@@ -73,7 +73,7 @@ def format_draft_start_announcement(
     draft: dict[str, Any],
 ) -> Announcement:
     draft_key = str(draft["draft_key"])
-    season_year = 2026
+    season_year = int(draft["season_year"])
     occurred_at = str(
         draft.get("updated_at_utc") or ""
     )
@@ -123,8 +123,6 @@ def manager_display(
 def format_draft_pick_announcement(
     draft_key: str,
     selection: dict[str, Any],
-    next_pick: dict[str, Any] | None,
-    manager_mentions: dict[str, str] | None = None,
     *,
     season_year: int | None = None,
     is_final_pick: bool = False,
@@ -198,27 +196,6 @@ def format_draft_pick_announcement(
                 "QO just got cracked.**"
             )
 
-        if next_pick is not None:
-            next_team_key = str(
-                next_pick["current_owner_team_key"]
-            )
-            next_team_name = str(
-                next_pick["current_owner_team_name"]
-            )
-            next_pick_id = str(next_pick["pick_id"])
-
-            lines.extend(
-                [
-                    "",
-                    "\u23F1\uFE0F **Up next:** "
-                    + manager_display(
-                        next_team_key,
-                        next_team_name,
-                        manager_mentions,
-                    ),
-                    f"**On the clock at {next_pick_id}.**",
-                ]
-            )
 
     return Announcement(
         event_id=(
@@ -227,6 +204,89 @@ def format_draft_pick_announcement(
         ),
         event_type="DRAFT_SELECTION",
         occurred_at=selected_at,
+        content="\n".join(lines),
+    )
+
+
+def format_draft_clock_announcement(
+    draft_key: str,
+    clock_event: dict[str, Any],
+    manager_mentions: dict[str, str] | None = None,
+) -> Announcement:
+    pick_id = str(clock_event["pick_id"])
+    event_type = str(
+        clock_event["event_type"]
+    ).strip().upper()
+    team_key = str(clock_event["team_key"])
+    team_name = str(
+        clock_event.get("team_name")
+        or team_key
+    )
+    occurred_at = str(
+        clock_event.get("occurred_at") or ""
+    )
+
+    manager = manager_display(
+        team_key,
+        team_name,
+        manager_mentions,
+    )
+
+    if event_type == "ON_CLOCK":
+        lines = [
+            "⏱️ **NFFL Draft — On the Clock**",
+            manager,
+            (
+                f"**Pick {pick_id}** — you have "
+                "**24 hours** to make your selection."
+            ),
+        ]
+    elif event_type == "REMINDER_12H":
+        lines = [
+            "⏰ **NFFL Draft — 12 Hours Remaining**",
+            manager,
+            f"**Pick {pick_id}** is still on the clock.",
+        ]
+    elif event_type == "REMINDER_6H":
+        lines = [
+            "⚠️ **NFFL Draft — 6 Hours Remaining**",
+            manager,
+            f"**Pick {pick_id}** is still on the clock.",
+        ]
+    elif event_type == "REMINDER_1H":
+        lines = [
+            "🚨 **NFFL Draft — 1 Hour Remaining**",
+            manager,
+            (
+                f"**Pick {pick_id}** must be made before "
+                "the 24-hour window expires."
+            ),
+        ]
+    elif event_type == "EXPIRED":
+        lines = [
+            "⌛ **NFFL Draft — Clock Expired**",
+            manager,
+            (
+                f"The 24-hour window for **Pick {pick_id}** "
+                "has expired and the draft has moved on."
+            ),
+            (
+                "The pick remains open for a makeup selection "
+                "from players still available."
+            ),
+        ]
+    else:
+        raise RuntimeError(
+            "Unsupported draft-clock event type: "
+            f"{event_type}"
+        )
+
+    return Announcement(
+        event_id=(
+            f"clock:{draft_key}:{pick_id}:{event_type}"
+        ),
+        event_type="DRAFT_CLOCK",
+        occurred_at=occurred_at,
         content="\n".join(lines),
     )
 
