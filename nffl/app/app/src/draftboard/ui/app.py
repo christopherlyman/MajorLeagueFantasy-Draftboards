@@ -695,25 +695,6 @@ def _classify_pick_kind_for_context(
     )
 
 
-def _classify_live_pick_kind(
-    state: DraftState,
-    chosen_player_key: str,
-    predraft_qos: dict[str, dict[int, str]],
-) -> str:
-    """Classify a selection from replayed live QO state."""
-    current_pick = state.picks[
-        state.clock.current_pick_id
-    ]
-
-    return _classify_pick_kind_for_context(
-        state=state,
-        current_round=int(current_pick.round_number),
-        current_team_key=str(
-            current_pick.owner_team_key
-        ),
-        chosen_player_key=chosen_player_key,
-        predraft_qos=predraft_qos,
-    )
 # NFFL_AUTOPICK_TARGET_LEGALITY_END
 
 
@@ -1703,15 +1684,17 @@ def render_pick_controls(state: DraftState) -> None:
                 )
 
             if submit_pick_clicked:
-                if not _user_can_submit_pick(state):
-                    st.error("You are not authorized to submit this pick.")
+                submit_pick_id = _manual_submission_target_pick_id(state)
+
+                if not submit_pick_id:
+                    st.error("You are not authorized to submit a pick.")
                     return
 
                 if chosen_player_key is None:
                     st.warning("Pick a player first.")
                     return
 
-                pick = state.picks[state.clock.current_pick_id]
+                pick = state.picks[submit_pick_id]
                 if pick.selected_player_key is not None and pick.selected_ts_iso is not None:
                     st.error("That pick is already used.")
                     return
@@ -1723,8 +1706,10 @@ def render_pick_controls(state: DraftState) -> None:
                     return
 
                 try:
-                    pick_kind = _classify_live_pick_kind(
+                    pick_kind = _classify_pick_kind_for_context(
                         state=state,
+                        current_round=int(pick.round_number),
+                        current_team_key=str(pick.owner_team_key),
                         chosen_player_key=chosen_player_key,
                         predraft_qos=predraft_qos,
                     )
@@ -1734,7 +1719,7 @@ def render_pick_controls(state: DraftState) -> None:
 
                 result = _apply_pick(
                     state,
-                    state.clock.current_pick_id,
+                    submit_pick_id,
                     chosen_player_key,
                     pick_kind=pick_kind,
                 )
@@ -1919,8 +1904,10 @@ def render_mobile_pick(state: DraftState) -> None:
     st.write("")
 
     if st.button("SUBMIT PICK", type="primary", use_container_width=True, key="mobile_submit_pick"):
-        if not _user_can_submit_pick(state):
-            st.error("You are not authorized to submit this pick.")
+        submit_pick_id = _manual_submission_target_pick_id(state)
+
+        if not submit_pick_id:
+            st.error("You are not authorized to submit a pick.")
             return
 
         if chosen_player_key is None:
@@ -1932,9 +1919,13 @@ def render_mobile_pick(state: DraftState) -> None:
         if chosen_player_key in protected_keeper_keys:
             st.error("Contract/FT players are not draftable.")
             return
+        pick = state.picks[submit_pick_id]
+
         try:
-            pick_kind = _classify_live_pick_kind(
+            pick_kind = _classify_pick_kind_for_context(
                 state=state,
+                current_round=int(pick.round_number),
+                current_team_key=str(pick.owner_team_key),
                 chosen_player_key=chosen_player_key,
                 predraft_qos=predraft_qos,
             )
@@ -1944,7 +1935,7 @@ def render_mobile_pick(state: DraftState) -> None:
 
         result = _apply_pick(
             state,
-            current_pick_id,
+            submit_pick_id,
             chosen_player_key,
             pick_kind=pick_kind,
         )
@@ -4843,29 +4834,105 @@ def _render_must_change_password_gate() -> bool:
 
     return True
 
-def _user_can_submit_pick(state: DraftState) -> bool:
-    """
-    NFFL Team Gateway authorization.
+def _load_oldest_unresolved_expired_pick_id(
+    *,
+    dsn: str,
+    draft_key: str,
+    team_key: str,
+) -> str | None:
+    """Return this team's oldest unresolved missed pick."""
+    import psycopg
 
-    This is intentionally low-friction. It is not password security.
-    It makes sure draft submissions from this browser are attributed to the
-    remembered team, and only that team can submit when on the clock.
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ep.pick_id
+                FROM nffl.draft_expired_pick ep
+                JOIN nffl.draft_pick p
+                  ON p.draft_key = ep.draft_key
+                 AND p.pick_id = ep.pick_id
+                WHERE ep.draft_key = %s
+                  AND ep.resolved_at_utc IS NULL
+                  AND p.current_owner_team_key = %s
+                ORDER BY
+                    ep.expired_at_utc,
+                    p.round_number,
+                    p.slot_number
+                LIMIT 1
+                """,
+                (draft_key, team_key),
+            )
+            row = cur.fetchone()
+
+    return str(row[0]) if row and row[0] else None
+
+
+def _manual_submission_target_pick_id(
+    state: DraftState,
+) -> str | None:
+    """
+    Return the one existing draft pick this principal may submit.
+
+    There is still exactly one live clock. Managers use their live
+    pick when on the clock; otherwise they may fill their oldest
+    unresolved expired pick.
     """
     gateway = st.session_state.get("nffl_gateway_context") or {}
 
+    current_pick_id = str(
+        getattr(state.clock, "current_pick_id", None) or ""
+    )
+
     if gateway.get("role") == "commissioner":
-        return True
+        return current_pick_id if current_pick_id in state.picks else None
 
     team_key = str(gateway.get("team_key") or "")
     if not team_key:
-        return False
+        return None
 
-    current_pick_id = getattr(state.clock, "current_pick_id", None)
-    if not current_pick_id or current_pick_id not in state.picks:
-        return False
+    # Existing live-pick behavior has priority.
+    if current_pick_id and current_pick_id in state.picks:
+        current_pick = state.picks[current_pick_id]
+        if str(
+            getattr(current_pick, "owner_team_key", "") or ""
+        ) == team_key:
+            return current_pick_id
 
-    pick = state.picks[current_pick_id]
-    return str(getattr(pick, "owner_team_key", "") or "") == team_key
+    # Makeup access. Do not introduce a season-specific fallback.
+    import os
+
+    dsn = get_postgres_dsn()
+    draft_key = str(
+        os.environ.get("DRAFTBOARD_DRAFT_KEY") or ""
+    ).strip()
+
+    if not dsn or not draft_key:
+        return None
+
+    try:
+        pick_id = _load_oldest_unresolved_expired_pick_id(
+            dsn=dsn,
+            draft_key=draft_key,
+            team_key=team_key,
+        )
+    except Exception:
+        return None
+
+    if not pick_id or pick_id not in state.picks:
+        return None
+
+    pick = state.picks[pick_id]
+
+    if (
+        pick.selected_player_key is not None
+        and pick.selected_ts_iso is not None
+    ):
+        return None
+
+    return pick_id
+
+
 
 
 def _load_local_auth_principal(*, email_normalized: str, league_key: str, season_year: int) -> dict | None:
