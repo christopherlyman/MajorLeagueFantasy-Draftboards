@@ -1,0 +1,60 @@
+{
+  "league": {
+    "name": "NFHL",
+    "sport": "nhl",
+    "platform": "yahoo",
+    "season_year": 2026,
+    "league_id": "10961",
+    "league_key": "477.l.10961",
+    "manager_count_target": 14
+  },
+  "draft": {
+    "draft_key": "nfhl_2026_preseason",
+    "rounds_total": 18,
+    "rounds_total_status": "inferred_from_active_plus_bench_roster",
+    "order_mode": "snake",
+    "order_mode_status": "verified"
+  },
+  "features": {
+    "keeper": false,
+    "contracts": false,
+    "qualifying_offers": false,
+    "franchise_tags": false,
+    "prospect_tags": false,
+    "poaching": false
+  },
+  "roster": {
+    "C": 2,
+    "LW": 2,
+    "RW": 2,
+    "F": 1,
+    "D": 4,
+    "Util": 1,
+    "G": 2,
+    "BN": 4,
+    "IR+": 2,
+    "NA": 1
+  },
+  "scoring": {
+    "G": 4.0,
+    "A": 2.5,
+    "PIM": 0.2,
+    "PPP": 1.0,
+    "SHP": 1.25,
+    "SOG": 0.25,
+    "HIT": 0.5,
+    "BLK": 0.5,
+    "W": 3.0,
+    "GA": -1.0,
+    "SV": 0.25,
+    "SHO": 2.5
+  },
+  "yahoo": {
+    "game_key": "477"
+  },
+  "historical_stats": {
+    "season_year": 2025,
+    "game_key": "465",
+    "coverage_type": "season"
+  }
+}

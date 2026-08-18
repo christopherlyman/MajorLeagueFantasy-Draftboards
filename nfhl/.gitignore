@@ -1,0 +1,5 @@
+
+# NFHL private browser-gateway signing secret
+config/.nfhl_gateway_cookie_secret
+*.pre_*
+*.errant_*
