@@ -30,6 +30,7 @@ from draftboard.data.db import (
     get_player_universe,
     get_team_gateway_links,
     get_teams,
+    refresh_yahoo_teams_live,
     initialize_lottery,
     reveal_next_lottery_slot,
     initialize_draft_from_lottery,
@@ -3000,6 +3001,64 @@ def render_draft_readiness_panel(
         expanded=not ready,
     ):
 
+        # NFHL_YAHOO_TEAM_REFRESH_UI_START
+        refresh_notice = (
+            st.session_state.pop(
+                "nfhl_yahoo_team_refresh_notice",
+                None,
+            )
+        )
+
+        if refresh_notice:
+            st.success(
+                str(refresh_notice)
+            )
+
+        if st.button(
+            "Refresh Yahoo League Teams",
+            use_container_width=True,
+            key="nfhl_refresh_yahoo_teams",
+        ):
+            try:
+                with st.spinner(
+                    "Refreshing Yahoo league teams..."
+                ):
+                    refresh_result = (
+                        refresh_yahoo_teams_live(
+                            actor="commissioner_link",
+                        )
+                    )
+
+            except Exception as exc:
+                st.error(
+                    "Yahoo team refresh failed: "
+                    f"{exc}"
+                )
+
+            else:
+                st.session_state[
+                    "nfhl_yahoo_team_refresh_notice"
+                ] = (
+                    "Yahoo team refresh complete: "
+                    f"{refresh_result['yahoo_team_count']}"
+                    f"/{refresh_result['target_team_count']} "
+                    "real teams. "
+                    f"New teams: "
+                    f"{refresh_result['new_team_count']}. "
+                    f"New manager links: "
+                    f"{refresh_result['gateway_links_created']}."
+                )
+
+                st.cache_data.clear()
+                st.rerun()
+
+        st.caption(
+            "Commissioner only. Refreshes Yahoo league "
+            "membership without reloading the player universe. "
+            "Available only while the draft remains in PREP."
+        )
+        # NFHL_YAHOO_TEAM_REFRESH_UI_END
+
         c1, c2, c3, c4 = st.columns(4)
 
         c1.metric(
@@ -3746,12 +3805,14 @@ def main() -> None:
             f"Prior Stats: `{prior_year}`"
         )
 
-        if st.button(
-            "Refresh Data",
-            use_container_width=True,
-        ):
-            st.cache_data.clear()
-            st.rerun()
+        if commissioner_mode:
+            if st.button(
+                "Refresh Data",
+                use_container_width=True,
+                key="nfhl_commissioner_refresh_data",
+            ):
+                st.cache_data.clear()
+                st.rerun()
 
 
 if __name__ == "__main__":

@@ -4037,3 +4037,392 @@ def write_team_gateway_audit(
 
 
 # NFHL_TEAM_GATEWAY_DB_END
+
+
+# NFHL_YAHOO_TEAM_REFRESH_DB_START
+# ================================================================
+# COMMISSIONER-ONLY YAHOO TEAM REFRESH
+#
+# Team-only:
+#   - refreshes Yahoo OAuth when needed
+#   - fetches the live Yahoo league team field
+#   - never fetches the player universe
+#   - never fabricates teams
+#   - never deletes teams automatically
+#   - PREP only
+#   - creates gateway links for newly discovered real teams
+# ================================================================
+
+
+def refresh_yahoo_teams_live(
+    *,
+    actor: str,
+) -> dict[str, Any]:
+    from pathlib import Path
+    import importlib.util
+    import sys
+    import tempfile
+
+    import requests
+
+    league_key = get_league_key()
+    season_year = get_season_year()
+    draft_key = get_draft_key()
+
+    sync_path = Path(
+        "/league_runtime/scripts/yahoo/"
+        "sync_nfhl_live.py"
+    )
+
+    auth_path = Path(
+        "/league_runtime/scripts/yahoo/"
+        "auth.py"
+    )
+
+    config_path = Path(
+        f"/league_runtime/config/"
+        f"nfhl_{season_year}.json"
+    )
+
+    for required in (
+        sync_path,
+        auth_path,
+        config_path,
+    ):
+        if not required.exists():
+            raise RuntimeError(
+                f"Required NFHL Yahoo file "
+                f"is unavailable: {required}"
+            )
+
+    script_dir = str(
+        sync_path.parent
+    )
+
+    if script_dir not in sys.path:
+        sys.path.insert(
+            0,
+            script_dir,
+        )
+
+    sync_spec = (
+        importlib.util.spec_from_file_location(
+            "nfhl_yahoo_team_sync_runtime",
+            sync_path,
+        )
+    )
+
+    if (
+        sync_spec is None
+        or sync_spec.loader is None
+    ):
+        raise RuntimeError(
+            "Unable to load NFHL Yahoo "
+            "sync module."
+        )
+
+    sync = (
+        importlib.util.module_from_spec(
+            sync_spec
+        )
+    )
+
+    sys.modules[
+        sync_spec.name
+    ] = sync
+
+    sync_spec.loader.exec_module(
+        sync
+    )
+
+    auth_spec = (
+        importlib.util.spec_from_file_location(
+            "nfhl_yahoo_auth_runtime",
+            auth_path,
+        )
+    )
+
+    if (
+        auth_spec is None
+        or auth_spec.loader is None
+    ):
+        raise RuntimeError(
+            "Unable to load NFHL Yahoo "
+            "authentication module."
+        )
+
+    auth = (
+        importlib.util.module_from_spec(
+            auth_spec
+        )
+    )
+
+    sys.modules[
+        auth_spec.name
+    ] = auth
+
+    auth_spec.loader.exec_module(
+        auth
+    )
+
+    ctx = sync.load_config(
+        config_path
+    )
+
+    if (
+        str(ctx["league_key"])
+        != str(league_key)
+    ):
+        raise RuntimeError(
+            "NFHL Yahoo config league_key "
+            "does not match runtime."
+        )
+
+    if (
+        int(ctx["season_year"])
+        != int(season_year)
+    ):
+        raise RuntimeError(
+            "NFHL Yahoo config season_year "
+            "does not match runtime."
+        )
+
+    if (
+        str(ctx["draft_key"])
+        != str(draft_key)
+    ):
+        raise RuntimeError(
+            "NFHL Yahoo config draft_key "
+            "does not match runtime."
+        )
+
+    target_count = int(
+        ctx["target_teams"]
+    )
+
+    # get_access_token() reuses a valid stored
+    # token or refreshes it using Yahoo OAuth.
+    access_token = (
+        auth.get_access_token()
+    )
+
+    if not access_token:
+        raise RuntimeError(
+            "Yahoo authentication returned "
+            "no access token."
+        )
+
+    session = requests.Session()
+
+    session.headers.update(
+        {
+            "Authorization":
+                f"Bearer {access_token}"
+        }
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="nfhl_team_refresh_"
+    ) as temp_dir:
+
+        teams = sync.fetch_teams(
+            session,
+            league_key,
+            season_year,
+            Path(temp_dir),
+        )
+
+    yahoo_count = len(
+        teams
+    )
+
+    if yahoo_count < 1:
+        raise RuntimeError(
+            "Yahoo returned zero NFHL teams. "
+            "No database changes were made."
+        )
+
+    if yahoo_count > target_count:
+        raise RuntimeError(
+            f"Yahoo returned {yahoo_count} teams "
+            f"but NFHL target is {target_count}."
+        )
+
+    yahoo_keys = [
+        str(
+            row.get("team_key")
+            or ""
+        ).strip()
+        for row in teams
+    ]
+
+    if (
+        any(
+            not key
+            for key in yahoo_keys
+        )
+        or len(set(yahoo_keys))
+            != len(yahoo_keys)
+    ):
+        raise RuntimeError(
+            "Yahoo team payload contains "
+            "missing or duplicate team keys."
+        )
+
+    dsn = get_postgres_dsn()
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+
+        with conn.transaction():
+
+            with conn.cursor() as cur:
+
+                # Lock draft state first.
+                cur.execute(
+                    """
+                    SELECT status
+                    FROM nfhl.draft
+                    WHERE draft_key = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        draft_key,
+                    ),
+                )
+
+                draft = cur.fetchone()
+
+                if draft is None:
+                    raise RuntimeError(
+                        f"NFHL draft not found: "
+                        f"{draft_key}"
+                    )
+
+                status = str(
+                    draft["status"]
+                    or ""
+                ).upper()
+
+                if status != "PREP":
+                    raise RuntimeError(
+                        "Yahoo team refresh is "
+                        "allowed only while NFHL "
+                        "draft status is PREP."
+                    )
+
+                # Existing real DB team set.
+                cur.execute(
+                    """
+                    SELECT team_key
+                    FROM nfhl.team
+                    WHERE league_key = %s
+                      AND season_year = %s
+                    ORDER BY team_key
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                existing_keys = {
+                    str(
+                        row["team_key"]
+                    )
+                    for row in cur.fetchall()
+                }
+
+                yahoo_key_set = set(
+                    yahoo_keys
+                )
+
+                # Never silently delete a team.
+                # If Yahoo no longer contains a DB
+                # team, require explicit reconciliation.
+                stale_db_keys = sorted(
+                    existing_keys
+                    - yahoo_key_set
+                )
+
+                if stale_db_keys:
+                    raise RuntimeError(
+                        "Yahoo team membership is "
+                        "smaller/different than the "
+                        "current NFHL database. "
+                        "Automatic deletion is disabled; "
+                        "commissioner reconciliation is "
+                        "required."
+                    )
+
+                new_keys = sorted(
+                    yahoo_key_set
+                    - existing_keys
+                )
+
+                cur.executemany(
+                    sync.TEAM_SQL,
+                    teams,
+                )
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS team_count
+                    FROM nfhl.team
+                    WHERE league_key = %s
+                      AND season_year = %s
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                db_count = int(
+                    cur.fetchone()[
+                        "team_count"
+                    ]
+                )
+
+                if db_count != yahoo_count:
+                    raise RuntimeError(
+                        "NFHL team count does not "
+                        "match Yahoo after refresh: "
+                        f"Yahoo={yahoo_count}, "
+                        f"DB={db_count}."
+                    )
+
+    gateway_links_created = (
+        ensure_team_gateway_links()
+    )
+
+    return {
+        "result_status": "REFRESHED",
+        "actor": str(actor),
+        "yahoo_team_count": (
+            yahoo_count
+        ),
+        "db_team_count": (
+            db_count
+        ),
+        "target_team_count": (
+            target_count
+        ),
+        "new_team_count": (
+            len(new_keys)
+        ),
+        "new_team_keys": (
+            new_keys
+        ),
+        "gateway_links_created": (
+            int(
+                gateway_links_created
+            )
+        ),
+        "draft_status": "PREP",
+    }
+
+
+# NFHL_YAHOO_TEAM_REFRESH_DB_END
