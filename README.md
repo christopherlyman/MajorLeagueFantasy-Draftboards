@@ -10,6 +10,7 @@ This repository currently contains:
 - `mlf/` — MLF fantasy baseball league-specific code, runtime files, SQL, and operational documentation.
 - `milf/` — MiLF fantasy baseball league-specific configuration, runtime files, and operational documentation.
 - `nffl/` — NFFL fantasy football DraftBoard, including contract/keeper and draft-management functionality.
+- `nffl-discord-bot/` — NFFL Discord integration for draft lifecycle, clock, and pick notifications.
 - `nfhl/` — NFHL fantasy hockey redraft DraftBoard, including roll call, draft-order lottery, manager access, Auto-Pick foundations, live draft workflow, and slow-draft clock management.
 
 ## Design Approach
@@ -30,6 +31,21 @@ Current development includes:
 - live and slow-draft operations
 - league-specific keeper, contract, redraft, and roster rules
 - Yahoo Fantasy Sports ingestion and reconciliation
+
+## NFFL
+
+NFFL is the fantasy football implementation.
+
+The DraftBoard includes:
+
+- contract keeper and franchise-tag workflows
+- QO, retention, drop, and poach handling
+- commissioner draft-order and draft-management controls
+- manager queues and unattended Auto-Pick
+- a 24-hour slow-draft clock with reminders and late-pick handling
+- Discord draft lifecycle, on-clock, and pick notifications
+
+NFFL remains operationally independent from NFHL. Generic DraftBoard mechanics may be reused selectively, but football-specific contract, keeper, QO, and franchise-tag behavior stays within NFFL.
 
 ## NFHL
 
@@ -64,7 +80,7 @@ Recommended starting points include:
 - `shared/docs/8_Multi-League_Target_Architecture.md`
 - `mlf/docs/10_MLF_Next_Season_Prep.md`
 - `milf/docs/10_MiLF_Next_Season_Prep.md`
-- `nffl/docs/`
+- `nffl/app/docs/0_CoreCanonicalGuide.md`
 - `nfhl/docs/`
 
 ## Status
