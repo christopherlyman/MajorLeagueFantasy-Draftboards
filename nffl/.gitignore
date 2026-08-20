@@ -1,0 +1,70 @@
+# secrets / environment
+**/.env
+**/.env.*
+!.env.example
+# Python / local runtime
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+# editors / OS
+**/.DS_Store
+**/Thumbs.db
+**/.vscode/
+**/.idea/
+# generated state
+**/outputs/**
+**/reset_outputs/**
+**/autosave*.json
+**/*autosave*
+**/tmp/**
+**/logs/**
+# raw/local data
+**/data/raw/yahoo/**
+**/raw/yahoo/**
+**/*.sqlite
+**/*.db
+# backups
+**/backups/**
+**/*.bak*
+*.bak
+*.bak_*
+*.tmp
+# auth/session/secrets
+**/*cookie*
+**/*token*
+**/*secret*
+**/session/**
+# operational password/reset artifacts
+**/*temp_password*.csv
+**/*temp-password*.csv
+**/reset_passwords_*.csv
+**/reset_passwords_*.txt
+**/reset_passwords_*.sql
+# live infrastructure state
+**/runtime/caddy_data/**
+**/runtime/postgres/pgdata/**
+# NFFL local/generated artifacts
+/archive/
+/app/app/src/draftboard/_nffl_patch_backups_*/
+/app/app/src/draftboard/ui/backups/
+/app/app/src/draftboard/ui/components/backups/
+/runtime/state_backups/
+/docs/testing/
+/scripts/testing/
+/sql/testing/
+/app/outputs/
+/app/output/
+/outputs/
+/*password*
+/*credentials*
+/*secrets*
+/*tokens*
+/app/scripts/export_manager_temp_passwords.py
+/app/scripts/reset_manager_passwords.py
+# Discord bot runtime/persistent data
+/nffl-discord-bot/data/
+/nffl-discord-bot/backups//data/historical_contracts/source/*.xlsx
+/data/historical_contracts/generated/
+/data/historical_contracts/source/*.xlsx

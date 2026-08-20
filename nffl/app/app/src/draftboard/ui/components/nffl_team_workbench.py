@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 from collections import defaultdict
@@ -692,43 +693,2109 @@ def _percent_label(value: Any) -> str:
 
 
 
+
+def _load_season_end_contract_state(
+    dsn: str,
+) -> dict[str, Any]:
+    """Return the current status of the prior-season contract rollover."""
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    current_season_year,
+                    current_league_key,
+                    prior_season_year,
+                    prior_league_key
+                FROM nffl.v_active_season_context
+                LIMIT 1
+                """
+            )
+            ctx = cur.fetchone()
+
+            if not ctx:
+                raise RuntimeError(
+                    "No active NFFL season context is configured."
+                )
+
+            current_year = int(ctx["current_season_year"])
+            prior_year = int(ctx["prior_season_year"])
+            current_league = str(ctx["current_league_key"])
+            prior_league = str(ctx["prior_league_key"])
+
+            snapshot_id = (
+                f"nffl_{current_year}_from_"
+                f"{prior_year}_end_roster"
+            )
+
+            cur.execute(
+                """
+                SELECT count(*)::integer AS contract_count
+                FROM nffl.contract
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND status = 'active'
+                """,
+                (
+                    prior_league,
+                    prior_year,
+                ),
+            )
+            prior_contract_count = int(
+                cur.fetchone()["contract_count"]
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    rs.snapshot_id,
+
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_source_player sp
+                        WHERE sp.snapshot_id = rs.snapshot_id
+                    ) AS source_player_count,
+
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_player rp
+                        WHERE rp.snapshot_id = rs.snapshot_id
+                    ) AS normalized_player_count,
+
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_source_player sp
+                        WHERE sp.snapshot_id = rs.snapshot_id
+                          AND sp.mapping_status =
+                              'NOT_IN_CURRENT_UNIVERSE'
+                    ) AS unmapped_player_count,
+
+                    rf.content_sha256,
+                    rf.finalized_at_utc,
+                    rf.finalized_by
+
+                FROM nffl.roster_snapshot rs
+
+                LEFT JOIN nffl.roster_snapshot_finalization rf
+                  ON rf.snapshot_id = rs.snapshot_id
+
+                WHERE rs.snapshot_id = %s
+                """,
+                (snapshot_id,),
+            )
+
+            snapshot = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT count(*)::integer AS audit_count
+                FROM nffl.v_contract_season_audit_current
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND end_roster_snapshot_id = %s
+                """,
+                (
+                    prior_league,
+                    prior_year,
+                    snapshot_id,
+                ),
+            )
+            audit_count = int(
+                cur.fetchone()["audit_count"]
+            )
+
+            cur.execute(
+                """
+                SELECT count(*)::integer AS contract_count
+                FROM nffl.contract
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND contract_source = 'season_rollover'
+                  AND source_snapshot_id = %s
+                """,
+                (
+                    current_league,
+                    current_year,
+                    snapshot_id,
+                ),
+            )
+            rollover_contract_count = int(
+                cur.fetchone()["contract_count"]
+            )
+
+    state: dict[str, Any] = {
+        "current_season_year": current_year,
+        "current_league_key": current_league,
+        "prior_season_year": prior_year,
+        "prior_league_key": prior_league,
+        "snapshot_id": snapshot_id,
+        "prior_contract_count": prior_contract_count,
+        "snapshot_exists": snapshot is not None,
+        "snapshot_finalized": (
+            snapshot is not None
+            and snapshot["finalized_at_utc"] is not None
+        ),
+        "audit_count": audit_count,
+        "rollover_contract_count": rollover_contract_count,
+    }
+
+    if snapshot is not None:
+        state.update(dict(snapshot))
+
+    return state
+
+
+def _capture_prior_season_roster_snapshot(
+    dsn: str,
+) -> str:
+    """Run the existing Yahoo prior-season roster loader."""
+    import os
+    import subprocess
+    import sys
+
+    loader = (
+        "/app/scripts/yahoo/"
+        "yahoo_nffl_prior_roster_snapshot_load.py"
+    )
+
+    if not os.path.isfile(loader):
+        raise RuntimeError(
+            f"Yahoo roster loader was not found at {loader}."
+        )
+
+    env = dict(os.environ)
+    env["POSTGRES_DSN"] = dsn
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            loader,
+        ],
+        cwd="/app",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+
+    output = "\n".join(
+        part.strip()
+        for part in (
+            result.stdout,
+            result.stderr,
+        )
+        if part and part.strip()
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Yahoo roster capture failed.\n"
+            + output[-4000:]
+        )
+
+    return output
+
+
+def _finalize_roster_snapshot(
+    dsn: str,
+    snapshot_id: str,
+    *,
+    finalized_by: str,
+) -> dict[str, Any]:
+    """Lock a captured roster snapshot against later modification."""
+    import hashlib
+
+    actor = str(finalized_by or "").strip()
+
+    if not actor:
+        actor = "commissioner_ui"
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM nffl.roster_snapshot_finalization
+                WHERE snapshot_id = %s
+                """,
+                (snapshot_id,),
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                return dict(existing)
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM nffl.roster_snapshot
+                WHERE snapshot_id = %s
+                """,
+                (snapshot_id,),
+            )
+
+            if not cur.fetchone():
+                raise RuntimeError(
+                    f"Roster snapshot {snapshot_id} does not exist."
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_source_player
+                        WHERE snapshot_id = %s
+                    ) AS source_player_count,
+
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_player
+                        WHERE snapshot_id = %s
+                    ) AS normalized_player_count,
+
+                    (
+                        SELECT count(*)::integer
+                        FROM nffl.roster_snapshot_source_player
+                        WHERE snapshot_id = %s
+                          AND mapping_status =
+                              'NOT_IN_CURRENT_UNIVERSE'
+                    ) AS unmapped_player_count
+                """,
+                (
+                    snapshot_id,
+                    snapshot_id,
+                    snapshot_id,
+                ),
+            )
+            counts = dict(cur.fetchone())
+
+            if int(counts["source_player_count"]) <= 0:
+                raise RuntimeError(
+                    "Cannot lock a roster snapshot with "
+                    "zero Yahoo roster rows."
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    (
+                        to_jsonb(sp)
+                        - 'updated_at_utc'
+                    )::text AS evidence_json
+                FROM nffl.roster_snapshot_source_player sp
+                WHERE sp.snapshot_id = %s
+                ORDER BY
+                    sp.source_team_key,
+                    sp.source_yahoo_player_key,
+                    sp.roster_slot NULLS FIRST
+                """,
+                (snapshot_id,),
+            )
+
+            evidence = "\n".join(
+                str(row["evidence_json"])
+                for row in cur.fetchall()
+            )
+
+            content_sha256 = hashlib.sha256(
+                evidence.encode("utf-8")
+            ).hexdigest()
+
+            cur.execute(
+                """
+                INSERT INTO nffl.roster_snapshot_finalization (
+                    snapshot_id,
+                    source_player_count,
+                    normalized_player_count,
+                    unmapped_player_count,
+                    content_sha256,
+                    finalized_at_utc,
+                    finalized_by,
+                    note
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    now(),
+                    %s,
+                    %s
+                )
+                RETURNING *
+                """,
+                (
+                    snapshot_id,
+                    int(counts["source_player_count"]),
+                    int(counts["normalized_player_count"]),
+                    int(counts["unmapped_player_count"]),
+                    content_sha256,
+                    actor,
+                    (
+                        "Locked from the commissioner "
+                        "season-end contract workflow."
+                    ),
+                ),
+            )
+
+            finalized = dict(cur.fetchone())
+
+    return finalized
+
+
+def _preview_season_end_contract_changes(
+    dsn: str,
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Preview the prior-season contract results without writing them."""
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM nffl.preview_contract_season_reconciliation(
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    state["prior_league_key"],
+                    int(state["prior_season_year"]),
+                    state["snapshot_id"],
+                ),
+            )
+
+            return [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+
+def _apply_season_end_contract_changes(
+    dsn: str,
+    state: dict[str, Any],
+    *,
+    audited_by: str,
+) -> list[dict[str, Any]]:
+    """Write the reviewed contract rollover into the next season."""
+    actor = str(audited_by or "").strip()
+
+    if not actor:
+        actor = "commissioner_ui"
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM nffl.apply_contract_season_reconciliation(
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    state["prior_league_key"],
+                    int(state["prior_season_year"]),
+                    state["snapshot_id"],
+                    actor,
+                ),
+            )
+
+            return [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+
+def _load_needs_review_contract_audits(
+    dsn: str,
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return current unresolved season-end contract audits."""
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.*,
+                    COALESCE(
+                        pu.full_name,
+                        a.yahoo_player_key_at_start
+                    ) AS player_name,
+                    COALESCE(
+                        start_team.team_name,
+                        a.team_key_at_start
+                    ) AS start_team_name,
+                    COALESCE(
+                        observed_team.team_name,
+                        a.observed_current_team_key
+                    ) AS observed_team_name
+
+                FROM nffl.v_contract_season_audit_current a
+
+                LEFT JOIN nffl.player_universe pu
+                  ON pu.league_key = a.league_key
+                 AND pu.season_year = a.season_year
+                 AND pu.yahoo_player_key =
+                     a.yahoo_player_key_at_start
+
+                LEFT JOIN nffl.team start_team
+                  ON start_team.league_key = a.league_key
+                 AND start_team.season_year = a.season_year
+                 AND start_team.team_key =
+                     a.team_key_at_start
+
+                LEFT JOIN nffl.team observed_team
+                  ON observed_team.league_key = %s
+                 AND observed_team.season_year = %s
+                 AND observed_team.team_key =
+                     a.observed_current_team_key
+
+                WHERE a.league_key = %s
+                  AND a.season_year = %s
+                  AND a.end_roster_snapshot_id = %s
+                  AND a.rollover_action = 'NEEDS_REVIEW'
+
+                ORDER BY
+                    player_name,
+                    a.yahoo_player_key_at_start
+                """,
+                (
+                    state["current_league_key"],
+                    int(state["current_season_year"]),
+                    state["prior_league_key"],
+                    int(state["prior_season_year"]),
+                    state["snapshot_id"],
+                ),
+            )
+
+            return [
+                dict(row)
+                for row in cur.fetchall()
+            ]
+
+
+def _resolve_contract_review(
+    dsn: str,
+    contract_season_audit_id: int,
+    resolution: str,
+    *,
+    resolved_by: str,
+) -> dict[str, Any]:
+    """Resolve one NEEDS_REVIEW audit by creating the next revision."""
+    actor = str(resolved_by or "").strip()
+
+    if not actor:
+        actor = "commissioner_ui"
+
+    resolution = str(resolution or "").strip().upper()
+
+    if resolution not in {
+        "RECOGNIZE_MOVE",
+        "DROP",
+        "VOID",
+    }:
+        raise RuntimeError(
+            f"Unsupported contract review resolution: {resolution}"
+        )
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM nffl.contract_season_audit
+                WHERE contract_season_audit_id = %s
+                FOR UPDATE
+                """,
+                (int(contract_season_audit_id),),
+            )
+            current = cur.fetchone()
+
+            if not current:
+                raise RuntimeError(
+                    "The contract review audit no longer exists."
+                )
+
+            current = dict(current)
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM nffl.contract_season_audit
+                WHERE supersedes_audit_id = %s
+                LIMIT 1
+                """,
+                (
+                    int(
+                        current[
+                            "contract_season_audit_id"
+                        ]
+                    ),
+                ),
+            )
+
+            if cur.fetchone():
+                raise RuntimeError(
+                    "This contract review has already been resolved."
+                )
+
+            if str(current["rollover_action"]) != "NEEDS_REVIEW":
+                raise RuntimeError(
+                    "Only a current NEEDS_REVIEW audit can be resolved."
+                )
+
+            league_key = str(current["league_key"])
+            season_year = int(current["season_year"])
+
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(
+                    hashtext(%s),
+                    %s
+                )
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    current_season_year,
+                    current_league_key,
+                    prior_season_year,
+                    prior_league_key
+                FROM nffl.v_active_season_context
+                LIMIT 1
+                """
+            )
+            ctx = cur.fetchone()
+
+            if not ctx:
+                raise RuntimeError(
+                    "No active NFFL season context is configured."
+                )
+
+            ctx = dict(ctx)
+
+            expected_next_year = season_year + 1
+
+            if (
+                int(ctx["current_season_year"])
+                != expected_next_year
+                or int(ctx["prior_season_year"])
+                != season_year
+                or str(ctx["prior_league_key"])
+                != league_key
+            ):
+                raise RuntimeError(
+                    "The active NFFL season context no longer "
+                    "matches this contract review."
+                )
+
+            next_league_key: str | None = None
+            next_season_year: int | None = None
+            next_team_key: str | None = None
+            next_yahoo_player_key: str | None = None
+            next_contract_years: int | None = None
+            create_contract = False
+
+            contract_years_at_start = int(
+                current["contract_years_at_start"]
+            )
+
+            if resolution == "RECOGNIZE_MOVE":
+                if (
+                    str(
+                        current[
+                            "roster_reconciliation_status"
+                        ]
+                    )
+                    != "DIFFERENT_TEAM"
+                ):
+                    raise RuntimeError(
+                        "Recognize Move is available only when "
+                        "Yahoo shows the player on another NFFL team."
+                    )
+
+                observed_team_key = str(
+                    current.get(
+                        "observed_current_team_key"
+                    )
+                    or ""
+                ).strip()
+
+                observed_player_key = str(
+                    current.get(
+                        "observed_current_yahoo_player_key"
+                    )
+                    or ""
+                ).strip()
+
+                if (
+                    not observed_team_key
+                    or not observed_player_key
+                ):
+                    raise RuntimeError(
+                        "Yahoo did not provide a trustworthy "
+                        "next-season team/player mapping."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM nffl.team
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND team_key = %s
+                    """,
+                    (
+                        str(ctx["current_league_key"]),
+                        expected_next_year,
+                        observed_team_key,
+                    ),
+                )
+
+                if not cur.fetchone():
+                    raise RuntimeError(
+                        "The observed destination team is not "
+                        "part of the configured next NFFL season."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM nffl.player_universe
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND yahoo_player_key = %s
+                    """,
+                    (
+                        str(ctx["current_league_key"]),
+                        expected_next_year,
+                        observed_player_key,
+                    ),
+                )
+
+                if not cur.fetchone():
+                    raise RuntimeError(
+                        "The observed player is not present in "
+                        "the configured next-season player universe."
+                    )
+
+                if contract_years_at_start >= 2:
+                    rollover_action = "CARRY_FORWARD"
+                    next_league_key = str(
+                        ctx["current_league_key"]
+                    )
+                    next_season_year = expected_next_year
+                    next_team_key = observed_team_key
+                    next_yahoo_player_key = observed_player_key
+                    next_contract_years = (
+                        contract_years_at_start - 1
+                    )
+                    create_contract = True
+
+                    resolution_note = (
+                        "Commissioner recognized the Yahoo "
+                        "team change and carried the contract "
+                        "to the observed NFFL team."
+                    )
+                else:
+                    rollover_action = "EXPIRE"
+
+                    resolution_note = (
+                        "Commissioner recognized the Yahoo "
+                        "team change; the contract was in its "
+                        "final year and expired."
+                    )
+
+            elif resolution == "DROP":
+                rollover_action = "DROP"
+                resolution_note = (
+                    "Commissioner resolved this review as "
+                    "a dropped contract."
+                )
+
+            else:
+                rollover_action = "VOID"
+                resolution_note = (
+                    "Commissioner voided this contract as "
+                    "an administrative correction."
+                )
+
+            existing_reason = str(
+                current.get("reconciliation_reason") or ""
+            ).strip()
+
+            reconciliation_reason = (
+                f"{existing_reason} {resolution_note}"
+                if existing_reason
+                else resolution_note
+            )
+
+            if create_contract:
+                stable_player_id = str(
+                    current["stable_player_id"]
+                )
+
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM nffl.contract
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND split_part(
+                            yahoo_player_key,
+                            '.p.',
+                            2
+                          ) = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        next_league_key,
+                        next_season_year,
+                        stable_player_id,
+                    ),
+                )
+
+                existing_contract = cur.fetchone()
+
+                if existing_contract:
+                    existing_contract = dict(
+                        existing_contract
+                    )
+
+                    exact_existing = (
+                        str(
+                            existing_contract[
+                                "yahoo_player_key"
+                            ]
+                        )
+                        == next_yahoo_player_key
+                        and str(
+                            existing_contract["team_key"]
+                        )
+                        == next_team_key
+                        and int(
+                            existing_contract[
+                                "contract_years_remaining"
+                            ]
+                        )
+                        == next_contract_years
+                        and str(
+                            existing_contract[
+                                "contract_source"
+                            ]
+                        )
+                        == "season_rollover"
+                        and str(
+                            existing_contract.get(
+                                "source_snapshot_id"
+                            )
+                            or ""
+                        )
+                        == str(
+                            current[
+                                "end_roster_snapshot_id"
+                            ]
+                        )
+                        and str(
+                            existing_contract["status"]
+                        )
+                        == "active"
+                    )
+
+                    if not exact_existing:
+                        raise RuntimeError(
+                            "A conflicting next-season contract "
+                            "already exists for this player."
+                        )
+
+                    create_contract = False
+
+            next_revision = (
+                int(current["audit_revision"]) + 1
+            )
+
+            cur.execute(
+                """
+                INSERT INTO nffl.contract_season_audit (
+                    league_key,
+                    season_year,
+                    team_key_at_start,
+                    yahoo_player_key_at_start,
+                    stable_player_id,
+                    contract_years_at_start,
+                    contract_status_at_start,
+                    contract_source_at_start,
+                    contract_source_snapshot_id,
+                    origin_contract_episode_id,
+                    end_roster_snapshot_id,
+                    roster_reconciliation_status,
+                    observed_source_team_key,
+                    observed_source_yahoo_player_key,
+                    observed_current_team_key,
+                    observed_current_yahoo_player_key,
+                    rollover_action,
+                    next_season_year,
+                    next_league_key,
+                    next_team_key,
+                    next_yahoo_player_key,
+                    next_contract_years,
+                    reconciliation_reason,
+                    audit_revision,
+                    supersedes_audit_id,
+                    audited_at_utc,
+                    audited_by
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    now(), %s
+                )
+                RETURNING *
+                """,
+                (
+                    current["league_key"],
+                    current["season_year"],
+                    current["team_key_at_start"],
+                    current["yahoo_player_key_at_start"],
+                    current["stable_player_id"],
+                    current["contract_years_at_start"],
+                    current["contract_status_at_start"],
+                    current["contract_source_at_start"],
+                    current["contract_source_snapshot_id"],
+                    current["origin_contract_episode_id"],
+                    current["end_roster_snapshot_id"],
+                    current[
+                        "roster_reconciliation_status"
+                    ],
+                    current[
+                        "observed_source_team_key"
+                    ],
+                    current[
+                        "observed_source_yahoo_player_key"
+                    ],
+                    current[
+                        "observed_current_team_key"
+                    ],
+                    current[
+                        "observed_current_yahoo_player_key"
+                    ],
+                    rollover_action,
+                    next_season_year,
+                    next_league_key,
+                    next_team_key,
+                    next_yahoo_player_key,
+                    next_contract_years,
+                    reconciliation_reason,
+                    next_revision,
+                    current[
+                        "contract_season_audit_id"
+                    ],
+                    actor,
+                ),
+            )
+
+            revised_audit = dict(cur.fetchone())
+
+            contract_created = False
+
+            if create_contract:
+                cur.execute(
+                    """
+                    INSERT INTO nffl.contract (
+                        league_key,
+                        season_year,
+                        team_key,
+                        yahoo_player_key,
+                        contract_years_remaining,
+                        contract_source,
+                        source_snapshot_id,
+                        status,
+                        note,
+                        created_at_utc,
+                        updated_at_utc
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        'season_rollover',
+                        %s,
+                        'active',
+                        %s,
+                        now(),
+                        now()
+                    )
+                    """,
+                    (
+                        next_league_key,
+                        next_season_year,
+                        next_team_key,
+                        next_yahoo_player_key,
+                        next_contract_years,
+                        current[
+                            "end_roster_snapshot_id"
+                        ],
+                        (
+                            f"Carried forward from "
+                            f"{season_year} contract after "
+                            "commissioner resolution of "
+                            "finalized end-of-season roster "
+                            "reconciliation."
+                        ),
+                    ),
+                )
+
+                contract_created = True
+
+    return {
+        "contract_season_audit_id": revised_audit[
+            "contract_season_audit_id"
+        ],
+        "audit_revision": revised_audit[
+            "audit_revision"
+        ],
+        "rollover_action": revised_audit[
+            "rollover_action"
+        ],
+        "contract_created": contract_created,
+    }
+
+
+def _render_season_end_contract_update(
+    dsn: str,
+    *,
+    acting_as: str,
+) -> None:
+    """Commissioner workflow for creating next-season contracts."""
+    from collections import Counter
+
+    st.markdown("### Season-End Contract Update")
+
+    try:
+        state = _load_season_end_contract_state(dsn)
+    except Exception as exc:
+        st.error(
+            "Could not load the season-end contract status: "
+            f"{exc}"
+        )
+        return
+
+    current_year = int(state["current_season_year"])
+    prior_year = int(state["prior_season_year"])
+    snapshot_id = str(state["snapshot_id"])
+    prior_contract_count = int(
+        state["prior_contract_count"]
+    )
+    audit_count = int(state["audit_count"])
+
+    st.caption(
+        f"Move {prior_year} contracts into {current_year}. "
+        "The new Yahoo season must be configured first."
+    )
+
+    if prior_contract_count == 0:
+        st.info(
+            f"There are no active {prior_year} contracts "
+            "to roll forward in the current season setup. "
+            "For the historical 2025 → 2026 bootstrap, this is "
+            "expected. This workflow becomes active after the "
+            "next Yahoo season is configured."
+        )
+        return
+
+    if audit_count not in {
+        0,
+        prior_contract_count,
+    }:
+        st.error(
+            "The season-end audit is incomplete: "
+            f"{audit_count} of {prior_contract_count} active "
+            "contracts currently have audit results. "
+            "Do not continue until this database state is reviewed."
+        )
+        return
+
+    st.markdown("#### Step 1 — Capture the final Yahoo rosters")
+
+    if not bool(state["snapshot_exists"]):
+        st.warning(
+            f"No final {prior_year} Yahoo roster has been captured yet."
+        )
+
+        if st.button(
+            f"Capture {prior_year} Final Yahoo Rosters",
+            key="nffl_capture_final_prior_rosters",
+        ):
+            try:
+                _capture_prior_season_roster_snapshot(dsn)
+            except Exception as exc:
+                st.error(
+                    "Yahoo roster capture failed: "
+                    f"{exc}"
+                )
+            else:
+                st.success(
+                    f"Captured the final {prior_year} Yahoo rosters."
+                )
+                st.rerun()
+
+        return
+
+    source_count = int(
+        state.get("source_player_count") or 0
+    )
+    normalized_count = int(
+        state.get("normalized_player_count") or 0
+    )
+    unmapped_count = int(
+        state.get("unmapped_player_count") or 0
+    )
+
+    st.success(
+        f"Captured {source_count} Yahoo roster entries. "
+        f"{normalized_count} matched DraftBoard players; "
+        f"{unmapped_count} could not be mapped automatically."
+    )
+
+    st.markdown("#### Step 2 — Lock the captured roster")
+
+    if not bool(state["snapshot_finalized"]):
+        st.warning(
+            "The roster has been captured but is not locked yet. "
+            "Once locked, DraftBoard will preserve it as the "
+            "permanent end-of-season evidence."
+        )
+
+        confirm_lock = st.checkbox(
+            (
+                f"I confirm the captured {prior_year} rosters "
+                "are the final Yahoo rosters."
+            ),
+            key="nffl_finalize_roster_snapshot_confirmation",
+        )
+
+        if st.button(
+            f"Lock {prior_year} Final Rosters",
+            type="primary",
+            disabled=not confirm_lock,
+            key="nffl_finalize_roster_snapshot_button",
+        ):
+            try:
+                _finalize_roster_snapshot(
+                    dsn,
+                    snapshot_id,
+                    finalized_by=acting_as,
+                )
+            except Exception as exc:
+                st.error(
+                    "The roster was not locked: "
+                    f"{exc}"
+                )
+            else:
+                st.success(
+                    f"The {prior_year} final roster is now locked."
+                )
+                st.rerun()
+
+        return
+
+    fingerprint = str(
+        state.get("content_sha256") or ""
+    )
+
+    st.success(
+        f"The {prior_year} final roster is locked. "
+        f"Evidence fingerprint: {fingerprint[:12]}…"
+    )
+
+    st.markdown("#### Step 3 — Review the contract changes")
+
+    try:
+        preview_rows = _preview_season_end_contract_changes(
+            dsn,
+            state,
+        )
+    except Exception as exc:
+        st.error(
+            "Could not calculate the contract changes: "
+            f"{exc}"
+        )
+        return
+
+    action_counts = Counter(
+        str(row.get("rollover_action") or "")
+        for row in preview_rows
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Carry Forward",
+        int(action_counts.get("CARRY_FORWARD", 0)),
+    )
+    c2.metric(
+        "Expire",
+        int(action_counts.get("EXPIRE", 0)),
+    )
+    c3.metric(
+        "Drop",
+        (
+            int(action_counts.get("DROP", 0))
+            + int(action_counts.get("VOID", 0))
+        ),
+    )
+    c4.metric(
+        "Needs Review",
+        int(action_counts.get("NEEDS_REVIEW", 0)),
+    )
+
+    preview_review_rows = [
+        row
+        for row in preview_rows
+        if str(row.get("rollover_action") or "")
+        == "NEEDS_REVIEW"
+    ]
+
+    if audit_count == 0:
+        st.markdown(
+            f"#### Step 4 — Record the {prior_year} results"
+        )
+
+        if preview_review_rows:
+            st.warning(
+                f"{len(preview_review_rows)} contract(s) need "
+                "commissioner review. Recording the season-end "
+                "results will save all automatic carry, expire, "
+                "and drop decisions and open those unusual cases "
+                "for resolution. It will not guess how to resolve them."
+            )
+        else:
+            st.caption(
+                "No unusual contracts need review. "
+                "This will record the season-end audit and create "
+                f"the contracts that carry into {current_year}."
+            )
+
+        confirm_apply = st.checkbox(
+            (
+                f"I reviewed the {prior_year} results and confirm "
+                "DraftBoard should record them."
+            ),
+            key="nffl_apply_season_rollover_confirmation",
+        )
+
+        if st.button(
+            f"Record {prior_year} Season-End Results",
+            type="primary",
+            disabled=not confirm_apply,
+            key="nffl_apply_season_rollover_button",
+        ):
+            try:
+                _apply_season_end_contract_changes(
+                    dsn,
+                    state,
+                    audited_by=acting_as,
+                )
+            except Exception as exc:
+                st.error(
+                    "The season-end results were not recorded: "
+                    f"{exc}"
+                )
+            else:
+                st.success(
+                    f"The {prior_year} season-end results "
+                    "were recorded."
+                )
+                st.rerun()
+
+        return
+
+    try:
+        unresolved_rows = (
+            _load_needs_review_contract_audits(
+                dsn,
+                state,
+            )
+        )
+    except Exception as exc:
+        st.error(
+            "Could not load the contracts needing review: "
+            f"{exc}"
+        )
+        return
+
+    if unresolved_rows:
+        st.markdown(
+            "#### Step 5 — Resolve unusual contracts"
+        )
+
+        st.warning(
+            f"{len(unresolved_rows)} contract(s) still need "
+            "a commissioner decision. Next-season processing "
+            "is not complete until each one is resolved."
+        )
+
+        for row in unresolved_rows:
+            audit_id = int(
+                row["contract_season_audit_id"]
+            )
+            player_name = str(
+                row.get("player_name")
+                or row["yahoo_player_key_at_start"]
+            )
+            years = int(
+                row["contract_years_at_start"]
+            )
+            roster_status = str(
+                row["roster_reconciliation_status"]
+            )
+
+            with st.expander(
+                f"{player_name} — {years} year(s) remaining",
+                expanded=True,
+            ):
+                st.write(
+                    f"**Starting team:** "
+                    f"{row.get('start_team_name') or row['team_key_at_start']}"
+                )
+
+                if roster_status == "DIFFERENT_TEAM":
+                    st.write(
+                        f"**Yahoo final roster:** "
+                        f"{row.get('observed_team_name') or row.get('observed_current_team_key')}"
+                    )
+                    st.caption(
+                        "Yahoo shows this contracted player on "
+                        "another NFFL team."
+                    )
+                elif roster_status == "SOURCE_PLAYER_UNMAPPED":
+                    st.caption(
+                        "Yahoo returned this player in the final "
+                        "roster, but DraftBoard could not map the "
+                        "player into the new-season Yahoo player universe."
+                    )
+                else:
+                    st.caption(
+                        str(
+                            row.get(
+                                "reconciliation_reason"
+                            )
+                            or roster_status
+                        )
+                    )
+
+                choices: dict[str, str] = {}
+
+                if (
+                    roster_status == "DIFFERENT_TEAM"
+                    and row.get(
+                        "observed_current_team_key"
+                    )
+                    and row.get(
+                        "observed_current_yahoo_player_key"
+                    )
+                ):
+                    if years >= 2:
+                        choices[
+                            "Recognize move / trade and carry contract"
+                        ] = "RECOGNIZE_MOVE"
+                    else:
+                        choices[
+                            "Recognize move / trade — contract expires"
+                        ] = "RECOGNIZE_MOVE"
+
+                choices["Drop contract"] = "DROP"
+                choices["Void contract"] = "VOID"
+
+                choice_label = st.selectbox(
+                    "Commissioner resolution",
+                    list(choices.keys()),
+                    key=(
+                        "nffl_contract_review_choice_"
+                        f"{audit_id}"
+                    ),
+                )
+
+                confirm_resolution = st.checkbox(
+                    (
+                        "I confirm this resolution for "
+                        f"{player_name}."
+                    ),
+                    key=(
+                        "nffl_contract_review_confirm_"
+                        f"{audit_id}"
+                    ),
+                )
+
+                if st.button(
+                    "Save Resolution",
+                    type="primary",
+                    disabled=not confirm_resolution,
+                    key=(
+                        "nffl_contract_review_save_"
+                        f"{audit_id}"
+                    ),
+                ):
+                    try:
+                        result = _resolve_contract_review(
+                            dsn,
+                            audit_id,
+                            choices[choice_label],
+                            resolved_by=acting_as,
+                        )
+                    except Exception as exc:
+                        st.error(
+                            "The contract review was not resolved: "
+                            f"{exc}"
+                        )
+                    else:
+                        action = str(
+                            result["rollover_action"]
+                        )
+
+                        if action == "CARRY_FORWARD":
+                            st.success(
+                                "Resolution saved and the "
+                                f"{current_year} contract was created."
+                            )
+                        elif action == "EXPIRE":
+                            st.success(
+                                "Resolution saved. The contract "
+                                "expired after its final year."
+                            )
+                        elif action == "DROP":
+                            st.success(
+                                "Resolution saved as a dropped contract."
+                            )
+                        else:
+                            st.success(
+                                "Resolution saved as a voided contract."
+                            )
+
+                        st.rerun()
+
+        return
+
+    state = _load_season_end_contract_state(dsn)
+
+    st.success(
+        f"The {prior_year} → {current_year} contract update "
+        "is complete. "
+        f"{state['rollover_contract_count']} active contracts "
+        f"carried into {current_year}."
+    )
+
 def _fetch_contract_history_rows(
     dsn: str,
 ) -> list[dict[str, Any]]:
+    """Return continuous contract history across legacy and modern seasons."""
     sql = """
-        WITH ctx AS (
+        WITH RECURSIVE
+        ctx AS (
             SELECT
+                current_season_year,
                 current_league_key AS league_key
             FROM nffl.v_active_season_context
             LIMIT 1
+        ),
+
+        -- Yahoo changes league/team keys between seasons.
+        -- Walk the saved team bridges backward so every historical
+        -- franchise can be displayed under its current team key.
+        team_lineage AS (
+            SELECT
+                b.current_season_year AS season_year,
+                b.current_league_key AS league_key,
+                b.current_team_key AS team_key,
+                b.current_team_key AS display_team_key
+            FROM nffl.team_season_bridge b
+            JOIN ctx
+              ON ctx.current_season_year =
+                 b.current_season_year
+             AND ctx.league_key =
+                 b.current_league_key
+
+            UNION
+
+            SELECT
+                b.source_season_year,
+                b.source_league_key,
+                b.source_team_key,
+                tl.display_team_key
+            FROM team_lineage tl
+            JOIN nffl.team_season_bridge b
+              ON b.current_season_year =
+                 tl.season_year
+             AND b.current_league_key =
+                 tl.league_key
+             AND b.current_team_key =
+                 tl.team_key
+        ),
+
+        -- Spreadsheet history: 2021-2025.
+        legacy_rows AS (
+            SELECT
+                ctx.league_key,
+                tl.display_team_key AS team_key,
+                e.source_row_number,
+                e.source_owner_name,
+                e.source_team_name,
+                e.player_name,
+                e.yahoo_player_key,
+                e.source_note,
+                s.season_year,
+                s.contract_years,
+                s.contract_status,
+                s.acquisition_type,
+                s.source_value,
+                s.note
+            FROM nffl.historical_contract_episode e
+            JOIN team_lineage tl
+              ON tl.league_key = e.league_key
+             AND tl.team_key = e.team_key
+            CROSS JOIN ctx
+            JOIN nffl.historical_contract_season s
+              ON s.league_key = e.league_key
+             AND s.team_key = e.team_key
+             AND s.source_row_number =
+                 e.source_row_number
+            WHERE s.season_year <= 2025
+        ),
+
+        -- The contracts that crossed the spreadsheet/DraftBoard
+        -- boundary into the 2026 season.
+        legacy_boundary_rows AS (
+            SELECT
+                ctx.league_key,
+                tl.display_team_key AS team_key,
+                e.source_row_number,
+                e.source_owner_name,
+                e.source_team_name,
+                e.player_name,
+                e.yahoo_player_key,
+                e.source_note,
+                c.season_year,
+                CASE
+                    WHEN c.status = 'active'
+                        THEN c.contract_years_remaining
+                    ELSE NULL
+                END AS contract_years,
+                CASE c.status
+                    WHEN 'active' THEN 'CONTRACT'
+                    WHEN 'void' THEN 'DROPPED'
+                    WHEN 'expired' THEN 'EXPIRED'
+                    WHEN 'needs_review' THEN 'NEEDS_REVIEW'
+                    ELSE upper(c.status)
+                END AS contract_status,
+                'NONE'::text AS acquisition_type,
+                CASE c.status
+                    WHEN 'active'
+                        THEN c.contract_years_remaining::text
+                    WHEN 'void'
+                        THEN 'Dropped'
+                    WHEN 'expired'
+                        THEN 'Expired'
+                    WHEN 'needs_review'
+                        THEN 'Review'
+                    ELSE c.status
+                END AS source_value,
+                CASE c.status
+                    WHEN 'void'
+                        THEN 'Operational contract status: void.'
+                    WHEN 'needs_review'
+                        THEN 'Operational contract requires review.'
+                    ELSE ''
+                END AS note
+            FROM nffl.historical_contract_episode e
+            JOIN team_lineage tl
+              ON tl.league_key = e.league_key
+             AND tl.team_key = e.team_key
+            CROSS JOIN ctx
+            JOIN nffl.contract c
+              ON c.league_key = e.league_key
+             AND c.team_key = e.team_key
+             AND c.yahoo_player_key =
+                 e.yahoo_player_key
+             AND c.season_year = 2026
+            WHERE e.yahoo_player_key IS NOT NULL
+        ),
+
+        -- Future years for contracts that originally came from
+        -- the spreadsheet.  The year-end audit tells us whether
+        -- the contract carried, expired, dropped, or needs review.
+        legacy_rollover_rows AS (
+            SELECT
+                ctx.league_key,
+                tl.display_team_key AS team_key,
+                e.source_row_number,
+                e.source_owner_name,
+                e.source_team_name,
+                e.player_name,
+                e.yahoo_player_key,
+                e.source_note,
+
+                COALESCE(
+                    a.next_season_year,
+                    a.season_year + 1
+                ) AS season_year,
+
+                CASE
+                    WHEN a.rollover_action = 'CARRY_FORWARD'
+                        THEN a.next_contract_years
+                    ELSE NULL
+                END AS contract_years,
+
+                CASE a.rollover_action
+                    WHEN 'CARRY_FORWARD' THEN 'CONTRACT'
+                    WHEN 'EXPIRE' THEN 'EXPIRED'
+                    WHEN 'DROP' THEN 'DROPPED'
+                    WHEN 'VOID' THEN 'VOID'
+                    WHEN 'NEEDS_REVIEW' THEN 'NEEDS_REVIEW'
+                    ELSE a.rollover_action
+                END AS contract_status,
+
+                'NONE'::text AS acquisition_type,
+
+                CASE a.rollover_action
+                    WHEN 'CARRY_FORWARD'
+                        THEN a.next_contract_years::text
+                    WHEN 'EXPIRE'
+                        THEN 'Expired'
+                    WHEN 'DROP'
+                        THEN 'Dropped'
+                    WHEN 'VOID'
+                        THEN 'Void'
+                    WHEN 'NEEDS_REVIEW'
+                        THEN 'Review'
+                    ELSE a.rollover_action
+                END AS source_value,
+
+                COALESCE(
+                    a.reconciliation_reason,
+                    ''
+                ) AS note
+
+            FROM nffl.historical_contract_episode e
+
+            JOIN team_lineage tl
+              ON tl.league_key = e.league_key
+             AND tl.team_key = e.team_key
+
+            CROSS JOIN ctx
+
+            JOIN nffl.v_contract_season_audit_current a
+              ON a.origin_contract_episode_id IS NULL
+             AND a.stable_player_id =
+                 split_part(
+                     e.yahoo_player_key,
+                     '.',
+                     3
+                 )
+             AND a.season_year >= 2026
+
+            WHERE e.yahoo_player_key IS NOT NULL
+              AND a.rollover_action IN (
+                  'CARRY_FORWARD',
+                  'EXPIRE',
+                  'DROP',
+                  'VOID',
+                  'NEEDS_REVIEW'
+              )
+        ),
+
+        -- New contracts awarded by DraftBoard beginning in 2026.
+        modern_award_rows AS (
+            SELECT
+                ctx.league_key,
+                tl.display_team_key AS team_key,
+
+                -- Historical spreadsheet row numbers are positive.
+                -- Modern episode IDs are negated only for the UI row key.
+                -h.contract_episode_id
+                    AS source_row_number,
+
+                NULL::text AS source_owner_name,
+                NULL::text AS source_team_name,
+
+                COALESCE(
+                    pu.full_name,
+                    h.yahoo_player_key
+                ) AS player_name,
+
+                h.yahoo_player_key,
+
+                concat(
+                    'Contract awarded via ',
+                    h.source_pick_kind,
+                    ' ',
+                    h.source_pick_id
+                ) AS source_note,
+
+                h.season_year,
+
+                h.contract_years_awarded
+                    AS contract_years,
+
+                'CONTRACT'::text
+                    AS contract_status,
+
+                'NONE'::text
+                    AS acquisition_type,
+
+                h.contract_years_awarded::text
+                    AS source_value,
+
+                concat(
+                    'New ',
+                    h.contract_years_awarded,
+                    '-year contract awarded via ',
+                    h.source_pick_kind,
+                    ' ',
+                    h.source_pick_id,
+                    '.'
+                ) AS note
+
+            FROM nffl.contract_history_episode h
+
+            JOIN team_lineage tl
+              ON tl.league_key = h.league_key
+             AND tl.team_key = h.team_key
+
+            CROSS JOIN ctx
+
+            LEFT JOIN nffl.player_universe pu
+              ON pu.league_key = h.league_key
+             AND pu.season_year = h.season_year
+             AND pu.yahoo_player_key =
+                 h.yahoo_player_key
+
+            WHERE h.season_year >= 2026
+        ),
+
+        -- Every later year stays attached to the same modern
+        -- contract episode that created the original row.
+        modern_rollover_rows AS (
+            SELECT
+                ctx.league_key,
+                tl.display_team_key AS team_key,
+
+                -h.contract_episode_id
+                    AS source_row_number,
+
+                NULL::text AS source_owner_name,
+                NULL::text AS source_team_name,
+
+                COALESCE(
+                    pu.full_name,
+                    h.yahoo_player_key
+                ) AS player_name,
+
+                h.yahoo_player_key,
+
+                concat(
+                    'Contract episode ',
+                    h.contract_episode_id
+                ) AS source_note,
+
+                COALESCE(
+                    a.next_season_year,
+                    a.season_year + 1
+                ) AS season_year,
+
+                CASE
+                    WHEN a.rollover_action = 'CARRY_FORWARD'
+                        THEN a.next_contract_years
+                    ELSE NULL
+                END AS contract_years,
+
+                CASE a.rollover_action
+                    WHEN 'CARRY_FORWARD' THEN 'CONTRACT'
+                    WHEN 'EXPIRE' THEN 'EXPIRED'
+                    WHEN 'DROP' THEN 'DROPPED'
+                    WHEN 'VOID' THEN 'VOID'
+                    WHEN 'NEEDS_REVIEW' THEN 'NEEDS_REVIEW'
+                    ELSE a.rollover_action
+                END AS contract_status,
+
+                'NONE'::text AS acquisition_type,
+
+                CASE a.rollover_action
+                    WHEN 'CARRY_FORWARD'
+                        THEN a.next_contract_years::text
+                    WHEN 'EXPIRE'
+                        THEN 'Expired'
+                    WHEN 'DROP'
+                        THEN 'Dropped'
+                    WHEN 'VOID'
+                        THEN 'Void'
+                    WHEN 'NEEDS_REVIEW'
+                        THEN 'Review'
+                    ELSE a.rollover_action
+                END AS source_value,
+
+                COALESCE(
+                    a.reconciliation_reason,
+                    ''
+                ) AS note
+
+            FROM nffl.contract_history_episode h
+
+            JOIN team_lineage tl
+              ON tl.league_key = h.league_key
+             AND tl.team_key = h.team_key
+
+            CROSS JOIN ctx
+
+            JOIN nffl.v_contract_season_audit_current a
+              ON a.origin_contract_episode_id =
+                 h.contract_episode_id
+
+            LEFT JOIN nffl.player_universe pu
+              ON pu.league_key = h.league_key
+             AND pu.season_year = h.season_year
+             AND pu.yahoo_player_key =
+                 h.yahoo_player_key
+
+            WHERE a.rollover_action IN (
+                'CARRY_FORWARD',
+                'EXPIRE',
+                'DROP',
+                'VOID',
+                'NEEDS_REVIEW'
+            )
+        ),
+
+        all_rows AS (
+            SELECT *
+            FROM legacy_rows
+
+            UNION ALL
+
+            SELECT *
+            FROM legacy_boundary_rows
+
+            UNION ALL
+
+            SELECT *
+            FROM legacy_rollover_rows
+
+            UNION ALL
+
+            SELECT *
+            FROM modern_award_rows
+
+            UNION ALL
+
+            SELECT *
+            FROM modern_rollover_rows
+        ),
+
+        -- Franchise Tags remain authoritative in their own
+        -- lifecycle table. Normalize them to the current franchise
+        -- lineage only for Contract History display.
+        ft_rows AS (
+            SELECT
+                ctx.league_key,
+                f.league_key AS source_league_key,
+                tl.display_team_key AS team_key,
+                f.season_year,
+                f.yahoo_player_key,
+                f.note
+            FROM nffl.franchise_tag_history f
+            JOIN team_lineage tl
+              ON tl.league_key = f.league_key
+             AND tl.team_key = f.team_key
+            CROSS JOIN ctx
+            WHERE f.season_year >= 2026
+              AND f.tag_status = 'applied'
+        ),
+
+        -- Commissioner corrections are sparse overlays.
+        -- The original imported/award history remains unchanged.
+        -- A real Franchise Tag wins the display for that season.
+        effective_rows AS (
+            SELECT
+                ar.league_key,
+
+                COALESCE(
+                    o.team_key,
+                    ar.team_key
+                ) AS team_key,
+
+                ar.source_row_number,
+                ar.source_owner_name,
+                ar.source_team_name,
+                ar.player_name,
+                ar.yahoo_player_key,
+                ar.source_note,
+                ar.season_year,
+
+                CASE
+                    WHEN ft.yahoo_player_key IS NOT NULL
+                        THEN NULL
+                    WHEN o.yahoo_player_key IS NOT NULL
+                        THEN o.contract_years
+                    ELSE ar.contract_years
+                END AS contract_years,
+
+                CASE
+                    WHEN ft.yahoo_player_key IS NOT NULL
+                        THEN 'FT'
+                    ELSE COALESCE(
+                        o.contract_status,
+                        ar.contract_status
+                    )
+                END AS contract_status,
+
+                CASE
+                    WHEN ft.yahoo_player_key IS NOT NULL
+                        THEN 'NONE'
+                    ELSE COALESCE(
+                        o.acquisition_type,
+                        ar.acquisition_type
+                    )
+                END AS acquisition_type,
+
+                CASE
+                    WHEN ft.yahoo_player_key IS NOT NULL
+                        THEN 'FT'
+                    WHEN o.yahoo_player_key IS NULL
+                        THEN ar.source_value
+                    WHEN o.contract_status = 'CONTRACT'
+                        THEN o.contract_years::text
+                    WHEN o.contract_status = 'NO_CONTRACT'
+                        THEN 'No Contract'
+                    WHEN o.contract_status = 'DROPPED'
+                        THEN 'Dropped'
+                    WHEN o.contract_status = 'EXPIRED'
+                        THEN 'Expired'
+                    WHEN o.contract_status = 'NEEDS_REVIEW'
+                        THEN 'Review'
+                    ELSE o.contract_status
+                END AS source_value,
+
+                CASE
+                    WHEN ft.yahoo_player_key IS NOT NULL
+                        THEN COALESCE(
+                            NULLIF(ft.note, ''),
+                            'Franchise Tag'
+                        )
+                    WHEN o.yahoo_player_key IS NOT NULL
+                        THEN COALESCE(
+                            NULLIF(o.note, ''),
+                            ar.note
+                        )
+                    ELSE ar.note
+                END AS note
+
+            FROM all_rows ar
+
+            LEFT JOIN
+                nffl.contract_history_season_override o
+              ON o.league_key = ar.league_key
+             AND o.season_year = ar.season_year
+             AND o.yahoo_player_key =
+                 ar.yahoo_player_key
+
+            LEFT JOIN ft_rows ft
+              ON ft.league_key = ar.league_key
+             AND ft.team_key = COALESCE(
+                    o.team_key,
+                    ar.team_key
+                 )
+             AND ft.season_year = ar.season_year
+             AND split_part(
+                    ft.yahoo_player_key,
+                    '.',
+                    3
+                 ) = split_part(
+                    ar.yahoo_player_key,
+                    '.',
+                    3
+                 )
+        ),
+
+        -- If the FT season has no normal contract row of its own,
+        -- attach the FT cell to the player's most recent episode.
+        -- If no episode exists at all, use a display-only stable
+        -- negative key derived from Yahoo's numeric player id.
+        missing_ft_rows AS (
+            SELECT
+                ft.league_key,
+                ft.team_key,
+
+                COALESCE(
+                    prior.source_row_number::bigint,
+                    (
+                        -1000000000::bigint
+                        - split_part(
+                            ft.yahoo_player_key,
+                            '.',
+                            3
+                          )::bigint
+                    )
+                ) AS source_row_number,
+
+                prior.source_owner_name,
+                prior.source_team_name,
+
+                COALESCE(
+                    prior.player_name,
+                    pu.full_name,
+                    ft.yahoo_player_key
+                ) AS player_name,
+
+                ft.yahoo_player_key,
+
+                COALESCE(
+                    prior.source_note,
+                    'Franchise Tag'
+                ) AS source_note,
+
+                ft.season_year,
+
+                NULL::integer AS contract_years,
+                'FT'::text AS contract_status,
+                'NONE'::text AS acquisition_type,
+                'FT'::text AS source_value,
+
+                COALESCE(
+                    NULLIF(ft.note, ''),
+                    'Franchise Tag'
+                ) AS note
+
+            FROM ft_rows ft
+
+            LEFT JOIN LATERAL (
+                SELECT
+                    ar.source_row_number,
+                    ar.source_owner_name,
+                    ar.source_team_name,
+                    ar.player_name,
+                    ar.source_note
+                FROM all_rows ar
+                WHERE ar.team_key = ft.team_key
+                  AND split_part(
+                          ar.yahoo_player_key,
+                          '.',
+                          3
+                      ) = split_part(
+                          ft.yahoo_player_key,
+                          '.',
+                          3
+                      )
+                  AND ar.season_year < ft.season_year
+                ORDER BY ar.season_year DESC
+                LIMIT 1
+            ) prior
+              ON true
+
+            LEFT JOIN nffl.player_universe pu
+              ON pu.league_key = ft.source_league_key
+             AND pu.season_year = ft.season_year
+             AND pu.yahoo_player_key =
+                 ft.yahoo_player_key
+
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM all_rows ar
+                WHERE ar.team_key = ft.team_key
+                  AND ar.season_year = ft.season_year
+                  AND split_part(
+                          ar.yahoo_player_key,
+                          '.',
+                          3
+                      ) = split_part(
+                          ft.yahoo_player_key,
+                          '.',
+                          3
+                      )
+            )
+        ),
+
+        display_rows AS (
+            SELECT *
+            FROM effective_rows
+
+            UNION ALL
+
+            SELECT *
+            FROM missing_ft_rows
         )
+
         SELECT
-            h.contract_episode_id,
-            h.league_key,
-            h.season_year,
-            h.draft_key,
-            h.team_key,
-            h.yahoo_player_key,
-            COALESCE(
-                pu.full_name,
-                h.yahoo_player_key
-            ) AS player_name,
-            h.contract_years_awarded,
-            h.source_pick_id,
-            h.source_pick_kind,
-            h.published_at_utc
-        FROM nffl.contract_history_episode h
-        JOIN ctx
-          ON ctx.league_key = h.league_key
-        LEFT JOIN nffl.player_universe pu
-          ON pu.league_key = h.league_key
-         AND pu.season_year = h.season_year
-         AND pu.yahoo_player_key =
-             h.yahoo_player_key
+            dr.*,
+            (
+                dr.season_year =
+                    ctx.current_season_year
+                AND upper(
+                    dr.contract_status
+                ) = 'CONTRACT'
+                AND EXISTS (
+                    SELECT 1
+                    FROM nffl.contract c
+                    WHERE c.league_key =
+                          ctx.league_key
+                      AND c.season_year =
+                          ctx.current_season_year
+                      AND c.team_key =
+                          dr.team_key
+                      AND split_part(
+                              c.yahoo_player_key,
+                              '.',
+                              3
+                          ) = split_part(
+                              dr.yahoo_player_key,
+                              '.',
+                              3
+                          )
+                      AND c.status = 'active'
+                )
+            ) AS is_active_contract
+
+        FROM display_rows dr
+        CROSS JOIN ctx
+
         ORDER BY
-            h.team_key,
-            h.published_at_utc DESC,
-            h.contract_episode_id DESC
+            dr.team_key,
+            dr.source_row_number,
+            dr.season_year DESC
     """
 
     with psycopg.connect(
@@ -743,62 +2810,381 @@ def _fetch_contract_history_rows(
                 for row in cur.fetchall()
             ]
 
-
-def _contract_history_df(
+def _render_contract_history_matrix(
     rows: list[dict[str, Any]],
-) -> pd.DataFrame:
-    display_rows = []
+    *,
+    show_internal_notes: bool = True,
+) -> None:
+    if not rows:
+        st.caption(
+            "No historical contract data has "
+            "been imported for this team."
+        )
+        return
+
+    episodes: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    years: set[int] = set()
 
     for row in rows:
-        published_at = row.get(
-            "published_at_utc"
+        row_number = int(
+            row["source_row_number"]
         )
 
-        published_label = (
-            published_at.strftime(
-                "%Y-%m-%d %H:%M UTC"
+        episode = episodes.setdefault(
+            row_number,
+            {
+                "player_name": str(
+                    row["player_name"]
+                ),
+                "source_note": str(
+                    row.get("source_note")
+                    or ""
+                ),
+                "is_active_contract": bool(
+                    row.get("is_active_contract")
+                ),
+                "cells": {},
+            },
+        )
+
+        episode["is_active_contract"] = (
+            bool(
+                episode.get(
+                    "is_active_contract"
+                )
             )
-            if hasattr(published_at, "strftime")
-            else str(published_at or "")
+            or bool(
+                row.get(
+                    "is_active_contract"
+                )
+            )
         )
 
-        pick_id = str(
-            row.get("source_pick_id") or ""
+        season_year = int(
+            row["season_year"]
         )
 
-        pick_kind = str(
-            row.get("source_pick_kind") or ""
+        years.add(season_year)
+
+        episode["cells"][season_year] = row
+
+    ordered_years = sorted(
+        years,
+        reverse=True,
+    )
+
+    def escaped(value: Any) -> str:
+        return html.escape(
+            str(value or ""),
+            quote=True,
+        )
+
+    def cell_details(
+        cell: dict[str, Any],
+    ) -> tuple[str, str, str]:
+        status = str(
+            cell["contract_status"]
         ).upper()
 
-        display_rows.append(
-            {
-                "Season": int(
-                    row["season_year"]
-                ),
-                "Player": str(
-                    row.get("player_name")
-                    or row["yahoo_player_key"]
-                ),
-                "Contract": (
-                    f"{int(row['contract_years_awarded'])} yr"
-                ),
-                "Draft Pick": (
-                    f"{pick_id} ({pick_kind})"
-                ),
-                "Published": published_label,
-            }
+        acquisition = str(
+            cell["acquisition_type"]
+        ).upper()
+
+        years_remaining = cell.get(
+            "contract_years"
         )
 
-    return pd.DataFrame(
-        display_rows,
-        columns=[
-            "Season",
-            "Player",
-            "Contract",
-            "Draft Pick",
-            "Published",
-        ],
+        if status == "CONTRACT":
+            display_value = str(
+                int(years_remaining)
+            )
+            description = (
+                f"{display_value}-year contract"
+            )
+        elif status == "FT":
+            display_value = "FT"
+            description = "Franchise Tag"
+        elif status == "NO_CONTRACT":
+            display_value = "NC"
+            description = "No Contract"
+        elif status == "EXPIRED":
+            display_value = "Expired"
+            description = "Contract expired"
+        elif status == "DROPPED":
+            display_value = "Dropped"
+            description = "Player dropped"
+        else:
+            display_value = escaped(
+                cell.get("source_value")
+            )
+            description = display_value
+
+        if status == "DROPPED":
+            background = (
+                "rgba(239,68,68,0.34)"
+            )
+        elif acquisition == "TRADE":
+            background = (
+                "rgba(34,197,94,0.34)"
+            )
+            description += (
+                "; acquired by trade"
+            )
+        elif acquisition == "WAIVER":
+            background = (
+                "rgba(249,115,22,0.38)"
+            )
+            description += (
+                "; waiver-wire pickup"
+            )
+        elif status == "FT":
+            background = (
+                "rgba(59,130,246,0.36)"
+            )
+        elif status == "NO_CONTRACT":
+            background = (
+                "rgba(236,72,153,0.30)"
+            )
+        elif status == "EXPIRED":
+            background = (
+                "rgba(107,114,128,0.38)"
+            )
+        else:
+            background = (
+                "rgba(148,163,184,0.12)"
+            )
+
+        note = str(
+            cell.get("note")
+            or ""
+        ).strip()
+
+        if note and show_internal_notes:
+            description += f"; {note}"
+
+        return (
+            display_value,
+            background,
+            description,
+        )
+
+    legend = """
+    <div class="nffl-history-legend">
+      <span><b>4/3/2/1</b> Years remaining</span>
+      <span><b>Player names:</b> bright = active; gray = inactive</span>
+      <span><i style="background:rgba(59,130,246,.36)"></i>Franchise Tag</span>
+      <span><i style="background:rgba(236,72,153,.30)"></i>No Contract</span>
+      <span><i style="background:rgba(34,197,94,.34)"></i>Trade</span>
+      <span><i style="background:rgba(239,68,68,.34)"></i>Dropped</span>
+      <span><i style="background:rgba(249,115,22,.38)"></i>Waiver Pickup</span>
+      <span><i style="background:rgba(107,114,128,.38)"></i>Expired</span>
+    </div>
+    """
+
+    header_cells = "".join(
+        (
+            "<th>"
+            + escaped(year)
+            + "</th>"
+        )
+        for year in ordered_years
     )
+
+    body_rows: list[str] = []
+
+    for row_number in sorted(episodes):
+        episode = episodes[row_number]
+        player_name = escaped(
+            episode["player_name"]
+        )
+
+        source_note = escaped(
+            episode["source_note"]
+        )
+
+        player_title = (
+            f' title="{source_note}"'
+            if source_note and show_internal_notes
+            else ""
+        )
+
+        player_class = (
+            "nffl-history-player-active"
+            if episode.get(
+                "is_active_contract"
+            )
+            else "nffl-history-player-inactive"
+        )
+
+        cells = []
+
+        for year in ordered_years:
+            cell = episode[
+                "cells"
+            ].get(year)
+
+            if not cell:
+                cells.append(
+                    '<td class="nffl-history-empty"></td>'
+                )
+                continue
+
+            (
+                display_value,
+                background,
+                description,
+            ) = cell_details(cell)
+
+            cells.append(
+                (
+                    '<td style="background:'
+                    + background
+                    + ';" title="'
+                    + escaped(
+                        f"{year}: {description}"
+                    )
+                    + '">'
+                    + escaped(display_value)
+                    + "</td>"
+                )
+            )
+
+        body_rows.append(
+            (
+                "<tr>"
+                f'<td class="{player_class}"'
+                f"{player_title}>"
+                f"{player_name}</td>"
+                + "".join(cells)
+                + "</tr>"
+            )
+        )
+
+    markup = f"""
+    <style>
+      .nffl-history-legend {{
+        display:flex;
+        flex-wrap:wrap;
+        gap:.45rem 1rem;
+        margin:.15rem 0 .7rem 0;
+        font-size:.82rem;
+      }}
+
+      .nffl-history-legend span {{
+        display:inline-flex;
+        align-items:center;
+        gap:.35rem;
+      }}
+
+      .nffl-history-legend i {{
+        display:inline-block;
+        width:.9rem;
+        height:.9rem;
+        border:1px solid rgba(148,163,184,.55);
+        border-radius:.18rem;
+      }}
+
+      .nffl-history-scroll {{
+        overflow-x:auto;
+        max-width:100%;
+        border:1px solid rgba(148,163,184,.35);
+        border-radius:.4rem;
+      }}
+
+      .nffl-history-table {{
+        border-collapse:separate;
+        border-spacing:0;
+        min-width:760px;
+        width:max-content;
+        color:var(--text-color);
+        font-size:.9rem;
+      }}
+
+      .nffl-history-table th,
+      .nffl-history-table td {{
+        min-width:105px;
+        padding:.48rem .65rem;
+        text-align:center;
+        border-right:1px solid rgba(148,163,184,.25);
+        border-bottom:1px solid rgba(148,163,184,.25);
+        white-space:nowrap;
+      }}
+
+      .nffl-history-table th {{
+        position:sticky;
+        top:0;
+        z-index:2;
+        background:var(--secondary-background-color);
+        font-weight:700;
+      }}
+
+      .nffl-history-table th:first-child,
+      .nffl-history-table td:first-child {{
+        position:sticky;
+        left:0;
+        min-width:220px;
+        max-width:220px;
+        text-align:left;
+        z-index:3;
+        background:var(--secondary-background-color);
+        font-weight:600;
+      }}
+
+      .nffl-history-table th:first-child {{
+        z-index:4;
+      }}
+
+      .nffl-history-table td.nffl-history-player-active {{
+        color:var(--text-color);
+        font-weight:700;
+      }}
+
+      .nffl-history-table td.nffl-history-player-inactive {{
+        color:rgba(148,163,184,.62);
+        font-weight:500;
+      }}
+
+      .nffl-history-table tr:last-child td {{
+        border-bottom:0;
+      }}
+
+      .nffl-history-table th:last-child,
+      .nffl-history-table td:last-child {{
+        border-right:0;
+      }}
+
+      .nffl-history-empty {{
+        background:transparent;
+      }}
+    </style>
+
+    {legend}
+
+    <div class="nffl-history-scroll">
+      <table class="nffl-history-table">
+        <thead>
+          <tr>
+            <th>Players</th>
+            {header_cells}
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(body_rows)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    st.markdown(
+        markup,
+        unsafe_allow_html=True,
+    )
+
+
 
 
 def _contract_label(row: dict[str, Any]) -> str:
@@ -906,7 +3292,7 @@ def _choice_options(team_rows: list[dict[str, Any]], decision_type: str) -> tupl
     rows = sorted(rows, key=_sort_group)
 
     options = [""]
-    labels = {"": "— No selection —"}
+    labels = {"": "â€” No selection â€”"}
 
     for r in rows:
         key = str(r["yahoo_player_key"])
@@ -2463,7 +4849,11 @@ def _publish_new_contracts(
                             %s,
                             %s,
                             'post_draft_contract_submission',
-                            %s,
+                            -- A newly awarded contract is not derived
+                            -- from roster-snapshot evidence. Draft
+                            -- provenance is recorded in
+                            -- contract_history_episode below.
+                            NULL,
                             'active',
                             %s,
                             now(),
@@ -2497,7 +4887,6 @@ def _publish_new_contracts(
                             team_key,
                             player_key,
                             years,
-                            draft_key,
                             note,
                         ),
                     )
@@ -2972,24 +5361,25 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
         except Exception as exc:
             st.warning(f"Could not load live roster display rows; falling back to offseason pool: {exc}")
 
-    contract_history_by_team: dict[
+    contract_history_rows_by_team: dict[
         str,
         list[dict[str, Any]],
     ] = defaultdict(list)
 
-    if contracts_revealed:
-        try:
-            for history_row in (
-                _fetch_contract_history_rows(dsn)
-            ):
-                contract_history_by_team[
-                    str(history_row["team_key"])
-                ].append(history_row)
-        except Exception as exc:
-            st.warning(
-                "Could not load contract history: "
-                f"{exc}"
+    try:
+        for historical_row in (
+            _fetch_contract_history_rows(
+                dsn
             )
+        ):
+            contract_history_rows_by_team[
+                str(historical_row["team_key"])
+            ].append(historical_row)
+    except Exception as exc:
+        st.warning(
+            "Could not load historical "
+            f"contracts: {exc}"
+        )
 
     if gateway_role == "commissioner":
         visible_math_rows = math_rows
@@ -3003,6 +5393,15 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     else:
         st.info("Choose your team in the Team Gateway.")
         return
+
+    if gateway_role == "commissioner":
+        _render_season_end_contract_update(
+            dsn,
+            acting_as=(
+                acting_as_base
+                or "commissioner_ui"
+            ),
+        )
 
     if (
         gateway_role == "commissioner"
@@ -3262,25 +5661,14 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
                 df = _team_position_df(rows, pos, stat_meta)
                 _render_html_table(df)
 
-            if contracts_revealed:
-                st.markdown("#### Contract History")
+            st.markdown("#### Contract History")
 
-                history_rows = (
-                    contract_history_by_team.get(
-                        team_key,
-                        [],
-                    )
-                )
-
-                if history_rows:
-                    _render_html_table(
-                        _contract_history_df(
-                            history_rows
-                        )
-                    )
-                else:
-                    st.caption(
-                        "No published new-contract "
-                        "episodes are available for "
-                        "this team."
-                    )
+            _render_contract_history_matrix(
+                contract_history_rows_by_team.get(
+                    team_key,
+                    [],
+                ),
+                show_internal_notes=(
+                    gateway_role == "commissioner"
+                ),
+            )

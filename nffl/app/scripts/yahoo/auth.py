@@ -32,6 +32,41 @@ def _get_refresh_token(conn) -> str:
         return row[0]
 
 
+def _get_stored_access_token(conn) -> tuple[str, int]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                access_token,
+                round(
+                    extract(
+                        epoch FROM (
+                            updated_at
+                            + make_interval(secs => expires_in)
+                            - now()
+                        )
+                    )
+                )::bigint AS seconds_remaining
+            FROM yahoo_oauth_token
+            WHERE app_name = %s
+            """,
+            (APP_NAME,),
+        )
+        row = cur.fetchone()
+
+    if not row or not row[0]:
+        raise RuntimeError(
+            f"No stored access token found for app_name='{APP_NAME}'"
+        )
+
+    return str(row[0]), int(row[1] or 0)
+
+
+def _no_refresh_mode() -> bool:
+    value = os.environ.get("YAHOO_AUTH_NO_REFRESH", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _store_tokens(
     conn,
     refresh_token: str,
@@ -74,8 +109,24 @@ def _store_tokens(
 def get_access_token() -> str:
     """
     Returns a valid Yahoo access token.
-    Refreshes and persists tokens as needed.
+
+    When YAHOO_AUTH_NO_REFRESH is enabled, only an existing unexpired
+    database access token may be used. Yahoo refresh requests and OAuth
+    database writes are prohibited in that mode.
     """
+    if _no_refresh_mode():
+        with _get_db_conn() as conn:
+            access_token, seconds_remaining = _get_stored_access_token(conn)
+
+        if seconds_remaining <= 60:
+            raise RuntimeError(
+                "YAHOO_AUTH_NO_REFRESH is enabled but the stored Yahoo "
+                f"access token has only {seconds_remaining} seconds remaining. "
+                "Refusing to refresh or write OAuth credentials."
+            )
+
+        return access_token
+
     client_id = os.environ.get("YAHOO_CLIENT_ID")
     client_secret = os.environ.get("YAHOO_CLIENT_SECRET")
 

@@ -424,6 +424,67 @@ def _nffl_count_rows(cur, sql: str, params: tuple) -> int:
     return int(row[0] or 0) if row else 0
 
 
+def _nffl_find_origin_contract_episode(
+    cur,
+    *,
+    league_key: str,
+    season_year: int,
+    yahoo_player_key: str,
+) -> int | None:
+    """Resolve a modern immutable episode for a current contract."""
+
+    cur.execute(
+        """
+        SELECT contract_episode_id
+        FROM nffl.contract_history_episode
+        WHERE league_key=%s
+          AND season_year=%s
+          AND split_part(
+                  yahoo_player_key,
+                  '.',
+                  3
+              ) = split_part(%s, '.', 3)
+        LIMIT 1
+        """,
+        (
+            league_key,
+            int(season_year),
+            yahoo_player_key,
+        ),
+    )
+
+    row = cur.fetchone()
+
+    if row and row[0] is not None:
+        return int(row[0])
+
+    cur.execute(
+        """
+        SELECT origin_contract_episode_id
+        FROM nffl.v_contract_season_audit_current
+        WHERE next_league_key=%s
+          AND next_season_year=%s
+          AND stable_player_id =
+              split_part(%s, '.', 3)
+          AND origin_contract_episode_id
+              IS NOT NULL
+        LIMIT 1
+        """,
+        (
+            league_key,
+            int(season_year),
+            yahoo_player_key,
+        ),
+    )
+
+    row = cur.fetchone()
+
+    if row and row[0] is not None:
+        return int(row[0])
+
+    return None
+
+
 def _nffl_set_active_contract(
     *,
     dsn: str,
@@ -432,45 +493,121 @@ def _nffl_set_active_contract(
     team_key: str,
     yahoo_player_key: str,
     years_remaining: int,
+    draft_key: str = "",
+    acquisition_type: str = "NONE",
+    acquisition_from_team_key: str = "",
     note: str = "",
 ) -> str:
     """
-    NFFL canonical contract override.
-    Writes nffl.contract, not legacy public.contract.
+    Set current NFFL contract truth and its season-history override.
+
+    A completely new operational contract also receives an immutable
+    commissioner-origin contract episode. Normal existing/carry-forward
+    episodes remain untouched.
     """
+
     league_key = str(league_key)
     season_year = int(season_year)
     team_key = str(team_key or "").strip()
-    yahoo_player_key = str(yahoo_player_key or "").strip()
+    yahoo_player_key = str(
+        yahoo_player_key or ""
+    ).strip()
     years_remaining = int(years_remaining)
+    draft_key = str(draft_key or "").strip()
+
+    acquisition_type = str(
+        acquisition_type or "NONE"
+    ).strip().upper()
+
+    acquisition_from_team_key = str(
+        acquisition_from_team_key or ""
+    ).strip()
+
     note = str(note or "").strip()
 
     if not team_key:
         raise ValueError("team_key is required.")
+
     if not yahoo_player_key:
-        raise ValueError("yahoo_player_key is required.")
-    if years_remaining < 1:
-        raise ValueError("years_remaining must be >= 1.")
+        raise ValueError(
+            "yahoo_player_key is required."
+        )
+
+    if years_remaining < 1 or years_remaining > 4:
+        raise ValueError(
+            "years_remaining must be between 1 and 4."
+        )
+
+    if acquisition_type not in {
+        "NONE",
+        "TRADE",
+        "WAIVER",
+    }:
+        raise ValueError(
+            "acquisition_type must be "
+            "NONE, TRADE, or WAIVER."
+        )
+
+    if acquisition_type == "TRADE":
+        if not acquisition_from_team_key:
+            raise ValueError(
+                "Trade source team is required."
+            )
+
+        if acquisition_from_team_key == team_key:
+            raise ValueError(
+                "Trade source and destination "
+                "teams must be different."
+            )
+    else:
+        acquisition_from_team_key = ""
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            n = _nffl_count_rows(
-                cur,
+            cur.execute(
                 """
-                SELECT count(*)
+                SELECT team_key
                 FROM nffl.contract
                 WHERE league_key=%s
                   AND season_year=%s
                   AND yahoo_player_key=%s
                 """,
-                (league_key, season_year, yahoo_player_key),
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
             )
-            if n > 1:
+
+            existing_rows = cur.fetchall()
+
+            if len(existing_rows) > 1:
                 raise RuntimeError(
-                    f"Refusing contract override: duplicate nffl.contract rows for {yahoo_player_key}."
+                    "Refusing contract override: "
+                    "duplicate nffl.contract rows "
+                    f"for {yahoo_player_key}."
                 )
 
-            if n == 0:
+            origin_episode_id = None
+
+            if not existing_rows:
+                # NFFL new awards are only 2/3/4 years.
+                # A one-year current contract must have
+                # originated in a prior season.
+                if years_remaining not in {2, 3, 4}:
+                    raise ValueError(
+                        "A brand-new contract cannot "
+                        "start with 1 year remaining. "
+                        "A 1-year contract must already "
+                        "have prior contract history."
+                    )
+
+                if not draft_key:
+                    raise ValueError(
+                        "draft_key is required when "
+                        "creating a brand-new contract."
+                    )
+
                 cur.execute(
                     """
                     INSERT INTO nffl.contract (
@@ -505,14 +642,70 @@ def _nffl_set_active_contract(
                         note,
                     ),
                 )
+
+                cur.execute(
+                    """
+                    INSERT INTO
+                        nffl.contract_history_episode (
+                            league_key,
+                            season_year,
+                            draft_key,
+                            team_key,
+                            yahoo_player_key,
+                            contract_years_awarded,
+                            source_pick_id,
+                            source_pick_kind,
+                            source_revision_number,
+                            published_at_utc,
+                            published_by
+                        )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        'COMMISSIONER_OVERRIDE',
+                        'COMMISSIONER',
+                        1,
+                        now(),
+                        'commissioner'
+                    )
+                    RETURNING contract_episode_id
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        draft_key,
+                        team_key,
+                        yahoo_player_key,
+                        years_remaining,
+                    ),
+                )
+
+                episode_row = cur.fetchone()
+
+                if not episode_row:
+                    raise RuntimeError(
+                        "Commissioner contract episode "
+                        "was not created."
+                    )
+
+                origin_episode_id = int(
+                    episode_row[0]
+                )
+
                 action = "inserted"
+
             else:
                 cur.execute(
                     """
                     UPDATE nffl.contract
                        SET team_key=%s,
                            contract_years_remaining=%s,
-                           contract_source='commissioner_override',
+                           contract_source=
+                               'commissioner_override',
                            status='active',
                            note=%s,
                            updated_at_utc=now()
@@ -529,11 +722,139 @@ def _nffl_set_active_contract(
                         yahoo_player_key,
                     ),
                 )
+
+                origin_episode_id = (
+                    _nffl_find_origin_contract_episode(
+                        cur,
+                        league_key=league_key,
+                        season_year=season_year,
+                        yahoo_player_key=
+                            yahoo_player_key,
+                    )
+                )
+
                 action = "updated"
+
+            # If this player was the current FT,
+            # changing them to a contract explicitly
+            # ends that FT state.
+            cur.execute(
+                """
+                DELETE FROM
+                    nffl.offseason_keeper_decision
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND yahoo_player_key=%s
+                  AND decision_type='FT'
+                """,
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
+            )
+
+            cur.execute(
+                """
+                UPDATE nffl.franchise_tag_history
+                   SET tag_status='void',
+                       note=%s,
+                       updated_at_utc=now()
+                 WHERE league_key=%s
+                   AND season_year=%s
+                   AND yahoo_player_key=%s
+                   AND tag_status='applied'
+                """,
+                (
+                    note
+                    or "Replaced by active contract "
+                       "commissioner override",
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO
+                    nffl.contract_history_season_override (
+                        league_key,
+                        season_year,
+                        yahoo_player_key,
+                        team_key,
+                        contract_status,
+                        acquisition_type,
+                        contract_years,
+                        acquisition_from_team_key,
+                        origin_contract_episode_id,
+                        note,
+                        updated_by,
+                        created_at_utc,
+                        updated_at_utc
+                    )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    'CONTRACT',
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    'commissioner',
+                    now(),
+                    now()
+                )
+                ON CONFLICT (
+                    league_key,
+                    season_year,
+                    yahoo_player_key
+                )
+                DO UPDATE
+                SET
+                    team_key=EXCLUDED.team_key,
+                    contract_status=
+                        EXCLUDED.contract_status,
+                    acquisition_type=
+                        EXCLUDED.acquisition_type,
+                    contract_years=
+                        EXCLUDED.contract_years,
+                    acquisition_from_team_key=
+                        EXCLUDED.acquisition_from_team_key,
+                    origin_contract_episode_id=
+                        COALESCE(
+                            EXCLUDED.origin_contract_episode_id,
+                            contract_history_season_override
+                                .origin_contract_episode_id
+                        ),
+                    note=EXCLUDED.note,
+                    updated_by='commissioner',
+                    updated_at_utc=now()
+                """,
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                    team_key,
+                    acquisition_type,
+                    years_remaining,
+                    (
+                        acquisition_from_team_key
+                        if acquisition_type == "TRADE"
+                        else None
+                    ),
+                    origin_episode_id,
+                    note,
+                ),
+            )
 
         conn.commit()
 
     return action
+
 
 
 def _nffl_void_contract(
@@ -542,58 +863,233 @@ def _nffl_void_contract(
     league_key: str,
     season_year: int,
     yahoo_player_key: str,
+    team_key: str = "",
+    history_status: str = "DROPPED",
     note: str = "voided by commissioner",
 ) -> int:
     """
-    Void one NFFL contract row by making it non-active.
-    Available Players and board contract placeholders rely on status='active'.
+    Make a current contract non-active and record why in
+    Contract History.
+
+    history_status distinguishes:
+      NO_CONTRACT = inactive / not under contract
+      DROPPED     = contract explicitly dropped
     """
+
     league_key = str(league_key)
     season_year = int(season_year)
-    yahoo_player_key = str(yahoo_player_key or "").strip()
-    note = str(note or "").strip() or "voided by commissioner"
+
+    yahoo_player_key = str(
+        yahoo_player_key or ""
+    ).strip()
+
+    team_key = str(team_key or "").strip()
+
+    history_status = str(
+        history_status or "DROPPED"
+    ).strip().upper()
+
+    note = (
+        str(note or "").strip()
+        or "voided by commissioner"
+    )
 
     if not yahoo_player_key:
-        raise ValueError("yahoo_player_key is required.")
+        raise ValueError(
+            "yahoo_player_key is required."
+        )
+
+    if history_status not in {
+        "NO_CONTRACT",
+        "DROPPED",
+    }:
+        raise ValueError(
+            "history_status must be "
+            "NO_CONTRACT or DROPPED."
+        )
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            n = _nffl_count_rows(
-                cur,
+            cur.execute(
                 """
-                SELECT count(*)
+                SELECT team_key
                 FROM nffl.contract
                 WHERE league_key=%s
                   AND season_year=%s
                   AND yahoo_player_key=%s
                 """,
-                (league_key, season_year, yahoo_player_key),
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
             )
-            if n > 1:
+
+            existing_rows = cur.fetchall()
+
+            if len(existing_rows) > 1:
                 raise RuntimeError(
-                    f"Refusing contract void: duplicate nffl.contract rows for {yahoo_player_key}."
+                    "Refusing contract override: "
+                    "duplicate nffl.contract rows "
+                    f"for {yahoo_player_key}."
                 )
-            if n == 0:
-                return 0
+
+            if not team_key and existing_rows:
+                team_key = str(
+                    existing_rows[0][0] or ""
+                ).strip()
+
+            if not team_key:
+                raise ValueError(
+                    "team_key is required when "
+                    "recording inactive or dropped "
+                    "Contract History."
+                )
+
+            rows = 0
+
+            if existing_rows:
+                cur.execute(
+                    """
+                    UPDATE nffl.contract
+                       SET contract_years_remaining=0,
+                           status='void',
+                           note=%s,
+                           updated_at_utc=now()
+                     WHERE league_key=%s
+                       AND season_year=%s
+                       AND yahoo_player_key=%s
+                    """,
+                    (
+                        note,
+                        league_key,
+                        season_year,
+                        yahoo_player_key,
+                    ),
+                )
+
+                rows = int(
+                    cur.rowcount or 0
+                )
+
+            # If this player is currently the FT,
+            # inactive/dropped explicitly ends it.
+            cur.execute(
+                """
+                DELETE FROM
+                    nffl.offseason_keeper_decision
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND yahoo_player_key=%s
+                  AND decision_type='FT'
+                """,
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
+            )
 
             cur.execute(
                 """
-                UPDATE nffl.contract
-                   SET contract_years_remaining=0,
-                       status='voided',
+                UPDATE nffl.franchise_tag_history
+                   SET tag_status='void',
                        note=%s,
                        updated_at_utc=now()
                  WHERE league_key=%s
                    AND season_year=%s
                    AND yahoo_player_key=%s
+                   AND tag_status='applied'
                 """,
-                (note, league_key, season_year, yahoo_player_key),
+                (
+                    note,
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
             )
-            rows = int(cur.rowcount or 0)
+
+            origin_episode_id = (
+                _nffl_find_origin_contract_episode(
+                    cur,
+                    league_key=league_key,
+                    season_year=season_year,
+                    yahoo_player_key=
+                        yahoo_player_key,
+                )
+            )
+
+            cur.execute(
+                """
+                INSERT INTO
+                    nffl.contract_history_season_override (
+                        league_key,
+                        season_year,
+                        yahoo_player_key,
+                        team_key,
+                        contract_status,
+                        acquisition_type,
+                        contract_years,
+                        acquisition_from_team_key,
+                        origin_contract_episode_id,
+                        note,
+                        updated_by,
+                        created_at_utc,
+                        updated_at_utc
+                    )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    'NONE',
+                    NULL,
+                    NULL,
+                    %s,
+                    %s,
+                    'commissioner',
+                    now(),
+                    now()
+                )
+                ON CONFLICT (
+                    league_key,
+                    season_year,
+                    yahoo_player_key
+                )
+                DO UPDATE
+                SET
+                    team_key=EXCLUDED.team_key,
+                    contract_status=
+                        EXCLUDED.contract_status,
+                    acquisition_type='NONE',
+                    contract_years=NULL,
+                    acquisition_from_team_key=NULL,
+                    origin_contract_episode_id=
+                        COALESCE(
+                            EXCLUDED.origin_contract_episode_id,
+                            contract_history_season_override
+                                .origin_contract_episode_id
+                        ),
+                    note=EXCLUDED.note,
+                    updated_by='commissioner',
+                    updated_at_utc=now()
+                """,
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                    team_key,
+                    history_status,
+                    origin_episode_id,
+                    note,
+                ),
+            )
 
         conn.commit()
 
     return rows
+
 
 
 def _nffl_set_franchise_tag(
@@ -638,6 +1134,42 @@ def _nffl_set_franchise_tag(
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
+            # FT and active contract are mutually exclusive
+            # current states for the selected player.
+            cur.execute(
+                """
+                UPDATE nffl.contract
+                   SET contract_years_remaining=0,
+                       status='void',
+                       note=%s,
+                       updated_at_utc=now()
+                 WHERE league_key=%s
+                   AND season_year=%s
+                   AND yahoo_player_key=%s
+                """,
+                (
+                    note or "Franchise Tag override",
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
+            )
+
+            cur.execute(
+                """
+                DELETE FROM
+                    nffl.contract_history_season_override
+                WHERE league_key=%s
+                  AND season_year=%s
+                  AND yahoo_player_key=%s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    yahoo_player_key,
+                ),
+            )
+
             # Enforce one current FT decision per team/year.
             cur.execute(
                 """
@@ -750,6 +1282,7 @@ def _nffl_set_franchise_tag(
         conn.commit()
 
     return "set"
+
 
 
 def _nffl_clear_franchise_tag(
@@ -4139,6 +4672,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             dsn = _get_dsn()
             league_key = _get_league_key()
             season_year = _get_season_year()
+            draft_key = _get_draft_key()
         except Exception as e:
             st.error(str(e))
             dsn = ""
@@ -4192,11 +4726,12 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                 return " — ".join(bits)
 
             action = st.radio(
-                "Override action",
+                "Contract / roster state",
                 options=[
-                    "Set / update active contract",
-                    "Void contract",
-                    "Set Franchise Tag",
+                    "Active Contract",
+                    "Inactive / No Contract",
+                    "Franchise Tag",
+                    "Dropped",
                     "Clear Franchise Tag",
                 ],
                 horizontal=False,
@@ -4204,123 +4739,438 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             )
 
             st.caption(
-                "Choose the override action above, make all branch changes below, then submit once."
+                "State controls current contract truth. "
+                "For an Active Contract, acquisition "
+                "records whether the player arrived "
+                "normally, by trade, or by waiver."
             )
 
-            if action == "Set / update active contract":
-                with st.form("nffl_contract_override_form", clear_on_submit=False):
+            if action == "Active Contract":
+                with st.form(
+                    "nffl_contract_override_form",
+                    clear_on_submit=False,
+                ):
                     note = st.text_input(
                         "Commissioner note",
                         value="commissioner override",
-                        key="nffl_contract_override_note_form",
+                        key=(
+                            "nffl_contract_override_"
+                            "note_form"
+                        ),
                     )
 
-                    c1, c2, c3 = st.columns([2, 2, 1])
+                    c1, c2, c3 = st.columns(
+                        [2, 2, 1]
+                    )
+
                     with c1:
-                        contract_player_key = st.selectbox(
-                            "Player",
-                            options=[""] + player_keys,
-                            format_func=_nffl_player_label,
-                            key="nffl_contract_override_player_form",
+                        contract_player_key = (
+                            st.selectbox(
+                                "Player",
+                                options=[
+                                    ""
+                                ] + player_keys,
+                                format_func=
+                                    _nffl_player_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "override_player_form"
+                                ),
+                            )
                         )
+
                     with c2:
-                        contract_team_key = st.selectbox(
-                            "Assign to team",
-                            options=team_keys,
-                            format_func=_nffl_team_label,
-                            key="nffl_contract_override_team_form",
+                        contract_team_key = (
+                            st.selectbox(
+                                "Assign to team",
+                                options=team_keys,
+                                format_func=
+                                    _nffl_team_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "override_team_form"
+                                ),
+                            )
                         )
+
                     with c3:
-                        contract_years = st.number_input(
-                            "Years",
-                            min_value=1,
-                            max_value=4,
-                            value=1,
-                            step=1,
-                            key="nffl_contract_override_years_form",
+                        contract_years = (
+                            st.number_input(
+                                "Years remaining",
+                                min_value=1,
+                                max_value=4,
+                                value=1,
+                                step=1,
+                                key=(
+                                    "nffl_contract_"
+                                    "override_years_form"
+                                ),
+                            )
+                        )
+
+                    c4, c5 = st.columns([2, 2])
+
+                    with c4:
+                        acquisition_label = (
+                            st.selectbox(
+                                "Acquisition",
+                                options=[
+                                    "Standard",
+                                    "Trade",
+                                    "Waiver Pickup",
+                                ],
+                                key=(
+                                    "nffl_contract_"
+                                    "acquisition_form"
+                                ),
+                            )
+                        )
+
+                    with c5:
+                        trade_from_team_key = (
+                            st.selectbox(
+                                "Trade source team",
+                                options=team_keys,
+                                format_func=
+                                    _nffl_team_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "trade_from_form"
+                                ),
+                                help=(
+                                    "Used only when "
+                                    "Acquisition = Trade."
+                                ),
+                            )
                         )
 
                     confirm = st.checkbox(
                         "Confirm contract override",
                         value=False,
-                        key="nffl_contract_override_confirm_form",
+                        key=(
+                            "nffl_contract_override_"
+                            "confirm_form"
+                        ),
                     )
 
-                    submitted = st.form_submit_button(
-                        "Save NFFL Contract Override",
-                        type="primary",
+                    submitted = (
+                        st.form_submit_button(
+                            "Save Contract Override",
+                            type="primary",
+                        )
                     )
 
                 if submitted:
                     if not confirm:
-                        st.warning("Confirm contract override before saving.")
-                    elif not contract_player_key:
-                        st.warning("Select a player before saving.")
-                    else:
-                        try:
-                            result = _nffl_set_active_contract(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                team_key=contract_team_key,
-                                yahoo_player_key=contract_player_key,
-                                years_remaining=int(contract_years),
-                                note=note,
-                            )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"NFFL contract {result}: {_nffl_player_label(contract_player_key)}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Contract override failed: {e}")
+                        st.warning(
+                            "Confirm contract override "
+                            "before saving."
+                        )
 
-            elif action == "Void contract":
-                with st.form("nffl_contract_void_form", clear_on_submit=False):
+                    elif not contract_player_key:
+                        st.warning(
+                            "Select a player before "
+                            "saving."
+                        )
+
+                    elif (
+                        acquisition_label == "Trade"
+                        and trade_from_team_key
+                        == contract_team_key
+                    ):
+                        st.warning(
+                            "Trade source and "
+                            "destination teams must "
+                            "be different."
+                        )
+
+                    else:
+                        acquisition_code = {
+                            "Standard": "NONE",
+                            "Trade": "TRADE",
+                            "Waiver Pickup": "WAIVER",
+                        }[
+                            acquisition_label
+                        ]
+
+                        try:
+                            result = (
+                                _nffl_set_active_contract(
+                                    dsn=dsn,
+                                    league_key=
+                                        league_key,
+                                    season_year=
+                                        season_year,
+                                    team_key=
+                                        contract_team_key,
+                                    yahoo_player_key=
+                                        contract_player_key,
+                                    years_remaining=
+                                        int(
+                                            contract_years
+                                        ),
+                                    draft_key=draft_key,
+                                    acquisition_type=
+                                        acquisition_code,
+                                    acquisition_from_team_key=(
+                                        trade_from_team_key
+                                        if acquisition_code
+                                        == "TRADE"
+                                        else ""
+                                    ),
+                                    note=note,
+                                )
+                            )
+
+                            (
+                                _refresh_contract_cache_into_session_state()
+                            )
+
+                            st.success(
+                                "NFFL contract "
+                                f"{result}: "
+                                f"{_nffl_player_label(contract_player_key)}"
+                            )
+
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(
+                                "Contract override "
+                                f"failed: {e}"
+                            )
+
+
+            elif action == "Inactive / No Contract":
+                with st.form(
+                    "nffl_contract_inactive_form",
+                    clear_on_submit=False,
+                ):
                     note = st.text_input(
                         "Commissioner note",
                         value="commissioner override",
-                        key="nffl_contract_void_note_form",
+                        key=(
+                            "nffl_contract_inactive_"
+                            "note_form"
+                        ),
                     )
 
-                    contract_player_key = st.selectbox(
-                        "Player to void",
-                        options=[""] + player_keys,
-                        format_func=_nffl_player_label,
-                        key="nffl_contract_void_player_form",
-                    )
+                    c1, c2 = st.columns([2, 2])
+
+                    with c1:
+                        inactive_player_key = (
+                            st.selectbox(
+                                "Player",
+                                options=[
+                                    ""
+                                ] + player_keys,
+                                format_func=
+                                    _nffl_player_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "inactive_player_form"
+                                ),
+                            )
+                        )
+
+                    with c2:
+                        inactive_team_key = (
+                            st.selectbox(
+                                "Team",
+                                options=team_keys,
+                                format_func=
+                                    _nffl_team_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "inactive_team_form"
+                                ),
+                            )
+                        )
 
                     confirm = st.checkbox(
-                        "Confirm contract void",
+                        "Confirm inactive / no "
+                        "contract override",
                         value=False,
-                        key="nffl_contract_void_confirm_form",
+                        key=(
+                            "nffl_contract_inactive_"
+                            "confirm_form"
+                        ),
                     )
 
-                    submitted = st.form_submit_button(
-                        "Void NFFL Contract",
-                        type="primary",
+                    submitted = (
+                        st.form_submit_button(
+                            "Save Inactive Override",
+                            type="primary",
+                        )
                     )
 
                 if submitted:
                     if not confirm:
-                        st.warning("Confirm contract void before saving.")
-                    elif not contract_player_key:
-                        st.warning("Select a player before saving.")
+                        st.warning(
+                            "Confirm the override "
+                            "before saving."
+                        )
+
+                    elif not inactive_player_key:
+                        st.warning(
+                            "Select a player before "
+                            "saving."
+                        )
+
                     else:
                         try:
                             rows = _nffl_void_contract(
                                 dsn=dsn,
                                 league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=contract_player_key,
-                                note=note or "voided by commissioner",
+                                season_year=
+                                    season_year,
+                                yahoo_player_key=
+                                    inactive_player_key,
+                                team_key=
+                                    inactive_team_key,
+                                history_status=
+                                    "NO_CONTRACT",
+                                note=note,
                             )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"NFFL contract void rows_updated={rows}: {_nffl_player_label(contract_player_key)}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Contract void failed: {e}")
 
-            elif action == "Set Franchise Tag":
-                with st.form("nffl_ft_override_form", clear_on_submit=False):
+                            (
+                                _refresh_contract_cache_into_session_state()
+                            )
+
+                            st.success(
+                                "Player marked "
+                                "Inactive / No Contract. "
+                                f"contract_rows_changed="
+                                f"{rows}: "
+                                f"{_nffl_player_label(inactive_player_key)}"
+                            )
+
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(
+                                "Inactive override "
+                                f"failed: {e}"
+                            )
+
+
+            elif action == "Dropped":
+                with st.form(
+                    "nffl_contract_drop_form",
+                    clear_on_submit=False,
+                ):
+                    note = st.text_input(
+                        "Commissioner note",
+                        value="commissioner override",
+                        key=(
+                            "nffl_contract_drop_"
+                            "note_form"
+                        ),
+                    )
+
+                    c1, c2 = st.columns([2, 2])
+
+                    with c1:
+                        dropped_player_key = (
+                            st.selectbox(
+                                "Player",
+                                options=[
+                                    ""
+                                ] + player_keys,
+                                format_func=
+                                    _nffl_player_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "drop_player_form"
+                                ),
+                            )
+                        )
+
+                    with c2:
+                        dropped_team_key = (
+                            st.selectbox(
+                                "Team",
+                                options=team_keys,
+                                format_func=
+                                    _nffl_team_label,
+                                key=(
+                                    "nffl_contract_"
+                                    "drop_team_form"
+                                ),
+                            )
+                        )
+
+                    confirm = st.checkbox(
+                        "Confirm contract drop",
+                        value=False,
+                        key=(
+                            "nffl_contract_drop_"
+                            "confirm_form"
+                        ),
+                    )
+
+                    submitted = (
+                        st.form_submit_button(
+                            "Record Dropped Contract",
+                            type="primary",
+                        )
+                    )
+
+                if submitted:
+                    if not confirm:
+                        st.warning(
+                            "Confirm the contract "
+                            "drop before saving."
+                        )
+
+                    elif not dropped_player_key:
+                        st.warning(
+                            "Select a player before "
+                            "saving."
+                        )
+
+                    else:
+                        try:
+                            rows = _nffl_void_contract(
+                                dsn=dsn,
+                                league_key=league_key,
+                                season_year=
+                                    season_year,
+                                yahoo_player_key=
+                                    dropped_player_key,
+                                team_key=
+                                    dropped_team_key,
+                                history_status=
+                                    "DROPPED",
+                                note=note,
+                            )
+
+                            (
+                                _refresh_contract_cache_into_session_state()
+                            )
+
+                            st.success(
+                                "Dropped contract "
+                                f"recorded. "
+                                f"contract_rows_changed="
+                                f"{rows}: "
+                                f"{_nffl_player_label(dropped_player_key)}"
+                            )
+
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(
+                                "Dropped contract "
+                                f"override failed: {e}"
+                            )
+
+
+            elif action == "Franchise Tag":
+                with st.form(
+                    "nffl_ft_override_form",
+                    clear_on_submit=False,
+                ):
                     note = st.text_input(
                         "Commissioner note",
                         value="commissioner override",
@@ -4328,55 +5178,106 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     )
 
                     c1, c2 = st.columns([2, 2])
+
                     with c1:
                         ft_team_key = st.selectbox(
                             "Franchise Tag team",
                             options=team_keys,
-                            format_func=_nffl_team_label,
-                            key="nffl_ft_override_team_form",
+                            format_func=
+                                _nffl_team_label,
+                            key=(
+                                "nffl_ft_override_"
+                                "team_form"
+                            ),
                         )
+
                     with c2:
                         ft_player_key = st.selectbox(
                             "Franchise Tag player",
-                            options=[""] + player_keys,
-                            format_func=_nffl_player_label,
-                            key="nffl_ft_override_player_form",
+                            options=[
+                                ""
+                            ] + player_keys,
+                            format_func=
+                                _nffl_player_label,
+                            key=(
+                                "nffl_ft_override_"
+                                "player_form"
+                            ),
                         )
 
                     confirm = st.checkbox(
-                        "Confirm Franchise Tag override",
+                        "Confirm Franchise Tag "
+                        "override",
                         value=False,
-                        key="nffl_ft_override_confirm_form",
+                        key=(
+                            "nffl_ft_override_"
+                            "confirm_form"
+                        ),
                     )
 
-                    submitted = st.form_submit_button(
-                        "Set Franchise Tag",
-                        type="primary",
+                    submitted = (
+                        st.form_submit_button(
+                            "Set Franchise Tag",
+                            type="primary",
+                        )
                     )
 
                 if submitted:
                     if not confirm:
-                        st.warning("Confirm Franchise Tag override before saving.")
+                        st.warning(
+                            "Confirm Franchise Tag "
+                            "override before saving."
+                        )
+
                     elif not ft_player_key:
-                        st.warning("Select a Franchise Tag player before saving.")
+                        st.warning(
+                            "Select a Franchise Tag "
+                            "player before saving."
+                        )
+
                     else:
                         try:
-                            result = _nffl_set_franchise_tag(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                team_key=ft_team_key,
-                                yahoo_player_key=ft_player_key,
-                                note=note,
+                            result = (
+                                _nffl_set_franchise_tag(
+                                    dsn=dsn,
+                                    league_key=
+                                        league_key,
+                                    season_year=
+                                        season_year,
+                                    team_key=
+                                        ft_team_key,
+                                    yahoo_player_key=
+                                        ft_player_key,
+                                    note=note,
+                                )
                             )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Franchise Tag {result}: {_nffl_team_label(ft_team_key)} — {_nffl_player_label(ft_player_key)}")
+
+                            (
+                                _refresh_contract_cache_into_session_state()
+                            )
+
+                            st.success(
+                                "Franchise Tag "
+                                f"{result}: "
+                                f"{_nffl_team_label(ft_team_key)}"
+                                " ? "
+                                f"{_nffl_player_label(ft_player_key)}"
+                            )
+
                             st.rerun()
+
                         except Exception as e:
-                            st.error(f"Franchise Tag override failed: {e}")
+                            st.error(
+                                "Franchise Tag "
+                                f"override failed: {e}"
+                            )
+
 
             elif action == "Clear Franchise Tag":
-                with st.form("nffl_ft_clear_form", clear_on_submit=False):
+                with st.form(
+                    "nffl_ft_clear_form",
+                    clear_on_submit=False,
+                ):
                     note = st.text_input(
                         "Commissioner note",
                         value="commissioner override",
@@ -4386,38 +5287,71 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     ft_team_key = st.selectbox(
                         "Team to clear FT for",
                         options=team_keys,
-                        format_func=_nffl_team_label,
+                        format_func=
+                            _nffl_team_label,
                         key="nffl_ft_clear_team_form",
                     )
 
                     confirm = st.checkbox(
                         "Confirm clear Franchise Tag",
                         value=False,
-                        key="nffl_ft_clear_confirm_form",
+                        key=(
+                            "nffl_ft_clear_"
+                            "confirm_form"
+                        ),
                     )
 
-                    submitted = st.form_submit_button(
-                        "Clear Franchise Tag",
-                        type="primary",
+                    submitted = (
+                        st.form_submit_button(
+                            "Clear Franchise Tag",
+                            type="primary",
+                        )
                     )
 
                 if submitted:
                     if not confirm:
-                        st.warning("Confirm clear Franchise Tag before saving.")
+                        st.warning(
+                            "Confirm clear Franchise "
+                            "Tag before saving."
+                        )
+
                     else:
                         try:
-                            rows = _nffl_clear_franchise_tag(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                team_key=ft_team_key,
-                                note=note or "cleared by commissioner",
+                            rows = (
+                                _nffl_clear_franchise_tag(
+                                    dsn=dsn,
+                                    league_key=
+                                        league_key,
+                                    season_year=
+                                        season_year,
+                                    team_key=
+                                        ft_team_key,
+                                    note=(
+                                        note
+                                        or "cleared by "
+                                           "commissioner"
+                                    ),
+                                )
                             )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Franchise Tag cleared for {_nffl_team_label(ft_team_key)}. rows_changed={rows}")
+
+                            (
+                                _refresh_contract_cache_into_session_state()
+                            )
+
+                            st.success(
+                                "Franchise Tag cleared "
+                                f"for "
+                                f"{_nffl_team_label(ft_team_key)}. "
+                                f"rows_changed={rows}"
+                            )
+
                             st.rerun()
+
                         except Exception as e:
-                            st.error(f"Clear Franchise Tag failed: {e}")
+                            st.error(
+                                "Clear Franchise Tag "
+                                f"failed: {e}"
+                            )
 
 
     # -----------------------

@@ -515,6 +515,20 @@ This canonical owns:
 - canonical current-season team identity
 - rollover mapping model
 
+### 3) Contract Lifecycle / History
+
+Use this canonical for NFFL contract history, lifecycle, Commissioner overrides, roster snapshot evidence, and season-end reconciliation.
+
+This canonical owns:
+
+- operational contract vs immutable award-history boundaries
+- historical-to-modern Contract History continuity
+- Franchise Tag / Trade / Waiver / Dropped lifecycle semantics
+- Commissioner contract corrections
+- season-end roster evidence and reconciliation
+- cross-season contract carry-forward
+- manager vs Commissioner Contract History boundaries
+
 ### 4) Pick Ownership / Pick Trades / Draft Order
 
 Use this canonical when the issue involves:
@@ -688,6 +702,7 @@ This thin core should be paired with these shared canonicals:
 
 - `1_DraftState_Initialization_Restore.md`
 - `2_Team_Franchise_Identity.md`
+- `3_Contract_Lifecycle_History.md`
 - `4_Pick-Ownership_Pick-Trades_Draft-Order.md`
 - `5_Auth_Permissions.md`
 - `6_UI_Architecture.md`

@@ -210,6 +210,23 @@ def load_current_player_id_map(conn, ctx: dict[str, Any]) -> dict[str, dict[str,
     return {str(r["player_id"]): dict(r) for r in rows}
 
 
+def assert_snapshot_not_finalized(conn, snapshot_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select 1
+            from nffl.roster_snapshot_finalization
+            where snapshot_id=%s
+            """,
+            (snapshot_id,),
+        )
+
+        if cur.fetchone():
+            raise RuntimeError(
+                f"Snapshot {snapshot_id} is finalized and cannot be refreshed."
+            )
+
+
 def main() -> None:
     dsn = (os.environ.get("POSTGRES_DSN") or os.environ.get("MLF_POSTGRES_DSN") or "").strip()
     if not dsn:
@@ -218,8 +235,6 @@ def main() -> None:
     raw_root = Path(os.environ.get("YAHOO_RAW_OUT_DIR", "/league_runtime/data/raw/yahoo"))
     sleep_seconds = float(os.environ.get("YAHOO_SLEEP_SECONDS", "0.25"))
     stats_batch_size = int(os.environ.get("YAHOO_STATS_BATCH_SIZE", "25"))
-
-    token = get_access_token()
 
     with psycopg.connect(dsn) as conn:
         ctx = load_context(conn)
@@ -242,8 +257,14 @@ def main() -> None:
         f"snapshot_id={snapshot_id}"
     )
 
+    with psycopg.connect(dsn) as conn:
+        assert_snapshot_not_finalized(conn, snapshot_id)
+
+    token = get_access_token()
+
     raw_dir = raw_root / f"nffl_{prior_season}_end_roster_load"
 
+    source_rows: list[dict[str, Any]] = []
     roster_rows: list[dict[str, Any]] = []
     excluded_rows: list[dict[str, Any]] = []
 
@@ -263,6 +284,24 @@ def main() -> None:
 
         for player in players:
             current = current_by_player_id.get(str(player["source_player_id"]))
+
+            source_rows.append(
+                {
+                    **player,
+                    "current_team_key": current_team_key,
+                    "source_team_key": source_team_key,
+                    "current_yahoo_player_key": (
+                        current["yahoo_player_key"]
+                        if current
+                        else None
+                    ),
+                    "mapping_status": (
+                        "MAPPED_CURRENT_UNIVERSE"
+                        if current
+                        else "NOT_IN_CURRENT_UNIVERSE"
+                    ),
+                }
+            )
 
             if not current:
                 excluded_rows.append(
@@ -289,6 +328,7 @@ def main() -> None:
 
         time.sleep(sleep_seconds)
 
+    print(f"SOURCE_ROSTER_ROWS_CAPTURED={len(source_rows)}")
     print(f"ROSTER_ROWS_ELIGIBLE={len(roster_rows)}")
     print(f"ROSTER_ROWS_EXCLUDED_NOT_CURRENT={len(excluded_rows)}")
 
@@ -316,6 +356,8 @@ def main() -> None:
     print(f"STATS_ROWS_PARSED={len(stats_by_source_key)}")
 
     with psycopg.connect(dsn) as conn:
+        assert_snapshot_not_finalized(conn, snapshot_id)
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -351,9 +393,68 @@ def main() -> None:
                     prior_season,
                     snapshot_type,
                     snapshot_label,
-                    f"Loaded from Yahoo prior league {prior_league}; filtered to players present in current league {current_league} player universe.",
+                    f"Loaded from Yahoo prior league {prior_league}; raw source roster evidence preserved, with normalized roster rows mapped into current league {current_league}.",
                 ),
             )
+
+            cur.execute(
+                """
+                delete from nffl.roster_snapshot_source_player
+                where snapshot_id=%s
+                """,
+                (snapshot_id,),
+            )
+
+            for r in source_rows:
+                cur.execute(
+                    """
+                    insert into nffl.roster_snapshot_source_player (
+                        snapshot_id,
+                        source_league_key,
+                        source_season_year,
+                        source_team_key,
+                        source_yahoo_player_key,
+                        source_player_id,
+                        player_name,
+                        source_team_abbr,
+                        display_position,
+                        roster_slot,
+                        roster_status,
+                        current_team_key,
+                        current_yahoo_player_key,
+                        mapping_status,
+                        source_note,
+                        updated_at_utc
+                    )
+                    values (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s,
+                        now()
+                    )
+                    """,
+                    (
+                        snapshot_id,
+                        prior_league,
+                        prior_season,
+                        r["source_team_key"],
+                        r["source_yahoo_player_key"],
+                        r["source_player_id"],
+                        r["player_name"],
+                        r.get("source_team_abbr") or None,
+                        r.get("display_position") or None,
+                        r.get("roster_slot") or None,
+                        r.get("roster_status") or None,
+                        r["current_team_key"],
+                        r.get("current_yahoo_player_key"),
+                        r["mapping_status"],
+                        (
+                            f"Captured from Yahoo {prior_season} "
+                            f"team={r['source_team_key']} "
+                            f"player={r['source_yahoo_player_key']}."
+                        ),
+                    ),
+                )
 
             cur.execute("delete from nffl.roster_snapshot_player where snapshot_id=%s", (snapshot_id,))
 
@@ -427,8 +528,10 @@ def main() -> None:
     excluded_path.write_text(json.dumps(excluded_rows, indent=2), encoding="utf-8")
 
     print(f"SNAPSHOT_ID={snapshot_id}")
+    print(f"DB_SOURCE_ROSTER_ROWS_INSERTED={len(source_rows)}")
     print(f"DB_ROSTER_ROWS_INSERTED={len(roster_rows)}")
     print(f"DB_STATS_ROWS_UPSERTED={len(roster_rows)}")
+    print(f"UNMAPPED_SOURCE_ROWS={len(excluded_rows)}")
     print(f"EXCLUDED_RAW={excluded_path}")
 
 
