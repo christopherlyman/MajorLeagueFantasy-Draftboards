@@ -104,3 +104,6 @@ nffl/app/scripts/export_manager_temp_passwords.py
 
 # Local-only password reset utility
 nffl/app/scripts/reset_manager_passwords.py
+
+# NFFL Discord bot runtime state
+/nffl-discord-bot/data/
