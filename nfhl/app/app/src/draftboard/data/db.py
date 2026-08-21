@@ -979,6 +979,407 @@ def submit_manual_draft_pick(
                 return dict(row)
 
 
+
+
+def get_oldest_unresolved_expired_pick_id(
+    team_key: str,
+) -> str | None:
+    """
+    Return a team's oldest unresolved expired/missed draft pick.
+
+    Managers may fill this pick when they are not currently on
+    the live clock. PostgreSQL remains authoritative.
+    """
+    team_key = str(
+        team_key
+        or ""
+    ).strip()
+
+    if not team_key:
+        return None
+
+    with psycopg.connect(
+        get_postgres_dsn(),
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ep.pick_id
+
+                FROM nfhl.draft_expired_pick ep
+
+                JOIN nfhl.draft_pick p
+                  ON p.draft_key = ep.draft_key
+                 AND p.pick_id = ep.pick_id
+
+                WHERE ep.draft_key = %s
+                  AND ep.resolved_at_utc IS NULL
+                  AND p.current_owner_team_key = %s
+
+                ORDER BY
+                    ep.expired_at_utc,
+                    p.round_number,
+                    p.slot_number
+
+                LIMIT 1
+                """,
+                (
+                    get_draft_key(),
+                    team_key,
+                ),
+            )
+
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    return (
+        str(
+            row["pick_id"]
+            or ""
+        ).strip()
+        or None
+    )
+
+
+
+
+def delete_nfhl_draft_pick(
+    *,
+    pick_id: str,
+    rewind_clock: bool,
+    actor: str,
+) -> dict[str, Any]:
+    """
+    Commissioner correction for one completed NFHL draft selection.
+
+    rewind_clock=True:
+      - delete the selection
+      - make this pick the current pick
+      - pause/reset its clock state
+      - remove any expired/makeup marker for this pick
+
+    rewind_clock=False:
+      - delete the selection
+      - leave the live clock completely unchanged
+      - make the reopened pick an unresolved makeup pick
+
+    PostgreSQL remains authoritative throughout.
+    """
+    pick_id = str(
+        pick_id
+        or ""
+    ).strip()
+
+    actor = str(
+        actor
+        or ""
+    ).strip() or "commissioner"
+
+    if not pick_id:
+        raise ValueError(
+            "pick_id is required."
+        )
+
+    draft_key = (
+        get_draft_key()
+    )
+
+    result: dict[str, Any] = {
+        "pick_id": pick_id,
+        "rewind_clock": bool(
+            rewind_clock
+        ),
+        "actor": actor,
+        "deleted_rows": 0,
+        "player_key": None,
+        "team_key": None,
+        "clock_rewound": False,
+        "makeup_reopened": False,
+    }
+
+    with psycopg.connect(
+        get_postgres_dsn(),
+        row_factory=dict_row,
+    ) as conn:
+
+        with conn.transaction():
+
+            with conn.cursor() as cur:
+
+                # Same draft-wide lock used by the live engine.
+                cur.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended(%s, 0)
+                    )
+                    """,
+                    (
+                        draft_key,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    SELECT
+                        d.status,
+                        s.state_json
+                    FROM nfhl.draft d
+                    JOIN nfhl.draft_state s
+                      ON s.draft_key = d.draft_key
+                    WHERE d.draft_key = %s
+                    FOR UPDATE OF d, s
+                    """,
+                    (
+                        draft_key,
+                    ),
+                )
+
+                state_row = (
+                    cur.fetchone()
+                )
+
+                if state_row is None:
+                    raise RuntimeError(
+                        "NFHL draft/state does not exist."
+                    )
+
+                status = str(
+                    state_row["status"]
+                    or ""
+                ).upper()
+
+                if status not in {"ACTIVE", "COMPLETE"}:
+                    raise RuntimeError(
+                        "Fix-a-Mistake requires an ACTIVE "
+                        "NFHL draft."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT
+                        p.pick_id,
+                        p.current_owner_team_key,
+                        ds.yahoo_player_key,
+                        ds.selected_at_utc
+                    FROM nfhl.draft_pick p
+                    LEFT JOIN nfhl.draft_selection ds
+                      ON ds.draft_key = p.draft_key
+                     AND ds.pick_id = p.pick_id
+                    WHERE p.draft_key = %s
+                      AND p.pick_id = %s
+                    FOR UPDATE OF p
+                    """,
+                    (
+                        draft_key,
+                        pick_id,
+                    ),
+                )
+
+                pick_row = (
+                    cur.fetchone()
+                )
+
+                if pick_row is None:
+                    raise RuntimeError(
+                        f"Draft pick {pick_id!r} does not exist."
+                    )
+
+                if (
+                    not pick_row[
+                        "yahoo_player_key"
+                    ]
+                    or pick_row[
+                        "selected_at_utc"
+                    ] is None
+                ):
+                    raise RuntimeError(
+                        f"Draft pick {pick_id!r} is not "
+                        "currently selected."
+                    )
+
+                result["player_key"] = str(
+                    pick_row[
+                        "yahoo_player_key"
+                    ]
+                )
+
+                result["team_key"] = str(
+                    pick_row[
+                        "current_owner_team_key"
+                    ]
+                    or ""
+                )
+
+                cur.execute(
+                    """
+                    DELETE FROM nfhl.draft_selection
+                    WHERE draft_key = %s
+                      AND pick_id = %s
+                    """,
+                    (
+                        draft_key,
+                        pick_id,
+                    ),
+                )
+
+                result[
+                    "deleted_rows"
+                ] = int(
+                    cur.rowcount
+                    or 0
+                )
+
+                if (
+                    result[
+                        "deleted_rows"
+                    ]
+                    != 1
+                ):
+                    raise RuntimeError(
+                        "Expected exactly one draft selection "
+                        "to be deleted."
+                    )
+
+                state = dict(
+                    state_row[
+                        "state_json"
+                    ]
+                    or {}
+                )
+
+                # NFHL_PICK_LOG_DELETE_SYNC_START
+                pick_log = (
+                    state.get("pick_log")
+                    or []
+                )
+
+                if not isinstance(
+                    pick_log,
+                    list,
+                ):
+                    raise RuntimeError(
+                        "NFHL pick_log is not an array."
+                    )
+
+                state["pick_log"] = [
+                    entry
+                    for entry
+                    in pick_log
+                    if not (
+                        isinstance(
+                            entry,
+                            dict,
+                        )
+                        and str(
+                            entry.get(
+                                "pick_id"
+                            )
+                            or ""
+                        ) == pick_id
+                    )
+                ]
+                # NFHL_PICK_LOG_DELETE_SYNC_END
+
+                clock = dict(
+                    state.get(
+                        "clock"
+                    )
+                    or {}
+                )
+
+                if rewind_clock:
+
+                    # A rewound pick is a live current pick again,
+                    # not a makeup/expired pick.
+                    cur.execute(
+                        """
+                        DELETE FROM nfhl.draft_expired_pick
+                        WHERE draft_key = %s
+                          AND pick_id = %s
+                        """,
+                        (
+                            draft_key,
+                            pick_id,
+                        ),
+                    )
+
+                    clock[
+                        "current_pick_id"
+                    ] = pick_id
+
+                    clock[
+                        "is_running"
+                    ] = False
+
+                    clock[
+                        "pick_started_ts_iso"
+                    ] = None
+
+                    clock[
+                        "pick_paused_ts_iso"
+                    ] = None
+
+                    clock[
+                        "elapsed_paused_seconds"
+                    ] = 0
+
+                    state[
+                        "clock"
+                    ] = clock
+
+                    _nfhl_write_state_locked(
+                        cur,
+                        draft_key=draft_key,
+                        state=state,
+                    )
+
+                    result[
+                        "clock_rewound"
+                    ] = True
+
+                else:
+
+                    # The live draft continues exactly where it is.
+                    # Reopen the deleted prior selection as a makeup
+                    # pick so that manager access remains possible.
+                    cur.execute(
+                        """
+                        INSERT INTO nfhl.draft_expired_pick (
+                            draft_key,
+                            pick_id,
+                            expired_at_utc,
+                            resolved_at_utc
+                        )
+                        VALUES (
+                            %s,
+                            %s,
+                            now(),
+                            NULL
+                        )
+                        ON CONFLICT (
+                            draft_key,
+                            pick_id
+                        )
+                        DO UPDATE
+                           SET resolved_at_utc = NULL
+                        """,
+                        (
+                            draft_key,
+                            pick_id,
+                        ),
+                    )
+
+                    result[
+                        "makeup_reopened"
+                    ] = True
+
+    return result
+
+
 # NFHL_LIVE_DRAFT_DB_HELPERS_END
 
 

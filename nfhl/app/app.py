@@ -2015,6 +2015,14 @@ def _render_autopick_panel_contents(
         "Auto-Pick itself remains off until explicitly armed."
     )
 
+    # NFHL_AUTOPICK_GRACE_UI
+    st.caption(
+        "When an armed pick becomes current, Auto-Pick waits "
+        "3:00 of active clock time before unattended execution. "
+        "Paused time does not count. A successful Auto-Pick "
+        "automatically turns itself OFF."
+    )
+
     team_lookup = {
         str(team["team_key"]): team
         for team in teams
@@ -3199,7 +3207,13 @@ def render_draft_readiness_panel(
 
 # NFHL_LIVE_DRAFT_UI_START
 # ================================================================
-# NFHL LIVE DRAFT BOARD / MANUAL PICK
+# NFHL LIVE DRAFT
+#
+# NFFL-style UI:
+# - fixed on-clock/picker dock
+# - searchable player picker
+# - graphical PostgreSQL board
+# - expired/makeup pick access for managers
 # ================================================================
 
 
@@ -3208,386 +3222,14 @@ def render_live_draft(
     gateway_context: dict[str, object],
     players: list[dict],
 ) -> None:
-
-    try:
-        live_state = get_live_draft_state()
-
-        if str(
-            live_state.get("status")
-            or ""
-        ).upper() == "ACTIVE":
-            process_live_draft_clock()
-            live_state = get_live_draft_state()
-
-        board_rows = get_live_draft_board()
-
-    except Exception as exc:
-        st.error(
-            "Unable to load the live NFHL draft: "
-            f"{exc}"
-        )
-        return
-
-    draft_status = str(
-        live_state.get("status")
-        or ""
-    ).upper()
-
-    state_json = (
-        live_state.get("state_json")
-        or {}
+    from draftboard.ui.components.live_draft import (
+        render_live_draft_experience,
     )
 
-    clock = (
-        state_json.get("clock")
-        or {}
+    render_live_draft_experience(
+        gateway_context=gateway_context,
+        players=players,
     )
-
-    current_pick_id = str(
-        clock.get("current_pick_id")
-        or ""
-    ).strip()
-
-    # ------------------------------------------------------------
-    # NO INITIALIZED BOARD YET
-    # ------------------------------------------------------------
-
-    if not board_rows:
-        st.caption(
-            "The live draft grid will appear here "
-            "after the NFHL Draft Lottery and draft "
-            "order initialization are complete."
-        )
-        return
-
-    board_lookup = {
-        str(row["pick_id"]): row
-        for row in board_rows
-        if row.get("pick_id")
-    }
-
-    current_pick = (
-        board_lookup.get(
-            current_pick_id
-        )
-        if current_pick_id
-        else None
-    )
-
-    # ------------------------------------------------------------
-    # ON THE CLOCK
-    # ------------------------------------------------------------
-
-    st.divider()
-
-    if current_pick:
-        st.markdown(
-            "### On the Clock"
-        )
-
-        c1, c2, c3 = st.columns(
-            [1, 2, 1]
-        )
-
-        c1.metric(
-            "Round",
-            current_pick.get(
-                "round_number"
-            ),
-        )
-
-        c2.metric(
-            "Team",
-            current_pick.get(
-                "current_owner_team_name"
-            )
-            or "Unknown",
-        )
-
-        c3.metric(
-            "Pick",
-            current_pick_id,
-        )
-
-    elif draft_status == "ACTIVE":
-        st.warning(
-            "The draft is ACTIVE but no current pick "
-            "is present in draft state."
-        )
-
-    # ------------------------------------------------------------
-    # BOARD TABLE
-    # ------------------------------------------------------------
-
-    display_rows = []
-
-    for row in board_rows:
-        display_rows.append(
-            {
-                "Rnd": row.get(
-                    "round_number"
-                ),
-                "Slot": row.get(
-                    "slot_number"
-                ),
-                "Pick": row.get(
-                    "pick_id"
-                ),
-                "Team": row.get(
-                    "current_owner_team_name"
-                ),
-                "Player": row.get(
-                    "selected_player_name"
-                )
-                or "",
-                "Pos": row.get(
-                    "selected_primary_position"
-                )
-                or "",
-            }
-        )
-
-    st.dataframe(
-        pd.DataFrame(
-            display_rows
-        ),
-        hide_index=True,
-        use_container_width=True,
-        height=520,
-    )
-
-    # ------------------------------------------------------------
-    # MANUAL PICK AUTHORIZATION
-    # ------------------------------------------------------------
-
-    role = str(
-        gateway_context.get("role")
-        or "public"
-    ).lower()
-
-    if role not in {
-        "manager",
-        "commissioner",
-    }:
-        return
-
-    if draft_status != "ACTIVE":
-        return
-
-    if not current_pick:
-        return
-
-    current_team_key = str(
-        current_pick.get(
-            "current_owner_team_key"
-        )
-        or ""
-    )
-
-    if role == "manager":
-        manager_team_key = str(
-            gateway_context.get(
-                "team_key"
-            )
-            or ""
-        )
-
-        if (
-            not manager_team_key
-            or manager_team_key
-            != current_team_key
-        ):
-            st.info(
-                "Manual pick controls will appear "
-                "when your team is on the clock."
-            )
-            return
-
-    # Commissioner may act for the current team.
-    # Manager may act only for their own current pick.
-
-    drafted_player_keys = {
-        str(row["yahoo_player_key"])
-        for row in board_rows
-        if row.get(
-            "yahoo_player_key"
-        )
-    }
-
-    available_players = [
-        player
-        for player in players
-        if str(
-            player.get(
-                "yahoo_player_key"
-            )
-            or ""
-        )
-        not in drafted_player_keys
-    ]
-
-    if not available_players:
-        st.warning(
-            "No available players remain."
-        )
-        return
-
-    player_lookup = {
-        str(
-            player["yahoo_player_key"]
-        ): player
-        for player in available_players
-        if player.get(
-            "yahoo_player_key"
-        )
-    }
-
-    options = list(
-        player_lookup.keys()
-    )
-
-    def pick_label(
-        player_key: str,
-    ) -> str:
-        player = player_lookup[
-            player_key
-        ]
-
-        rank = player.get(
-            "rank_value"
-        )
-
-        try:
-            rank_text = (
-                f"#{int(float(rank))}"
-                if rank is not None
-                else "NR"
-            )
-        except Exception:
-            rank_text = "NR"
-
-        return (
-            f"{rank_text} — "
-            f"{player.get('full_name', '')} — "
-            f"{player.get('nhl_team_abbr', '-')} — "
-            f"{player.get('primary_position', '-')}"
-        )
-
-    st.markdown(
-        "### Make Pick"
-    )
-
-    selected_player_key = st.selectbox(
-        "Player",
-        options=options,
-        format_func=pick_label,
-        key=(
-            "nfhl_manual_pick_player_"
-            + current_pick_id
-        ),
-    )
-
-    selected_player = (
-        player_lookup[
-            selected_player_key
-        ]
-    )
-
-    confirm = st.checkbox(
-        "Confirm selection of "
-        f"{selected_player.get('full_name', '')} "
-        f"for "
-        f"{current_pick.get('current_owner_team_name', '')}.",
-        key=(
-            "nfhl_manual_pick_confirm_"
-            + current_pick_id
-        ),
-    )
-
-    submit_disabled = (
-        not confirm
-    )
-
-    if st.button(
-        "Draft Player",
-        type="primary",
-        use_container_width=True,
-        disabled=submit_disabled,
-        key=(
-            "nfhl_manual_pick_submit_"
-            + current_pick_id
-        ),
-    ):
-
-        if role == "commissioner":
-            actor = (
-                "commissioner_link"
-            )
-        else:
-            actor = (
-                "manager:"
-                + current_team_key
-            )
-
-        try:
-            result = (
-                submit_manual_draft_pick(
-                    expected_pick_id=(
-                        current_pick_id
-                    ),
-                    expected_team_key=(
-                        current_team_key
-                    ),
-                    yahoo_player_key=(
-                        selected_player_key
-                    ),
-                    actor=actor,
-                )
-            )
-
-        except Exception as exc:
-            st.error(
-                "Pick was not submitted: "
-                f"{exc}"
-            )
-            return
-
-        result_status = str(
-            result.get(
-                "result_status"
-            )
-            or ""
-        ).upper()
-
-        if result_status != "EXECUTED":
-            st.error(
-                "The draft engine did not execute "
-                f"the pick: {result_status or 'UNKNOWN'}"
-            )
-            return
-
-        picked_name = str(
-            selected_player.get(
-                "full_name"
-            )
-            or selected_player_key
-        )
-
-        if bool(
-            result.get(
-                "late_pick"
-            )
-        ):
-            st.success(
-                f"Late pick recorded: {picked_name}."
-            )
-        else:
-            st.success(
-                f"Pick recorded: {picked_name}."
-            )
-
-        st.cache_data.clear()
-        st.rerun()
 
 
 # NFHL_LIVE_DRAFT_UI_END
@@ -3615,6 +3257,13 @@ def render_draft_board(
         st.warning(
             "Draft order mode has not yet been finalized."
         )
+
+    # NFHL_ROLLCALL_PREVIEW_UI_START
+    from draftboard.ui.components.season_team_slots import (
+        render_preview_draft_board,
+    )
+
+    render_preview_draft_board()
 
     render_draft_readiness_panel(
         gateway_context=gateway_context,
@@ -3728,11 +3377,13 @@ def main() -> None:
         "Available Players",
         "Teams",
         "Draft Lottery",
+        "Pick Tracker",
+        "Draft Statistics",
     ]
 
     if commissioner_mode:
         tab_names.append(
-            "Manager Links"
+            "Commissioner"
         )
 
     tabs = st.tabs(
@@ -3746,8 +3397,11 @@ def main() -> None:
         lottery_tab,
     ) = tabs[:4]
 
-    manager_links_tab = (
-        tabs[4]
+    pick_tracker_tab = tabs[4]
+    draft_statistics_tab = tabs[5]
+
+    commissioner_tab = (
+        tabs[6]
         if commissioner_mode
         else None
     )
@@ -3786,10 +3440,67 @@ def main() -> None:
             target_teams,
         )
 
-    if manager_links_tab is not None:
-        with manager_links_tab:
-            render_manager_links()
+    with pick_tracker_tab:
+        from draftboard.ui.components.pick_tracker import (
+            render_pick_tracker,
+        )
 
+        render_pick_tracker(
+            players=players,
+        )
+
+    with draft_statistics_tab:
+        from draftboard.ui.components.draft_statistics import (
+            render_draft_statistics,
+        )
+
+        render_draft_statistics(
+            players=players,
+        )
+
+    if commissioner_tab is not None:
+        with commissioner_tab:
+            from draftboard.ui.components.season_team_slots import (
+                render_season_team_slots,
+            )
+
+            render_season_team_slots(
+                gateway_context=gateway_context,
+                teams=teams,
+            )
+
+
+            # NFHL_MANAGER_LINKS_EXPANDER_START
+
+
+            with st.expander(
+
+
+                "Manager Links",
+
+
+                expanded=False,
+
+
+            ):
+
+
+                render_manager_links()
+
+
+            # NFHL_MANAGER_LINKS_EXPANDER_END
+            from draftboard.ui.components.commissioner_recovery import (
+
+                render_commissioner_recovery,
+
+            )
+
+
+            render_commissioner_recovery(
+
+                gateway_context=gateway_context,
+
+            )
     with st.sidebar:
         st.header("NFHL")
 

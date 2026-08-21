@@ -51,21 +51,54 @@ def build_pick_grid(
     slots: list[PickSlot] = []
     overall_pick = 1
 
-    for round_number in range(1, rounds_total + 1):
-        round_teams = teams
+    # NFHL_SNAKE_FIXED_SLOT_ORDER
+    #
+    # pick_in_round is the PERMANENT board/lottery slot.
+    # The returned list order is the chronological execution order.
+    #
+    # Example for 14-team snake:
+    #   Round 1 list: slots 1..14
+    #   Round 2 list: slots 14..1
+    #   Round 3 list: slots 1..14
+    #
+    # The team assigned to a board slot never changes by round.
+    fixed_slots = list(
+        range(
+            1,
+            manager_count + 1,
+        )
+    )
 
-        if order_mode == "snake" and round_number % 2 == 0:
-            round_teams = list(reversed(teams))
+    for round_number in range(
+        1,
+        rounds_total + 1,
+    ):
+        execution_slots = fixed_slots
 
-        for pick_in_round, team_key in enumerate(round_teams, start=1):
+        if (
+            order_mode == "snake"
+            and round_number % 2 == 0
+        ):
+            execution_slots = list(
+                reversed(
+                    fixed_slots
+                )
+            )
+
+        for slot_number in execution_slots:
+            team_key = teams[
+                slot_number - 1
+            ]
+
             slots.append(
                 PickSlot(
                     round_number=round_number,
-                    pick_in_round=pick_in_round,
+                    pick_in_round=slot_number,
                     overall_pick=overall_pick,
                     team_key=team_key,
                 )
             )
+
             overall_pick += 1
 
     return slots
