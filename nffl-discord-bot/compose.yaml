@@ -1,0 +1,22 @@
+services:
+  nffl-discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nffl-discord-bot:local
+    container_name: nffl_discord_bot
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    networks:
+      - mlf_net
+    restart: unless-stopped
+    command:
+      - python
+      - /app/main.py
+      - --run
+
+networks:
+  mlf_net:
+    external: true

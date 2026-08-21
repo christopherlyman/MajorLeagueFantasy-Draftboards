@@ -1,0 +1,26 @@
+services:
+  nffl-draftboard:
+    image: mlf_tools:latest
+    container_name: nffl_draftboard
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app
+      - ./:/league_runtime
+    ports:
+      - "8503:8501"
+    networks:
+      - mlf_net
+    restart: unless-stopped
+    command:
+      - streamlit
+      - run
+      - app/app.py
+      - --server.address
+      - 0.0.0.0
+      - --server.port
+      - "8501"
+
+networks:
+  mlf_net:
+    external: true
