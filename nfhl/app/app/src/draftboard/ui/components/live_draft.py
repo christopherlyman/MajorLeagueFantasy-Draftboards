@@ -570,11 +570,11 @@ def render_live_draft_experience(
               .st-key-nfhl_fixed_pick_dock {
                   position: fixed;
 
-                  top: 0;
+                  top: 3.25rem;
                   left: 0;
                   right: 0;
 
-                  z-index: 999999;
+                  z-index: 999989;
 
                   padding:
                       0.42rem 1.0rem
@@ -641,7 +641,7 @@ def render_live_draft_experience(
 
               div.block-container {
                   padding-top:
-                      5.15rem !important;
+                      6.40rem !important;
               }
 
               @media (
@@ -952,14 +952,6 @@ def render_live_draft_experience(
                             use_container_width=True,
                             disabled=preview_mode,
                         )
-                    )
-
-                if preview_mode:
-                    st.caption(
-                        "PREVIEW ONLY — Search and player selection "
-                        "are live so the picker can be reviewed. "
-                        "SUBMIT is intentionally disabled and no "
-                        "draft data can be written."
                     )
 
                 if is_makeup_pick:

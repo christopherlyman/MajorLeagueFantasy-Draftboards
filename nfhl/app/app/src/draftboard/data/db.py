@@ -2735,10 +2735,10 @@ def start_nfhl_draft(
                     clock_config[
                         "seconds_per_pick"
                     ]
-                ) != 86400:
+                ) <= 0:
                     raise RuntimeError(
-                        "NFHL requires the standard "
-                        "24-hour pick clock."
+                        "NFHL requires a positive "
+                        "configured pick duration."
                     )
 
                 if not bool(
@@ -3320,16 +3320,6 @@ def set_nfhl_current_pick_remaining(
             "Remaining time must be at least one minute."
         )
 
-    if (
-        remaining_seconds
-        > NFHL_STANDARD_PICK_SECONDS
-    ):
-        raise ValueError(
-            "Remaining time cannot exceed the standard "
-            "24-hour pick window. Pause the clock for a "
-            "longer commissioner hold."
-        )
-
     actor = str(
         actor or ""
     ).strip() or "commissioner"
@@ -3420,12 +3410,25 @@ def set_nfhl_current_pick_remaining(
                         "NFHL draft clock is not configured."
                     )
 
-                if int(
-                    config["seconds_per_pick"]
-                ) != NFHL_STANDARD_PICK_SECONDS:
+                configured_pick_seconds = int(
+                    config[
+                        "seconds_per_pick"
+                    ]
+                )
+
+                if configured_pick_seconds <= 0:
                     raise RuntimeError(
-                        "NFHL clock is not configured for "
-                        "the standard 24-hour format."
+                        "NFHL clock has an invalid "
+                        "configured pick duration."
+                    )
+
+                if (
+                    remaining_seconds
+                    > configured_pick_seconds
+                ):
+                    raise ValueError(
+                        "Remaining time cannot exceed "
+                        "the configured league pick duration."
                     )
 
                 state = dict(
@@ -3451,7 +3454,7 @@ def set_nfhl_current_pick_remaining(
                     )
 
                 elapsed_seconds = (
-                    NFHL_STANDARD_PICK_SECONDS
+                    configured_pick_seconds
                     - remaining_seconds
                 )
 
@@ -4435,6 +4438,46 @@ def write_team_gateway_audit(
                         query_string,
                     ),
                 )
+
+
+def get_team_gateway_audit(
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """
+    Commissioner-facing recent Team Gateway audit history.
+    Read-only; scoped to the active NFHL league and season.
+    """
+
+    safe_limit = max(
+        1,
+        min(
+            int(limit),
+            500,
+        ),
+    )
+
+    return _fetch_all(
+        """
+        SELECT
+            created_at_utc,
+            action_type,
+            selected_role,
+            selected_team_name,
+            previous_role,
+            previous_team_name,
+            action_note
+        FROM nfhl.team_gateway_audit
+        WHERE league_key = %s
+          AND season_year = %s
+        ORDER BY audit_id DESC
+        LIMIT %s
+        """,
+        (
+            get_league_key(),
+            get_season_year(),
+            safe_limit,
+        ),
+    )
 
 
 # NFHL_TEAM_GATEWAY_DB_END

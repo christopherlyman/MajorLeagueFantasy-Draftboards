@@ -232,8 +232,22 @@ def get_preview_board_meta() -> dict[str, Any]:
 
 def auto_match_season_team_slots() -> dict[str, int]:
     """
-    Match unresolved prior-season slots to real current-season
-    Yahoo teams by exact team name first, then exact manager name.
+    Automatically resolve returning NFHL managers.
+
+    A slot is auto-linked only when:
+    - the slot is still PENDING and unassigned;
+    - the prior manager name is nonblank;
+    - exactly one current Yahoo team has that manager name;
+    - exactly one prior-season slot has that manager name;
+    - the current Yahoo team is not already assigned elsewhere.
+
+    Matching is case-insensitive and ignores surrounding whitespace.
+
+    Team names are deliberately NOT used for identity matching.
+    A renamed team remains a returning manager. A replacement manager
+    reusing an old team name must not be classified as RETURNING.
+
+    Existing RETURNING/REPLACED/manual mappings are never overwritten.
 
     PREP only.
     """
@@ -259,7 +273,8 @@ def auto_match_season_team_slots() -> dict[str, int]:
 
             if str(row[0] or "").upper() != "PREP":
                 raise RuntimeError(
-                    "Season-team assignments may only be changed while the draft is PREP."
+                    "Season-team assignments may only be "
+                    "changed while the draft is PREP."
                 )
 
             cur.execute(
@@ -283,78 +298,105 @@ def auto_match_season_team_slots() -> dict[str, int]:
 
             cur.execute(
                 """
+                WITH candidates AS (
+                    SELECT
+                        s.league_slot_number,
+                        t.team_key
+
+                    FROM nfhl.season_team_slot s
+
+                    JOIN nfhl.team t
+                      ON t.league_key = s.league_key
+                     AND t.season_year = s.season_year
+                     AND NULLIF(
+                            trim(t.owner_name),
+                            ''
+                         ) IS NOT NULL
+                     AND lower(trim(t.owner_name))
+                         = lower(trim(s.prior_manager_name))
+
+                    WHERE s.league_key = %s
+                      AND s.season_year = %s
+                      AND s.current_team_key IS NULL
+                      AND s.assignment_status = 'PENDING'
+
+                      AND NULLIF(
+                            trim(s.prior_manager_name),
+                            ''
+                          ) IS NOT NULL
+
+                      AND (
+                          SELECT COUNT(*)
+                          FROM nfhl.team t2
+                          WHERE t2.league_key = s.league_key
+                            AND t2.season_year = s.season_year
+                            AND NULLIF(
+                                  trim(t2.owner_name),
+                                  ''
+                                ) IS NOT NULL
+                            AND lower(
+                                  trim(t2.owner_name)
+                                )
+                                = lower(
+                                  trim(
+                                    s.prior_manager_name
+                                  )
+                                )
+                      ) = 1
+
+                      AND (
+                          SELECT COUNT(*)
+                          FROM nfhl.season_team_slot s2
+                          WHERE s2.league_key = s.league_key
+                            AND s2.season_year = s.season_year
+                            AND NULLIF(
+                                  trim(
+                                    s2.prior_manager_name
+                                  ),
+                                  ''
+                                ) IS NOT NULL
+                            AND lower(
+                                  trim(
+                                    s2.prior_manager_name
+                                  )
+                                )
+                                = lower(
+                                  trim(
+                                    s.prior_manager_name
+                                  )
+                                )
+                      ) = 1
+
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM nfhl.season_team_slot other
+                          WHERE other.league_key = s.league_key
+                            AND other.season_year = s.season_year
+                            AND other.current_team_key = t.team_key
+                      )
+                )
+
                 UPDATE nfhl.season_team_slot s
+
                 SET
-                    current_team_key = t.team_key,
+                    current_team_key = c.team_key,
                     assignment_status = 'RETURNING',
                     replacement_manager_name = NULL,
                     replacement_team_name = NULL,
                     updated_at_utc = now()
 
-                FROM nfhl.team t
+                FROM candidates c
 
                 WHERE s.league_key = %s
                   AND s.season_year = %s
+                  AND s.league_slot_number
+                      = c.league_slot_number
                   AND s.current_team_key IS NULL
                   AND s.assignment_status = 'PENDING'
-
-                  AND t.league_key = s.league_key
-                  AND t.season_year = s.season_year
-
-                  AND lower(trim(t.team_name))
-                      = lower(trim(s.prior_team_name))
-
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM nfhl.season_team_slot other
-                      WHERE other.league_key = s.league_key
-                        AND other.season_year = s.season_year
-                        AND other.current_team_key = t.team_key
-                  )
                 """,
                 (
                     LEAGUE_KEY,
                     SEASON_YEAR,
-                ),
-            )
-
-            cur.execute(
-                """
-                UPDATE nfhl.season_team_slot s
-                SET
-                    current_team_key = t.team_key,
-                    assignment_status = 'RETURNING',
-                    replacement_manager_name = NULL,
-                    replacement_team_name = NULL,
-                    updated_at_utc = now()
-
-                FROM nfhl.team t
-
-                WHERE s.league_key = %s
-                  AND s.season_year = %s
-                  AND s.current_team_key IS NULL
-                  AND s.assignment_status = 'PENDING'
-
-                  AND t.league_key = s.league_key
-                  AND t.season_year = s.season_year
-
-                  AND NULLIF(
-                      trim(t.owner_name),
-                      ''
-                  ) IS NOT NULL
-
-                  AND lower(trim(t.owner_name))
-                      = lower(trim(s.prior_manager_name))
-
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM nfhl.season_team_slot other
-                      WHERE other.league_key = s.league_key
-                        AND other.season_year = s.season_year
-                        AND other.current_team_key = t.team_key
-                  )
-                """,
-                (
                     LEAGUE_KEY,
                     SEASON_YEAR,
                 ),
@@ -379,6 +421,65 @@ def auto_match_season_team_slots() -> dict[str, int]:
                 or 0
             )
 
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM nfhl.season_team_slot
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND assignment_status = 'PENDING'
+                  AND current_team_key IS NULL
+                """,
+                (
+                    LEAGUE_KEY,
+                    SEASON_YEAR,
+                ),
+            )
+
+            unresolved = int(
+                cur.fetchone()[0]
+                or 0
+            )
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+
+                FROM nfhl.season_team_slot s
+
+                WHERE s.league_key = %s
+                  AND s.season_year = %s
+                  AND s.assignment_status = 'PENDING'
+                  AND s.current_team_key IS NULL
+
+                  AND (
+                      SELECT COUNT(*)
+                      FROM nfhl.team t
+                      WHERE t.league_key = s.league_key
+                        AND t.season_year = s.season_year
+                        AND NULLIF(
+                              trim(t.owner_name),
+                              ''
+                            ) IS NOT NULL
+                        AND lower(trim(t.owner_name))
+                            = lower(
+                              trim(
+                                s.prior_manager_name
+                              )
+                            )
+                  ) > 1
+                """,
+                (
+                    LEAGUE_KEY,
+                    SEASON_YEAR,
+                ),
+            )
+
+            ambiguous = int(
+                cur.fetchone()[0]
+                or 0
+            )
+
     return {
         "before": before,
         "after": after,
@@ -386,6 +487,8 @@ def auto_match_season_team_slots() -> dict[str, int]:
             0,
             after - before,
         ),
+        "unresolved": unresolved,
+        "ambiguous": ambiguous,
     }
 
 

@@ -84,91 +84,21 @@ def render_season_team_slots(
     gateway_context: dict[str, object],
     teams: list[dict],
 ) -> None:
-    slots = get_season_team_slots()
-
-    st.subheader(
-        "League Roll Call"
-    )
-
-    st.caption(
-        "The fourteen league slots below are seeded from the 2025 NFHL. "
-        "They let us track returning and replacement managers while the "
-        "2026 Yahoo league is still filling. These league slots are not "
-        "draft positions."
-    )
-
-    linked = sum(
-        1
-        for row in slots
-        if row.get(
-            "current_team_key"
+    role = str(
+        gateway_context.get(
+            "role"
         )
-    )
+        or "public"
+    ).strip().lower()
 
-    returning = sum(
-        1
-        for row in slots
-        if str(
-            row.get(
-                "assignment_status"
-            )
-            or ""
-        ).upper()
-        == "RETURNING"
-    )
+    if role != "commissioner":
+        return
 
-    replaced = sum(
-        1
-        for row in slots
-        if str(
-            row.get(
-                "assignment_status"
-            )
-            or ""
-        ).upper()
-        == "REPLACED"
-    )
-
-    pending = sum(
-        1
-        for row in slots
-        if str(
-            row.get(
-                "assignment_status"
-            )
-            or ""
-        ).upper()
-        == "PENDING"
-    )
-
-    c1, c2, c3, c4 = st.columns(
-        4
-    )
-
-    c1.metric(
-        "League Slots",
-        len(slots),
-    )
-
-    c2.metric(
-        "Yahoo Linked",
-        f"{linked}/14",
-    )
-
-    c3.metric(
-        "Returning",
-        returning,
-    )
-
-    c4.metric(
-        "Pending / Replacement",
-        pending + replaced,
-    )
+    slots = get_season_team_slots()
 
     display_rows = []
 
     for row in slots:
-
         status = str(
             row.get(
                 "assignment_status"
@@ -190,405 +120,332 @@ def render_season_team_slots(
             or ""
         ).strip()
 
-        replacement_manager = str(
-            row.get(
-                "replacement_manager_name"
-            )
-            or ""
-        ).strip()
-
-        replacement_team = str(
-            row.get(
-                "replacement_team_name"
-            )
-            or ""
-        ).strip()
-
-        if status == "REPLACED":
-            manager_2026 = (
+        if status == "RETURNING":
+            current_manager = (
                 yahoo_manager
-                or replacement_manager
-                or "TBD"
-            )
-
-            team_2026 = (
-                yahoo_team
-                or replacement_team
-                or "TBD"
-            )
-
-        elif status == "RETURNING":
-            manager_2026 = (
-                yahoo_manager
-                or row.get(
-                    "prior_manager_name"
+                or str(
+                    row.get(
+                        "prior_manager_name"
+                    )
+                    or ""
                 )
             )
 
-            team_2026 = (
+            current_team = (
                 yahoo_team
-                or row.get(
-                    "prior_team_name"
+                or str(
+                    row.get(
+                        "prior_team_name"
+                    )
+                    or ""
+                )
+            )
+
+        elif status == "REPLACED":
+            current_manager = (
+                yahoo_manager
+                or str(
+                    row.get(
+                        "replacement_manager_name"
+                    )
+                    or "TBD"
+                )
+            )
+
+            current_team = (
+                yahoo_team
+                or str(
+                    row.get(
+                        "replacement_team_name"
+                    )
+                    or "TBD"
                 )
             )
 
         else:
-            manager_2026 = "Pending"
-            team_2026 = "Pending"
+            current_manager = (
+                "Waiting to join Yahoo"
+            )
+
+            current_team = "—"
 
         display_rows.append(
             {
-                "Slot": row[
-                    "league_slot_number"
-                ],
-                "2025 Manager": row[
-                    "prior_manager_name"
-                ],
-                "2025 Team": row[
-                    "prior_team_name"
-                ],
-                "Status": status,
-                "2026 Manager": manager_2026,
-                "2026 Team": team_2026,
-                "Yahoo Linked": (
-                    "Yes"
-                    if row.get(
-                        "current_team_key"
-                    )
-                    else "No"
-                ),
+                "Slot":
+                    row[
+                        "league_slot_number"
+                    ],
+                "Prior Manager":
+                    row[
+                        "prior_manager_name"
+                    ],
+                "Prior Team":
+                    row[
+                        "prior_team_name"
+                    ],
+                "Current Manager":
+                    current_manager,
+                "Current Yahoo Team":
+                    current_team,
+                "Status":
+                    status,
             }
         )
 
+    st.markdown(
+        "#### Roll Call & Team Mapping"
+    )
+
+    # Full 14-row table: no inner vertical scrolling.
     st.dataframe(
         pd.DataFrame(
             display_rows
         ),
         hide_index=True,
         use_container_width=True,
+        height=600,
     )
 
-    role = str(
-        gateway_context.get(
-            "role"
-        )
-        or "public"
-    ).strip().lower()
-
-    if role != "commissioner":
-        return
-
-    with st.expander(
-        "Commissioner — League Roll Call / Team Assignments",
-        expanded=False,
-    ):
-        st.caption(
-            "Use this to mark returning managers, record replacements, "
-            "and associate each league slot with the manager's real "
-            "2026 Yahoo team. Changes are allowed only while the draft "
-            "is in PREP."
-        )
-
-        if st.button(
-            "Auto-Match Current Yahoo Teams",
-            key="nfhl_slot_auto_match",
-        ):
-            try:
-                result = (
-                    auto_match_season_team_slots()
-                )
-            except Exception as exc:
-                st.error(
-                    f"Auto-match failed: {exc}"
-                )
-            else:
-                st.success(
-                    "Auto-match complete. "
-                    f"New links: {result['matched']}."
-                )
-                st.cache_data.clear()
-                st.rerun()
-
-        slot_labels = {
-            int(
-                row[
-                    "league_slot_number"
-                ]
-            ): (
-                f"Slot {int(row['league_slot_number'])}: "
-                f"{row['prior_manager_name']} — "
-                f"{row['prior_team_name']}"
-            )
-            for row in slots
-        }
-
-        selected_slot = st.selectbox(
-            "League Slot",
-            options=list(
-                slot_labels.keys()
-            ),
-            format_func=lambda value: (
-                slot_labels[
-                    int(value)
-                ]
-            ),
-            key="nfhl_rollcall_slot",
-        )
-
-        slot = next(
-            row
-            for row in slots
-            if int(
-                row[
-                    "league_slot_number"
-                ]
-            )
-            == int(
-                selected_slot
-            )
-        )
-
-        st.write(
-            f"**2025 manager:** "
-            f"{slot['prior_manager_name']}"
-        )
-
-        st.write(
-            f"**2025 team:** "
-            f"{slot['prior_team_name']}"
-        )
-
-        statuses = [
-            "PENDING",
-            "RETURNING",
-            "REPLACED",
-        ]
-
-        current_status = str(
-            slot.get(
-                "assignment_status"
-            )
-            or "PENDING"
-        ).upper()
-
-        status = st.selectbox(
-            "2026 Status",
-            options=statuses,
-            index=(
-                statuses.index(
-                    current_status
-                )
-                if current_status
-                in statuses
-                else 0
-            ),
-            key=(
-                "nfhl_rollcall_status_"
-                f"{selected_slot}"
-            ),
-        )
-
-        assigned_elsewhere = {
+    pending_slots = [
+        row
+        for row in slots
+        if (
             str(
                 row.get(
-                    "current_team_key"
+                    "assignment_status"
                 )
-            )
-            for row in slots
-            if row.get(
+                or ""
+            ).upper()
+            == "PENDING"
+            and not row.get(
                 "current_team_key"
             )
-            and int(
-                row[
-                    "league_slot_number"
-                ]
-            )
-            != int(
-                selected_slot
-            )
-        }
+        )
+    ]
 
-        current_team_key = str(
-            slot.get(
+    assigned_team_keys = {
+        str(
+            row.get(
                 "current_team_key"
             )
             or ""
         )
+        for row in slots
+        if row.get(
+            "current_team_key"
+        )
+    }
 
-        available_teams = [
-            team
-            for team in teams
-            if (
-                str(
-                    team.get(
-                        "team_key"
-                    )
-                    or ""
-                )
-                not in assigned_elsewhere
-            )
-        ]
-
-        team_by_key = {
+    unassigned_teams = [
+        team
+        for team in teams
+        if (
             str(
                 team.get(
                     "team_key"
                 )
                 or ""
-            ): team
-            for team in available_teams
-        }
+            )
+            not in assigned_team_keys
+        )
+    ]
 
-        team_options = [
-            ""
-        ] + sorted(
-            team_by_key.keys(),
-            key=lambda key: str(
-                team_by_key[
-                    key
-                ].get(
+    if (
+        not pending_slots
+        and not unassigned_teams
+    ):
+        st.success(
+            "Roll call is fully resolved. "
+            "No commissioner action is required."
+        )
+        return
+
+    if not unassigned_teams:
+        waiting_names = ", ".join(
+            str(
+                row.get(
+                    "prior_manager_name"
+                )
+                or "Unknown"
+            )
+            for row in pending_slots
+        )
+
+        st.info(
+            f"{len(pending_slots)} prior manager"
+            f"{'s have' if len(pending_slots) != 1 else ' has'} "
+            "not joined the current Yahoo league yet: "
+            f"{waiting_names}. "
+            "No manual mapping is required unless "
+            "one is being replaced."
+        )
+
+        return
+
+    if not pending_slots:
+        st.error(
+            "Yahoo contains an unassigned current team, "
+            "but there are no PENDING prior-season slots."
+        )
+        return
+
+    st.warning(
+        f"{len(unassigned_teams)} current Yahoo manager"
+        f"{'s require' if len(unassigned_teams) != 1 else ' requires'} "
+        "a roll-call decision."
+    )
+
+    team_by_key = {
+        str(
+            team.get(
+                "team_key"
+            )
+            or ""
+        ): team
+        for team in unassigned_teams
+    }
+
+    team_keys = sorted(
+        team_by_key.keys(),
+        key=lambda key: (
+            str(
+                team_by_key[key].get(
+                    "owner_name"
+                )
+                or ""
+            ).casefold(),
+            str(
+                team_by_key[key].get(
                     "team_name"
                 )
-                or key
+                or ""
             ).casefold(),
-        )
+        ),
+    )
 
-        if (
-            current_team_key
-            and current_team_key
-            not in team_options
-        ):
-            team_options.append(
-                current_team_key
-            )
+    slot_by_number = {
+        int(
+            row[
+                "league_slot_number"
+            ]
+        ): row
+        for row in pending_slots
+    }
 
-        team_index = (
-            team_options.index(
-                current_team_key
-            )
-            if current_team_key
-            in team_options
-            else 0
-        )
+    slot_numbers = sorted(
+        slot_by_number.keys()
+    )
 
+    # Form prevents each selector change from rerunning the app.
+    with st.form(
+        "nfhl_rollcall_exception_form",
+        clear_on_submit=False,
+    ):
         selected_team_key = st.selectbox(
-            "2026 Yahoo Team",
-            options=team_options,
-            index=team_index,
+            "Unmatched current Yahoo manager",
+            options=team_keys,
             format_func=lambda key: (
-                "— Not linked yet —"
-                if not key
-                else (
-                    f"{team_by_key.get(key, {}).get('team_name') or key}"
-                    " — "
-                    f"{team_by_key.get(key, {}).get('owner_name') or ''}"
-                )
-            ),
-            key=(
-                "nfhl_rollcall_team_"
-                f"{selected_slot}"
+                f"{team_by_key[key].get('owner_name') or 'Unknown'}"
+                " — "
+                f"{team_by_key[key].get('team_name') or key}"
             ),
         )
 
-        replacement_manager = (
-            st.text_input(
-                "Replacement Manager",
-                value=str(
-                    slot.get(
-                        "replacement_manager_name"
-                    )
-                    or ""
-                ),
-                disabled=(
-                    status
-                    != "REPLACED"
-                ),
-                key=(
-                    "nfhl_rollcall_replacement_manager_"
-                    f"{selected_slot}"
-                ),
-            )
-        )
-
-        replacement_team = (
-            st.text_input(
-                "Replacement Team",
-                value=str(
-                    slot.get(
-                        "replacement_team_name"
-                    )
-                    or ""
-                ),
-                disabled=(
-                    status
-                    != "REPLACED"
-                ),
-                key=(
-                    "nfhl_rollcall_replacement_team_"
-                    f"{selected_slot}"
-                ),
-            )
-        )
-
-        commissioner_note = (
-            st.text_input(
-                "Commissioner Note",
-                value=str(
-                    slot.get(
-                        "commissioner_note"
-                    )
-                    or ""
-                ),
-                key=(
-                    "nfhl_rollcall_note_"
-                    f"{selected_slot}"
-                ),
-            )
-        )
-
-        if st.button(
-            "Save League Slot",
-            type="primary",
-            key=(
-                "nfhl_rollcall_save_"
-                f"{selected_slot}"
+        selected_slot = st.selectbox(
+            "Prior-season manager being replaced",
+            options=slot_numbers,
+            format_func=lambda number: (
+                f"{slot_by_number[number]['prior_manager_name']}"
+                " — "
+                f"{slot_by_number[number]['prior_team_name']}"
             ),
-        ):
-            try:
-                save_season_team_slot_assignment(
-                    league_slot_number=int(
-                        selected_slot
-                    ),
-                    assignment_status=status,
-                    current_team_key=(
-                        selected_team_key
-                        or None
-                    ),
-                    replacement_manager_name=(
-                        replacement_manager
-                        or None
-                    ),
-                    replacement_team_name=(
-                        replacement_team
-                        or None
-                    ),
-                    commissioner_note=(
-                        commissioner_note
-                        or None
-                    ),
-                )
+        )
 
-            except Exception as exc:
-                st.error(
-                    f"League-slot update failed: {exc}"
-                )
+        identity_type = st.radio(
+            "Classification",
+            options=[
+                "Replacement manager",
+                (
+                    "Returning manager whose Yahoo "
+                    "display name changed"
+                ),
+            ],
+        )
 
-            else:
-                st.success(
-                    f"League slot {selected_slot} saved."
-                )
-                st.cache_data.clear()
-                st.rerun()
+        commissioner_note = st.text_input(
+            "Commissioner note",
+        )
+
+        submitted = (
+            st.form_submit_button(
+                "Resolve Roll Call Exception",
+                type="primary",
+                use_container_width=True,
+            )
+        )
+
+    if not submitted:
+        return
+
+    selected_team = (
+        team_by_key[
+            selected_team_key
+        ]
+    )
+
+    status = (
+        "RETURNING"
+        if identity_type.startswith(
+            "Returning manager"
+        )
+        else "REPLACED"
+    )
+
+    try:
+        save_season_team_slot_assignment(
+            league_slot_number=int(
+                selected_slot
+            ),
+            assignment_status=status,
+            current_team_key=(
+                selected_team_key
+            ),
+            replacement_manager_name=None,
+            replacement_team_name=None,
+            commissioner_note=(
+                commissioner_note
+                or None
+            ),
+        )
+
+    except Exception as exc:
+        st.error(
+            "Roll-call exception could not "
+            f"be saved: {exc}"
+        )
+        return
+
+    # Main view is already Commissioner and is maintained
+    # by the keyed segmented-control widget.
+    #
+    # Streamlit 1.41 expanders are not stateful, so force
+    # League Setup open for the immediate post-save rerun.
+    st.session_state[
+        "nfhl_force_open_league_setup"
+    ] = True
+
+    st.session_state[
+        "nfhl_yahoo_team_refresh_notice"
+    ] = (
+        "Roll call updated: "
+        f"{selected_team.get('owner_name') or 'manager'} "
+        "was assigned to "
+        f"{slot_by_number[int(selected_slot)]['prior_manager_name']}'s "
+        "prior-season slot."
+    )
+
+    st.cache_data.clear()
+    st.rerun()
 
 
 def render_preview_draft_board() -> None:
@@ -671,7 +528,7 @@ def render_preview_draft_board() -> None:
               gap: 4px;
 
               position: sticky;
-              top: 3.25rem;
+              top: 6.40rem;
               z-index: 20;
 
               background:

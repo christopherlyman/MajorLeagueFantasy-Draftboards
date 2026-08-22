@@ -152,14 +152,6 @@ def render_commissioner_recovery(
     if role != "commissioner":
         return
 
-    st.subheader(
-        "Draft Recovery"
-    )
-
-    st.caption(
-        "Commissioner-only tools for correcting a mistaken "
-        "draft selection without direct database intervention."
-    )
 
     try:
         live_state = (
@@ -224,7 +216,7 @@ def render_commissioner_recovery(
     )
 
     with st.expander(
-        "Fix a Mistake",
+        "Recovery",
         expanded=False,
     ):
 

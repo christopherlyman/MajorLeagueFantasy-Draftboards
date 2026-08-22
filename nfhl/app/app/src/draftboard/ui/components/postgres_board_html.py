@@ -195,7 +195,7 @@ def render_postgres_board_html(
               gap: 4px;
 
               position: sticky;
-              top: 3.25rem;
+              top: 6.40rem;
               z-index: 20;
 
               background:

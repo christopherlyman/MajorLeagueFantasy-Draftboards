@@ -29,6 +29,7 @@ from draftboard.data.db import (
     get_lottery_state,
     get_player_universe,
     get_team_gateway_links,
+    get_team_gateway_audit,
     get_teams,
     refresh_yahoo_teams_live,
     initialize_lottery,
@@ -1041,10 +1042,10 @@ def render_manager_links() -> None:
     """
 
     manager_links_height = (
-        220
+        110
         + (
             len(display_rows)
-            * 82
+            * 58
         )
     )
 
@@ -1059,6 +1060,76 @@ def render_manager_links() -> None:
         "for that team."
     )
 
+
+
+def render_gateway_audit() -> None:
+    """
+    Commissioner-only read view of recent Team Gateway identity events.
+    """
+
+    st.markdown(
+        "#### Gateway Audit"
+    )
+
+    st.caption(
+        "Recent browser identity selections and changes. "
+        "This history is read-only."
+    )
+
+    try:
+        rows = get_team_gateway_audit(
+            limit=200,
+        )
+
+    except Exception as exc:
+        st.error(
+            "Could not load Gateway Audit: "
+            f"{exc}"
+        )
+        return
+
+    if not rows:
+        st.info(
+            "No Team Gateway activity has been logged yet."
+        )
+        return
+
+    import pandas as pd
+
+    df = pd.DataFrame(
+        rows
+    )
+
+    df["created_at_utc"] = (
+        pd.to_datetime(
+            df["created_at_utc"],
+            utc=True,
+        )
+        .dt.tz_convert(
+            "America/New_York"
+        )
+        .dt.strftime(
+            "%Y-%m-%d %-I:%M:%S %p %Z"
+        )
+    )
+
+    df = df.rename(
+        columns={
+            "created_at_utc": "Time Eastern",
+            "action_type": "Action",
+            "selected_role": "Selected Role",
+            "selected_team_name": "Selected Team",
+            "previous_role": "Previous Role",
+            "previous_team_name": "Previous Team",
+            "action_note": "Note",
+        }
+    )
+
+    st.dataframe(
+        df,
+        hide_index=True,
+        use_container_width=True,
+    )
 
 
 # NFHL_TEAM_GATEWAY_UI_END
@@ -1633,15 +1704,7 @@ def render_draft_lottery(
 ) -> None:
     st.subheader("Draft Lottery")
 
-    commissioner_mode = (
-        str(
-            st.query_params.get(
-                "commissioner",
-                "0",
-            )
-        )
-        == "1"
-    )
+    commissioner_mode = False
 
     if commissioner_mode:
         st.caption(
@@ -2549,6 +2612,8 @@ def _format_nfhl_seconds(
 def render_draft_lifecycle_panel(
     *,
     gateway_context: dict[str, object],
+    show_status: bool = True,
+    show_commissioner_controls: bool = True,
 ) -> None:
 
     role = str(
@@ -2565,8 +2630,32 @@ def render_draft_lifecycle_panel(
             get_draft_clock_config()
         )
 
-        standard_clock = (
-            is_nfhl_standard_clock_configured()
+        configured_seconds = int(
+            clock_config.get(
+                "seconds_per_pick"
+            )
+            or 86400
+        )
+
+        configured_hours = max(
+            1,
+            configured_seconds // 3600,
+        )
+
+        clock_ready = bool(
+            clock_config.get(
+                "configured"
+            )
+        ) and (
+            configured_seconds > 0
+        ) and bool(
+            clock_config.get(
+                "auto_advance"
+            )
+        ) and bool(
+            clock_config.get(
+                "weekends_count"
+            )
         )
 
         board_rows = (
@@ -2594,7 +2683,8 @@ def render_draft_lifecycle_panel(
     # ------------------------------------------------------------
 
     if (
-        board_initialized
+        show_status
+        and board_initialized
         and status == "ACTIVE"
     ):
 
@@ -2617,7 +2707,9 @@ def render_draft_lifecycle_panel(
 
         c2.metric(
             "Pick Window",
-            "24:00:00",
+            _format_nfhl_seconds(
+                configured_seconds
+            ),
         )
 
         c3.metric(
@@ -2638,7 +2730,10 @@ def render_draft_lifecycle_panel(
             ),
         )
 
-    if role != "commissioner":
+    if (
+        role != "commissioner"
+        or not show_commissioner_controls
+    ):
         return
 
     # ------------------------------------------------------------
@@ -2646,10 +2741,8 @@ def render_draft_lifecycle_panel(
     # ------------------------------------------------------------
 
     with st.expander(
-        "Commissioner Draft Controls",
-        expanded=(
-            status == "ACTIVE"
-        ),
+        "Draft Operations",
+        expanded=False,
     ):
 
         st.markdown(
@@ -2657,12 +2750,14 @@ def render_draft_lifecycle_panel(
         )
 
         st.write(
-            "**Standard:** 24 hours per pick"
+            "**Pick duration:** "
+            f"{configured_hours} hour"
+            f"{'s' if configured_hours != 1 else ''} per pick"
         )
 
         st.write(
-            "**Reminders:** 12 hours, 6 hours, "
-            "and 1 hour remaining"
+            "**Reminders:** automatically scaled "
+            "to the pick duration"
         )
 
         st.write(
@@ -2671,30 +2766,126 @@ def render_draft_lifecycle_panel(
         )
 
         st.write(
-            "**Weekends:** count toward the 24-hour clock"
+            "**Weekends:** counted"
         )
 
-        if standard_clock:
-            st.success(
-                "Standard NFHL 24-hour clock configuration is active."
+        if status == "PREP":
+
+            default_duration = (
+                "24 hours"
+                if configured_seconds == 86400
+                else (
+                    "12 hours"
+                    if configured_seconds == 43200
+                    else "Custom"
+                )
             )
 
-        elif status == "PREP":
-
-            st.warning(
-                "The NFHL clock is not using the standard "
-                "24-hour configuration."
-            )
-
-            if st.button(
-                "Apply Standard 24-Hour Clock",
-                type="primary",
-                use_container_width=True,
-                key="nfhl_apply_standard_clock",
+            with st.form(
+                "nfhl_clock_rule_form",
+                clear_on_submit=False,
             ):
+                duration_choice = st.radio(
+                    "Pick duration",
+                    options=[
+                        "24 hours",
+                        "12 hours",
+                        "Custom",
+                    ],
+                    index=[
+                        "24 hours",
+                        "12 hours",
+                        "Custom",
+                    ].index(
+                        default_duration
+                    ),
+                    horizontal=True,
+                )
+
+                custom_hours = st.number_input(
+                    "Custom hours",
+                    min_value=1,
+                    max_value=72,
+                    value=max(
+                        1,
+                        min(
+                            72,
+                            configured_hours,
+                        ),
+                    ),
+                    step=1,
+                )
+
+                save_clock = (
+                    st.form_submit_button(
+                        "Save Clock Rule",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                )
+
+            if save_clock:
+
+                new_hours = (
+                    24
+                    if duration_choice == "24 hours"
+                    else (
+                        12
+                        if duration_choice == "12 hours"
+                        else int(custom_hours)
+                    )
+                )
+
+                new_seconds = (
+                    new_hours * 3600
+                )
+
+                if new_hours == 24:
+                    reminders = [
+                        12 * 3600,
+                        6 * 3600,
+                        1 * 3600,
+                    ]
+
+                elif new_hours == 12:
+                    reminders = [
+                        6 * 3600,
+                        3 * 3600,
+                        1 * 3600,
+                    ]
+
+                else:
+                    reminders = sorted(
+                        {
+                            new_seconds // 2,
+                            new_seconds // 4,
+                            3600,
+                        },
+                        reverse=True,
+                    )
+
+                    reminders = [
+                        seconds
+                        for seconds in reminders
+                        if (
+                            0
+                            < seconds
+                            < new_seconds
+                        )
+                    ]
 
                 try:
-                    apply_nfhl_standard_clock_config(
+                    from draftboard.data.db import (
+                        save_draft_clock_config,
+                    )
+
+                    save_draft_clock_config(
+                        seconds_per_pick=(
+                            new_seconds
+                        ),
+                        reminder_seconds=(
+                            reminders
+                        ),
                         actor="commissioner_link",
                     )
 
@@ -2705,17 +2896,18 @@ def render_draft_lifecycle_panel(
                     )
 
                 else:
-                    st.success(
-                        "Standard NFHL clock applied."
-                    )
-
                     st.cache_data.clear()
                     st.rerun()
 
+        elif clock_ready:
+            st.success(
+                "Draft clock configuration is active."
+            )
+
         else:
             st.error(
-                "The active draft is not using the "
-                "standard 24-hour clock configuration."
+                "The active draft has an invalid "
+                "clock configuration."
             )
 
         st.divider()
@@ -2728,21 +2920,51 @@ def render_draft_lifecycle_panel(
 
             st.info(
                 "The Draft Board is not initialized yet. "
-                "Clock rules can be prepared now; Start Draft "
-                "will become available after the league is full, "
-                "the lottery is finalized, and the board is initialized."
+                "Start Draft becomes available after Draft Setup "
+                "builds the complete Draft Board."
+            )
+
+            lifecycle_cols = st.columns(3)
+
+            with lifecycle_cols[0]:
+                st.button(
+                    "Start NFHL Draft",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=True,
+                    key="nfhl_start_draft_board_not_ready",
+                )
+
+            with lifecycle_cols[1]:
+                st.button(
+                    "Pause Draft Clock",
+                    use_container_width=True,
+                    disabled=True,
+                    key="nfhl_pause_draft_board_not_ready",
+                )
+
+            with lifecycle_cols[2]:
+                st.button(
+                    "Resume Draft Clock",
+                    use_container_width=True,
+                    disabled=True,
+                    key="nfhl_resume_draft_board_not_ready",
+                )
+
+            st.caption(
+                "Start Draft requires the completed Draft Board. "
+                "Pause and Resume become available after the draft starts."
             )
 
             return
 
         if status == "PREP":
 
-            if not standard_clock:
+            if not clock_ready:
                 st.warning(
-                    "Apply the standard 24-hour clock "
+                    "Configure a valid draft clock "
                     "before starting the draft."
                 )
-                return
 
             confirm_start = st.checkbox(
                 "I confirm the Draft Board is correct "
@@ -2750,33 +2972,60 @@ def render_draft_lifecycle_panel(
                 key="nfhl_confirm_start_draft",
             )
 
-            if st.button(
-                "Start NFHL Draft",
-                type="primary",
-                use_container_width=True,
-                disabled=not confirm_start,
-                key="nfhl_start_draft",
-            ):
+            lifecycle_cols = st.columns(3)
 
-                try:
-                    result = start_nfhl_draft(
-                        actor="commissioner_link",
-                    )
+            with lifecycle_cols[0]:
+                if st.button(
+                    "Start NFHL Draft",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=(
+                        not clock_ready
+                        or not confirm_start
+                    ),
+                    key="nfhl_start_draft",
+                ):
 
-                except Exception as exc:
-                    st.error(
-                        "Draft was not started: "
-                        f"{exc}"
-                    )
+                    try:
+                        result = start_nfhl_draft(
+                            actor="commissioner_link",
+                        )
 
-                else:
-                    st.success(
-                        "NFHL draft started at "
-                        f"{result['current_pick_id']}."
-                    )
+                    except Exception as exc:
+                        st.error(
+                            "Draft was not started: "
+                            f"{exc}"
+                        )
 
-                    st.cache_data.clear()
-                    st.rerun()
+                    else:
+                        st.success(
+                            "NFHL draft started at "
+                            f"{result['current_pick_id']}."
+                        )
+
+                        st.cache_data.clear()
+                        st.rerun()
+
+            with lifecycle_cols[1]:
+                st.button(
+                    "Pause Draft Clock",
+                    use_container_width=True,
+                    disabled=True,
+                    key="nfhl_pause_draft_not_started",
+                )
+
+            with lifecycle_cols[2]:
+                st.button(
+                    "Resume Draft Clock",
+                    use_container_width=True,
+                    disabled=True,
+                    key="nfhl_resume_draft_not_started",
+                )
+
+            st.caption(
+                "Pause becomes available once the draft is running. "
+                "Resume becomes available when an active draft is paused."
+            )
 
             return
 
@@ -2867,14 +3116,16 @@ def render_draft_lifecycle_panel(
 
         with c2:
             if st.button(
-                "Reset Current Pick to 24 Hours",
+                "Reset Current Pick to League Rule",
                 use_container_width=True,
                 key="nfhl_reset_current_pick_clock",
             ):
 
                 try:
                     set_nfhl_current_pick_remaining(
-                        remaining_seconds=86400,
+                        remaining_seconds=(
+                            configured_seconds
+                        ),
                         actor="commissioner_link",
                     )
 
@@ -2886,7 +3137,8 @@ def render_draft_lifecycle_panel(
 
                 else:
                     st.success(
-                        "Current pick reset to a full 24 hours."
+                        "Current pick reset to the full "
+                        "league clock window."
                     )
 
                     st.cache_data.clear()
@@ -2900,21 +3152,21 @@ def render_draft_lifecycle_panel(
 
         st.caption(
             "This changes only the current manager's remaining "
-            "time. Future picks remain 24 hours. For a longer "
-            "commissioner hold, pause the draft instead."
+            "time. Future picks use the configured league clock. "
+            "For a longer commissioner hold, pause the draft instead."
         )
 
         current_remaining = int(
             snapshot.get(
                 "remaining_seconds"
             )
-            or 86400
+            or configured_seconds
         )
 
         default_hours = max(
             1,
             min(
-                24,
+                configured_hours,
                 int(
                     (
                         current_remaining
@@ -2928,7 +3180,7 @@ def render_draft_lifecycle_panel(
         remaining_hours = st.number_input(
             "Set hours remaining",
             min_value=1,
-            max_value=24,
+            max_value=configured_hours,
             value=default_hours,
             step=1,
             key="nfhl_adjust_remaining_hours",
@@ -2978,8 +3230,8 @@ def render_draft_lifecycle_panel(
 def render_draft_readiness_panel(
     *,
     gateway_context: dict[str, object],
+    teams: list[dict],
 ) -> None:
-
     role = str(
         gateway_context.get("role")
         or "public"
@@ -2988,28 +3240,15 @@ def render_draft_readiness_panel(
     if role != "commissioner":
         return
 
-    try:
-        readiness = (
-            get_draft_initialization_readiness()
-        )
-
-    except Exception as exc:
-        st.error(
-            "Unable to evaluate NFHL draft readiness: "
-            f"{exc}"
-        )
-        return
-
-    ready = bool(
-        readiness.get("ready")
-    )
-
     with st.expander(
-        "Commissioner Draft Readiness",
-        expanded=not ready,
+        "League Setup & Roll Call",
+        expanded=bool(
+            st.session_state.pop(
+                "nfhl_force_open_league_setup",
+                False,
+            )
+        ),
     ):
-
-        # NFHL_YAHOO_TEAM_REFRESH_UI_START
         refresh_notice = (
             st.session_state.pop(
                 "nfhl_yahoo_team_refresh_notice",
@@ -3037,6 +3276,12 @@ def render_draft_readiness_panel(
                         )
                     )
 
+                    from draftboard.data.season_team_slots import (
+                        auto_match_season_team_slots,
+                    )
+
+                    auto_match_season_team_slots()
+
             except Exception as exc:
                 st.error(
                     "Yahoo team refresh failed: "
@@ -3061,145 +3306,97 @@ def render_draft_readiness_panel(
                 st.rerun()
 
         st.caption(
-            "Commissioner only. Refreshes Yahoo league "
-            "membership without reloading the player universe. "
-            "Available only while the draft remains in PREP."
-        )
-        # NFHL_YAHOO_TEAM_REFRESH_UI_END
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Teams",
-            (
-                f"{readiness['live_team_count']}"
-                f"/{readiness['manager_count']}"
-            ),
+            "Returning managers are mapped automatically. "
+            "Manual controls appear only for current Yahoo "
+            "managers who cannot be identified safely."
         )
 
-        c2.metric(
-            "Draft Format",
-            (
-                str(
-                    readiness.get(
-                        "draft_order_mode"
-                    )
-                    or "Not Set"
-                ).title()
-            ),
+        from draftboard.data.season_team_slots import (
+            get_season_team_slots,
         )
 
-        c3.metric(
-            "Lottery",
-            (
-                "Finalized"
-                if (
-                    readiness.get(
-                        "finalized_lottery_count"
-                    )
-                    == 1
-                )
-                else "Not Finalized"
-            ),
+        slots = (
+            get_season_team_slots()
         )
 
-        c4.metric(
-            "Board",
-            (
-                "Initialized"
-                if readiness.get(
-                    "draft_pick_count",
-                    0,
-                )
-                else "Not Initialized"
-            ),
-        )
-
-        if ready:
-            st.success(
-                "NFHL is ready to initialize the "
-                "production draft board."
+        mapped = sum(
+            1
+            for row in slots
+            if row.get(
+                "current_team_key"
             )
+        )
 
-        else:
-            st.info(
-                "Draft initialization is locked until "
-                "all prerequisites are satisfied."
-            )
-
-            blockers = (
-                readiness.get("blockers")
-                or []
-            )
-
-            for blocker in blockers:
-                st.markdown(
-                    f"- {blocker}"
+        pending = [
+            row
+            for row in slots
+            if str(
+                row.get(
+                    "assignment_status"
                 )
+                or ""
+            ).upper()
+            == "PENDING"
+        ]
 
-        st.caption(
-            "Initialization creates the full "
-            f"{readiness['expected_draft_pick_count']}-pick "
-            "draft grid and sets the first pick. "
-            "It does not start the draft clock."
+        assigned_keys = {
+            str(
+                row.get(
+                    "current_team_key"
+                )
+                or ""
+            )
+            for row in slots
+            if row.get(
+                "current_team_key"
+            )
+        }
+
+        unmatched_current = [
+            team
+            for team in teams
+            if str(
+                team.get(
+                    "team_key"
+                )
+                or ""
+            )
+            not in assigned_keys
+        ]
+
+        st.markdown(
+            f"**Team mapping:** {mapped}/14"
         )
 
-        confirm = st.checkbox(
-            "I confirm the finalized lottery and "
-            "draft format are correct and want to "
-            "initialize the production NFHL Draft Board.",
-            disabled=not ready,
-            key="nfhl_confirm_initialize_draft",
-        )
-
-        if st.button(
-            "Initialize NFHL Draft Board",
-            type="primary",
-            use_container_width=True,
-            disabled=(
-                not ready
-                or not confirm
-            ),
-            key="nfhl_initialize_draft_board",
+        if (
+            pending
+            and not unmatched_current
         ):
-
-            try:
-                result = (
-                    initialize_draft_from_lottery(
-                        actor="commissioner_link",
+            st.info(
+                "Waiting for Yahoo membership: "
+                + ", ".join(
+                    str(
+                        row.get(
+                            "prior_manager_name"
+                        )
+                        or "Unknown"
                     )
+                    for row in pending
                 )
-
-            except Exception as exc:
-                st.error(
-                    "Draft initialization failed: "
-                    f"{exc}"
-                )
-                return
-
-            if (
-                str(
-                    result.get(
-                        "result_status"
-                    )
-                    or ""
-                ).upper()
-                != "INITIALIZED"
-            ):
-                st.error(
-                    "Draft initializer returned an "
-                    "unexpected result."
-                )
-                return
-
-            st.success(
-                "NFHL Draft Board initialized: "
-                f"{result['draft_pick_count']} picks, "
-                f"first pick {result['first_pick_id']}."
+                + ". No commissioner mapping action "
+                  "is required right now."
             )
 
-            st.cache_data.clear()
-            st.rerun()
+        st.divider()
+
+        from draftboard.ui.components.season_team_slots import (
+            render_season_team_slots,
+        )
+
+        render_season_team_slots(
+            gateway_context=gateway_context,
+            teams=teams,
+        )
 
 
 # NFHL_DRAFT_READINESS_UI_END
@@ -3265,12 +3462,10 @@ def render_draft_board(
 
     render_preview_draft_board()
 
-    render_draft_readiness_panel(
-        gateway_context=gateway_context,
-    )
-
     render_draft_lifecycle_panel(
         gateway_context=gateway_context,
+        show_status=True,
+        show_commissioner_controls=False,
     )
 
     render_live_draft(
@@ -3386,27 +3581,18 @@ def main() -> None:
             "Commissioner"
         )
 
-    tabs = st.tabs(
-        tab_names
+    selected_view = st.segmented_control(
+        "NFHL View",
+        options=tab_names,
+        default="Draft Board",
+        key="nfhl_main_view",
+        label_visibility="collapsed",
     )
 
-    (
-        board_tab,
-        players_tab,
-        teams_tab,
-        lottery_tab,
-    ) = tabs[:4]
+    if selected_view not in tab_names:
+        selected_view = "Draft Board"
 
-    pick_tracker_tab = tabs[4]
-    draft_statistics_tab = tabs[5]
-
-    commissioner_tab = (
-        tabs[6]
-        if commissioner_mode
-        else None
-    )
-
-    with board_tab:
+    if selected_view == "Draft Board":
         render_draft_board(
             current_teams,
             target_teams,
@@ -3422,25 +3608,25 @@ def main() -> None:
             draft_status=draft_status,
         )
 
-    with players_tab:
+    elif selected_view == "Available Players":
         render_players(
             players,
             prior_year,
         )
 
-    with teams_tab:
+    elif selected_view == "Teams":
         render_teams(
             teams,
             target_teams,
         )
 
-    with lottery_tab:
+    elif selected_view == "Draft Lottery":
         render_draft_lottery(
             current_teams,
             target_teams,
         )
 
-    with pick_tracker_tab:
+    elif selected_view == "Pick Tracker":
         from draftboard.ui.components.pick_tracker import (
             render_pick_tracker,
         )
@@ -3449,7 +3635,7 @@ def main() -> None:
             players=players,
         )
 
-    with draft_statistics_tab:
+    elif selected_view == "Draft Statistics":
         from draftboard.ui.components.draft_statistics import (
             render_draft_statistics,
         )
@@ -3458,49 +3644,59 @@ def main() -> None:
             players=players,
         )
 
-    if commissioner_tab is not None:
-        with commissioner_tab:
-            from draftboard.ui.components.season_team_slots import (
-                render_season_team_slots,
-            )
+    elif (
+        selected_view == "Commissioner"
+        and commissioner_mode
+    ):
+        from draftboard.ui.components.commissioner_checklist import (
+            render_commissioner_checklist,
+        )
 
-            render_season_team_slots(
-                gateway_context=gateway_context,
-                teams=teams,
-            )
+        render_commissioner_checklist(
+            gateway_context=gateway_context,
+        )
 
+        render_draft_readiness_panel(
+            gateway_context=gateway_context,
+            teams=teams,
+        )
 
-            # NFHL_MANAGER_LINKS_EXPANDER_START
+        with st.expander(
+            "Manager Access",
+            expanded=False,
+        ):
+            render_manager_links()
+            st.divider()
+            render_gateway_audit()
 
+        from draftboard.ui.components.commissioner_draft_setup import (
+            render_draft_setup_panel,
+            render_danger_zone,
+        )
 
-            with st.expander(
+        render_draft_setup_panel(
+            gateway_context=gateway_context,
+            current_teams=current_teams,
+            target_teams=target_teams,
+        )
 
+        render_draft_lifecycle_panel(
+            gateway_context=gateway_context,
+            show_status=False,
+            show_commissioner_controls=True,
+        )
 
-                "Manager Links",
+        from draftboard.ui.components.commissioner_recovery import (
+            render_commissioner_recovery,
+        )
 
+        render_commissioner_recovery(
+            gateway_context=gateway_context,
+        )
 
-                expanded=False,
-
-
-            ):
-
-
-                render_manager_links()
-
-
-            # NFHL_MANAGER_LINKS_EXPANDER_END
-            from draftboard.ui.components.commissioner_recovery import (
-
-                render_commissioner_recovery,
-
-            )
-
-
-            render_commissioner_recovery(
-
-                gateway_context=gateway_context,
-
-            )
+        render_danger_zone(
+            gateway_context=gateway_context,
+        )
     with st.sidebar:
         st.header("NFHL")
 
@@ -3516,14 +3712,7 @@ def main() -> None:
             f"Prior Stats: `{prior_year}`"
         )
 
-        if commissioner_mode:
-            if st.button(
-                "Refresh Data",
-                use_container_width=True,
-                key="nfhl_commissioner_refresh_data",
-            ):
-                st.cache_data.clear()
-                st.rerun()
+
 
 
 if __name__ == "__main__":
