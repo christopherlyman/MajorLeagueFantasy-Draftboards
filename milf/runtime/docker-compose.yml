@@ -4,7 +4,7 @@ services:
     image: mlf_tools:latest
     container_name: milf_draftboard
     env_file:
-      - /Volume1/Bots/fantasy/milf/.env
+      - /Volume1/Bots/fantasy/DraftBoards/milf/.env
     environment:
       PYTHONPATH: /app/app/src
     working_dir: /app
@@ -19,8 +19,8 @@ services:
     ports:
       - "8502:8501"
     volumes:
-      - /Volume1/Bots/fantasy/shared:/app
-      - /Volume1/Bots/fantasy/milf:/league_runtime
+      - /Volume1/Bots/fantasy/DraftBoards/shared:/app
+      - /Volume1/Bots/fantasy/DraftBoards/milf:/league_runtime
     restart: unless-stopped
     networks:
       - mlf_net
