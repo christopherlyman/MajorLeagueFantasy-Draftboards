@@ -6,10 +6,16 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from draftboard.state.runtime import (
+    get_draft_key,
+    get_league_key,
+    get_season_year,
+)
 
-LEAGUE_KEY = "477.l.10961"
-SEASON_YEAR = 2026
-DRAFT_KEY = "nfhl_2026_preseason"
+
+LEAGUE_KEY = get_league_key()
+SEASON_YEAR = get_season_year()
+DRAFT_KEY = get_draft_key()
 
 
 def _connect() -> psycopg.Connection:
@@ -192,6 +198,7 @@ def get_preview_board_meta() -> dict[str, Any]:
     sql = """
         SELECT
             d.status,
+            d.manager_count,
             d.rounds_total,
 
             (
@@ -562,7 +569,7 @@ def save_season_team_slot_assignment(
     if status == "RETURNING":
         if not team_key:
             raise ValueError(
-                "RETURNING requires a real 2026 Yahoo team."
+                f"RETURNING requires a real {SEASON_YEAR} Yahoo team."
             )
 
         replacement_manager = None

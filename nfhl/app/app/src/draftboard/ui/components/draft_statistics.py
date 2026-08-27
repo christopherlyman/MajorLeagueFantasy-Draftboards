@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 from datetime import (
     date,
@@ -16,18 +18,9 @@ from zoneinfo import ZoneInfo
 
 from draftboard.data.db import (
     get_live_draft_board,
-    get_live_draft_state,
 )
-
-from draftboard.data.season_team_slots import (
-    get_season_team_slots,
-)
-
-
-NFHL_OPENING_DAY_FALLBACK = date(
-    2026,
-    9,
-    29,
+from draftboard.state.runtime import (
+    get_season_year,
 )
 
 
@@ -44,12 +37,53 @@ def _opening_day() -> date:
             return date.fromisoformat(
                 raw
             )
-        except Exception:
-            pass
+        except ValueError as exc:
+            raise RuntimeError(
+                "DRAFTBOARD_OPENING_DAY_DATE "
+                f"is invalid: {raw!r}"
+            ) from exc
 
-    return (
-        NFHL_OPENING_DAY_FALLBACK
-    )
+    season_year = get_season_year()
+
+    config_path = Path(
+        "/league_runtime/config"
+    ) / f"nfhl_{season_year}.json"
+
+    try:
+        config = json.loads(
+            config_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to read NFHL season config: "
+            f"{config_path}"
+        ) from exc
+
+    draft_config = config.get("draft") or {}
+
+    raw = str(
+        draft_config.get(
+            "opening_day_date"
+        )
+        or ""
+    ).strip()
+
+    if not raw:
+        raise RuntimeError(
+            "NFHL season config is missing "
+            "draft.opening_day_date."
+        )
+
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "NFHL season config has invalid "
+            "draft.opening_day_date: "
+            f"{raw!r}"
+        ) from exc
 
 
 def _target_completion_date() -> date:
@@ -193,41 +227,9 @@ def _player_rank_lookup(
     return result
 
 
-def _preview_team_names() -> list[str]:
-    try:
-        slots = (
-            get_season_team_slots()
-        )
-    except Exception:
-        return []
-
-    names: list[str] = []
-
-    for slot in slots:
-        name = str(
-            slot.get(
-                "current_team_name"
-            )
-            or slot.get(
-                "replacement_team_name"
-            )
-            or slot.get(
-                "prior_team_name"
-            )
-            or ""
-        ).strip()
-
-        if name:
-            names.append(
-                name
-            )
-
-    return names
-
-
 def _render_kpis(
     *,
-    total_pick_slots: int,
+    completed_picks: int,
     total_picks_remaining: int,
     avg_picks_per_day: float | None,
     required_picks_per_day: float | None,
@@ -239,12 +241,12 @@ def _render_kpis(
     )
 
     cols[0].metric(
-        "Live Picks",
-        f"{total_pick_slots:,}",
+        "Picks Made",
+        f"{completed_picks:,}",
     )
 
     cols[1].metric(
-        "Live Picks Remaining",
+        "Picks Remaining",
         f"{total_picks_remaining:,}",
     )
 
@@ -288,129 +290,10 @@ def _render_kpis(
     )
 
 
-
 # NFHL_PREP_PACE_GRAPH_START
-def _render_preview_pace_chart(
-    *,
-    total_pick_slots: int,
-    target_date: date,
-) -> None:
-    """
-    Render the same cumulative pace-chart shape used during the live
-    draft, using deterministic in-memory PREP data only.
-
-    Nothing here is persisted or treated as an actual draft result.
-    """
-    preview_days = 10
-
-    start_date = (
-        target_date
-        - timedelta(
-            days=preview_days - 1
-        )
-    )
-
-    chart_dates = pd.date_range(
-        start_date,
-        target_date,
-        freq="D",
-    )
-
-    # Deterministic representative curve solely for visual approval.
-    progress_fractions = [
-        0.00,
-        0.08,
-        0.19,
-        0.28,
-        0.41,
-        0.52,
-        0.64,
-        0.75,
-        0.89,
-        1.00,
-    ]
-
-    actual_values = [
-        round(
-            float(total_pick_slots)
-            * fraction,
-            2,
-        )
-        for fraction
-        in progress_fractions
-    ]
-
-    required_values = [
-        round(
-            float(total_pick_slots)
-            * float(day_number)
-            / float(preview_days),
-            2,
-        )
-        for day_number
-        in range(
-            1,
-            preview_days + 1,
-        )
-    ]
-
-    observed_rate = (
-        float(actual_values[-2])
-        / float(
-            preview_days - 1
-        )
-    )
-
-    trend_values = [
-        min(
-            float(total_pick_slots),
-            round(
-                observed_rate
-                * float(day_number),
-                2,
-            ),
-        )
-        for day_number
-        in range(
-            1,
-            preview_days + 1,
-        )
-    ]
-
-    chart_df = pd.DataFrame(
-        {
-            "Actual Cumulative Picks":
-                actual_values,
-
-            "Required Pace to Completion Deadline":
-                required_values,
-
-            "Actual Pace (Avg Trend)":
-                trend_values,
-        },
-        index=chart_dates,
-    )
-
-    st.caption(
-        "PRE-DRAFT GRAPH PREVIEW — The values below are "
-        "representative only. The live chart will use actual "
-        "NFHL selections and the saved draft schedule."
-    )
-
-    st.line_chart(
-        chart_df,
-        use_container_width=True,
-    )
-
-    st.caption(
-        "Live behavior: Actual Cumulative Picks tracks completed "
-        "selections; Required Pace tracks the completion deadline; "
-        "Actual Pace (Avg Trend) projects the observed drafting rate."
-    )
 
 
 # NFHL_PREP_PACE_GRAPH_END
-
 
 
 def render_draft_statistics(
@@ -426,10 +309,6 @@ def render_draft_statistics(
     )
 
     try:
-        live_state = (
-            get_live_draft_state()
-        )
-
         board_rows = (
             get_live_draft_board()
         )
@@ -440,13 +319,6 @@ def render_draft_statistics(
             f"{exc}"
         )
         return
-
-    draft_status = str(
-        live_state.get(
-            "status"
-        )
-        or ""
-    ).upper()
 
     if board_rows:
         total_pick_slots = (
@@ -639,8 +511,8 @@ def render_draft_statistics(
             )
 
     _render_kpis(
-        total_pick_slots=(
-            total_pick_slots
+        completed_picks=(
+            completed_picks
         ),
         total_picks_remaining=(
             total_remaining
@@ -672,50 +544,8 @@ def render_draft_statistics(
 
     if not completed_rows:
         st.info(
-            "No real picks have been made yet."
+            "No draft statistics yet."
         )
-
-        if draft_status == "PREP":
-            st.caption(
-                "PRE-DRAFT PREVIEW — The statistic layout is live, "
-                "but pace and timing KPI values intentionally remain "
-                "blank until actual selections exist."
-            )
-
-            _render_preview_pace_chart(
-                total_pick_slots=(
-                    total_pick_slots
-                ),
-                target_date=(
-                    target_date
-                ),
-            )
-
-        team_names = (
-            _preview_team_names()
-        )
-
-        if team_names:
-            preview_rows = [
-                {
-                    "Team": name,
-                    "Picks Made": 0,
-                    "Average Wall-Clock / Pick": "—",
-                    "Cumulative Wall-Clock": "00:00:00",
-                    "Average Current Rank": None,
-                }
-                for name
-                in team_names
-            ]
-
-            st.dataframe(
-                pd.DataFrame(
-                    preview_rows
-                ),
-                hide_index=True,
-                use_container_width=True,
-            )
-
         return
 
     # ============================================================

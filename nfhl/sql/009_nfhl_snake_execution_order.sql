@@ -684,7 +684,7 @@ BEGIN
                 to_jsonb(
                     to_char(
                         v_deadline_at AT TIME ZONE 'UTC',
-                        'YYYY-MM-DD"T"HH24:MI:SS.US'
+                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
                     )
                 ),
                 true
@@ -968,7 +968,7 @@ BEGIN
     v_selected_ts_iso =
         to_char(
             v_selected_at AT TIME ZONE 'UTC',
-            'YYYY-MM-DD"T"HH24:MI:SS.US'
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
         );
 
     INSERT INTO nfhl.draft_selection (

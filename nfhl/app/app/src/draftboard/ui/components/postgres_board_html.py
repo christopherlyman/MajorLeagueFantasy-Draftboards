@@ -34,6 +34,8 @@ def _split_name(
 
 def _cell_label(
     row: dict[str, Any],
+    *,
+    total_slots: int,
 ) -> str:
     round_number = int(
         row.get(
@@ -61,9 +63,22 @@ def _cell_label(
             f"R{round_number:02d}"
         )
 
+    # Team columns remain fixed across the board. For a snake draft,
+    # the chronological pick number within an even round runs in the
+    # opposite direction across those fixed columns.
+    display_pick_number = (
+        slot_number
+        if round_number % 2 == 1
+        else (
+            total_slots
+            + 1
+            - slot_number
+        )
+    )
+
     return (
         f"{round_label}."
-        f"{slot_number}"
+        f"{display_pick_number}"
     )
 
 
@@ -92,9 +107,73 @@ def _position_key(
     )
 
 
+def _player_card_position_label(
+    player: dict[str, Any],
+    *,
+    fallback_position: str,
+) -> str:
+    """
+    Show Yahoo hockey-position eligibility on the draft card.
+
+    Generic roster slots such as F and Util are intentionally
+    excluded from the compact card label.
+    """
+    allowed = {
+        "C",
+        "LW",
+        "RW",
+        "W",
+        "D",
+        "G",
+    }
+
+    raw_positions = (
+        player.get("eligible_positions")
+        or []
+    )
+
+    if not isinstance(
+        raw_positions,
+        (list, tuple),
+    ):
+        raw_positions = [
+            raw_positions
+        ]
+
+    positions: list[str] = []
+
+    for value in raw_positions:
+        position = str(
+            value or ""
+        ).strip().upper()
+
+        if (
+            position in allowed
+            and position not in positions
+        ):
+            positions.append(
+                position
+            )
+
+    if not positions:
+        fallback = str(
+            fallback_position or ""
+        ).strip().upper()
+
+        if fallback:
+            positions.append(
+                fallback
+            )
+
+    return "/".join(
+        positions
+    )
+
+
 def render_postgres_board_html(
     rows: list[dict[str, Any]],
     *,
+    players: list[dict[str, Any]] | None = None,
     min_col_px: int = 72,
     cell_h_px: int = 96,
 ) -> None:
@@ -110,6 +189,24 @@ def render_postgres_board_html(
     """
     if not rows:
         return
+
+    player_lookup = {
+        str(
+            player.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ).strip(): player
+        for player in (
+            players or []
+        )
+        if str(
+            player.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ).strip()
+    }
 
     first_round = min(
         int(
@@ -166,16 +263,6 @@ def render_postgres_board_html(
             by_round
         )
     ]
-
-    st.markdown(
-        """
-        <meta
-          name="viewport"
-          content="width=device-width, initial-scale=1.0"
-        >
-        """,
-        unsafe_allow_html=True,
-    )
 
     st.markdown(
         f"""
@@ -476,7 +563,10 @@ def render_postgres_board_html(
         for row in round_rows:
             label = escape(
                 _cell_label(
-                    row
+                    row,
+                    total_slots=len(
+                        headers
+                    ),
                 )
             )
 
@@ -535,7 +625,7 @@ def render_postgres_board_html(
                     )
                 )
 
-                pos_key, pos_label = (
+                pos_key, primary_pos_label = (
                     _position_key(
                         row.get(
                             "selected_primary_position"
@@ -543,19 +633,56 @@ def render_postgres_board_html(
                     )
                 )
 
+                selected_player = (
+                    player_lookup.get(
+                        str(
+                            row.get(
+                                "yahoo_player_key"
+                            )
+                            or ""
+                        ).strip(),
+                        {},
+                    )
+                )
+
+                position_label = (
+                    _player_card_position_label(
+                        selected_player,
+                        fallback_position=(
+                            primary_pos_label
+                        ),
+                    )
+                )
+
+                nhl_team_label = str(
+                    selected_player.get(
+                        "nhl_team_abbr"
+                    )
+                    or ""
+                ).strip().upper()
+
+                card_meta = " - ".join(
+                    part
+                    for part in (
+                        position_label,
+                        nhl_team_label,
+                    )
+                    if part
+                )
+
                 tl_label = ""
 
-                if traded and pos_label:
+                if traded and card_meta:
                     tl_label = (
                         f"TRADE · "
-                        f"{pos_label}"
+                        f"{card_meta}"
                     )
 
                 elif traded:
                     tl_label = "TRADE"
 
-                elif pos_label:
-                    tl_label = pos_label
+                elif card_meta:
+                    tl_label = card_meta
 
                 tl_html = (
                     '<div '

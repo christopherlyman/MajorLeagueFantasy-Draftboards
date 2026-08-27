@@ -2101,7 +2101,7 @@ def _nfhl_clock_iso_now() -> str:
 def _nfhl_parse_clock_iso(
     value: object,
 ):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     text = str(
         value or ""
@@ -2116,8 +2116,19 @@ def _nfhl_parse_clock_iso(
             + "+00:00"
         )
 
-    return datetime.fromisoformat(
+    parsed = datetime.fromisoformat(
         text
+    )
+
+    # NFHL clock strings are UTC. Older PostgreSQL writers
+    # emitted UTC wall-clock values without an explicit offset.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=timezone.utc
+        )
+
+    return parsed.astimezone(
+        timezone.utc
     )
 
 
@@ -4501,6 +4512,7 @@ def get_team_gateway_audit(
 def refresh_yahoo_teams_live(
     *,
     actor: str,
+    include_players: bool = False,
 ) -> dict[str, Any]:
     from pathlib import Path
     import importlib.util
@@ -4676,6 +4688,16 @@ def refresh_yahoo_teams_live(
             Path(temp_dir),
         )
 
+        if include_players:
+            players = sync.fetch_all_players(
+                session,
+                league_key,
+                season_year,
+                Path(temp_dir),
+            )
+        else:
+            players = []
+
     yahoo_count = len(
         teams
     )
@@ -4712,6 +4734,15 @@ def refresh_yahoo_teams_live(
             "Yahoo team payload contains "
             "missing or duplicate team keys."
         )
+
+    player_rows = (
+        sync.prepare_player_rows(players)
+        if include_players
+        else []
+    )
+
+    player_count = None
+    player_refreshed_at_utc = None
 
     dsn = get_postgres_dsn()
 
@@ -4811,6 +4842,12 @@ def refresh_yahoo_teams_live(
                     teams,
                 )
 
+                if player_rows:
+                    cur.executemany(
+                        sync.PLAYER_SQL,
+                        player_rows,
+                    )
+
                 cur.execute(
                     """
                     SELECT COUNT(*) AS team_count
@@ -4836,6 +4873,33 @@ def refresh_yahoo_teams_live(
                         "match Yahoo after refresh: "
                         f"Yahoo={yahoo_count}, "
                         f"DB={db_count}."
+                    )
+
+                if include_players:
+                    cur.execute(
+                        """
+                        SELECT
+                            COUNT(*) AS player_count,
+                            MAX(updated_at_utc)
+                                AS refreshed_at_utc
+                        FROM nfhl.player_universe
+                        WHERE league_key = %s
+                          AND season_year = %s
+                        """,
+                        (
+                            league_key,
+                            season_year,
+                        ),
+                    )
+
+                    player_row = cur.fetchone()
+
+                    player_count = int(
+                        player_row["player_count"]
+                    )
+
+                    player_refreshed_at_utc = (
+                        player_row["refreshed_at_utc"]
                     )
 
     gateway_links_created = (
@@ -4864,6 +4928,20 @@ def refresh_yahoo_teams_live(
             int(
                 gateway_links_created
             )
+        ),
+        "player_refresh_requested": (
+            bool(include_players)
+        ),
+        "yahoo_player_count": (
+            len(players)
+            if include_players
+            else None
+        ),
+        "db_player_count": (
+            player_count
+        ),
+        "player_refreshed_at_utc": (
+            player_refreshed_at_utc
         ),
         "draft_status": "PREP",
     }

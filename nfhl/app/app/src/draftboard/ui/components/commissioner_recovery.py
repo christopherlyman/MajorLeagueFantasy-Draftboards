@@ -8,14 +8,8 @@ from draftboard.data.db import (
     delete_nfhl_draft_pick,
     get_live_draft_board,
     get_live_draft_state,
-    get_player_universe,
     set_nfhl_current_pick_remaining,
 )
-
-from draftboard.data.season_team_slots import (
-    get_season_team_slots,
-)
-
 
 def _completed_label(
     row: dict[str, Any],
@@ -34,108 +28,6 @@ def _completed_label(
     )
 
 
-def _preview_label() -> str:
-    team_name = (
-        "Preview Team"
-    )
-
-    player_name = (
-        "Preview Player"
-    )
-
-    position = ""
-
-    try:
-        slots = (
-            get_season_team_slots()
-        )
-
-        if slots:
-            slot = slots[0]
-
-            team_name = str(
-                slot.get(
-                    "current_team_name"
-                )
-                or slot.get(
-                    "replacement_team_name"
-                )
-                or slot.get(
-                    "prior_team_name"
-                )
-                or team_name
-            )
-
-    except Exception:
-        pass
-
-    try:
-        players = (
-            get_player_universe()
-        )
-
-        ranked = sorted(
-            [
-                player
-                for player in players
-                if player.get(
-                    "yahoo_player_key"
-                )
-            ],
-            key=lambda player: (
-                player.get(
-                    "rank_value"
-                )
-                is None,
-
-                float(
-                    player.get(
-                        "rank_value"
-                    )
-                )
-                if player.get(
-                    "rank_value"
-                )
-                is not None
-                else 999999.0,
-
-                str(
-                    player.get(
-                        "full_name"
-                    )
-                    or ""
-                ),
-            ),
-        )
-
-        if ranked:
-            player_name = str(
-                ranked[0].get(
-                    "full_name"
-                )
-                or player_name
-            )
-
-            position = str(
-                ranked[0].get(
-                    "primary_position"
-                )
-                or ""
-            )
-
-    except Exception:
-        pass
-
-    return (
-        "R01.1 — "
-        f"{team_name} — "
-        f"{player_name}"
-        + (
-            f" ({position})"
-            if position
-            else ""
-        )
-    )
 
 
 def render_commissioner_recovery(
@@ -210,39 +102,17 @@ def render_commissioner_recovery(
         reverse=True,
     )
 
-    preview_mode = (
-        status == "PREP"
-        or not board_rows
-    )
-
     with st.expander(
         "Recovery",
-        expanded=False,
+        expanded=bool(
+            st.session_state.pop(
+                "nfhl_force_open_recovery",
+                False,
+            )
+        ),
     ):
 
-        if preview_mode:
-            st.caption(
-                "PRE-DRAFT PREVIEW — This is the real recovery "
-                "layout. Destructive execution is disabled until "
-                "the draft is ACTIVE and a completed pick exists."
-            )
-
-            selected_pick_id = (
-                None
-            )
-
-            st.selectbox(
-                "Completed pick",
-                options=[
-                    _preview_label()
-                ],
-                disabled=True,
-                key=(
-                    "nfhl_recovery_preview_pick"
-                ),
-            )
-
-        elif not completed_rows:
+        if not completed_rows:
             st.info(
                 "There are no completed selections to correct."
             )
@@ -250,6 +120,7 @@ def render_commissioner_recovery(
             selected_pick_id = (
                 None
             )
+            return
 
         else:
             pick_lookup = {
@@ -337,8 +208,7 @@ def render_commissioner_recovery(
         )
 
         execute_disabled = (
-            preview_mode
-            or status != "ACTIVE"
+            status != "ACTIVE"
             or not selected_pick_id
             or not confirm
         )
@@ -401,9 +271,5 @@ def render_commissioner_recovery(
                 )
 
             st.cache_data.clear()
+            st.session_state["nfhl_force_open_recovery"] = True
             st.rerun()
-
-        if preview_mode:
-            st.caption(
-                "Apply Fix is intentionally disabled in PREP."
-            )

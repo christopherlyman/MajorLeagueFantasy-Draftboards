@@ -590,6 +590,25 @@ def get_commissioner_checklist_state(
             ),
         }
 
+    completed_selection_count = sum(
+        1
+        for row in board
+        if (
+            row.get(
+                "yahoo_player_key"
+            )
+            and row.get(
+                "selected_at_utc"
+            )
+        )
+    )
+
+    offseason_complete = (
+        total_checks > 0
+        and completed_checks
+        == total_checks
+    )
+
     draft_complete = (
         draft_status
         in _COMPLETE_STATUSES
@@ -607,8 +626,38 @@ def get_commissioner_checklist_state(
     post_phase = (
         "Ready for closeout"
         if draft_complete
-        else "Waiting"
+        else ""
     )
+
+    if draft_status == "ACTIVE":
+        next_action = {
+            "title":
+                "Draft in progress",
+            "kind":
+                "waiting",
+            "section":
+                "Draft Operations",
+            "detail":
+                (
+                    "Monitor the live draft. Use Draft Operations "
+                    "only when commissioner intervention is needed."
+                ),
+        }
+
+    elif draft_complete:
+        next_action = {
+            "title":
+                "Validate Final Draft Results",
+            "kind":
+                "action",
+            "section":
+                "Post-Draft",
+            "detail":
+                (
+                    "Review the final Draft Board and complete "
+                    "league handoff."
+                ),
+        }
 
     return {
         "draft_status":
@@ -678,6 +727,10 @@ def get_commissioner_checklist_state(
             post_phase,
         "draft_complete":
             draft_complete,
+        "offseason_complete":
+            offseason_complete,
+        "completed_selection_count":
+            completed_selection_count,
         "next_action":
             next_action,
         "housekeeping":
@@ -730,48 +783,6 @@ def render_commissioner_checklist(
 
     st.markdown(
         "### Commissioner Readiness"
-    )
-
-    c1, c2, c3 = st.columns(
-        3
-    )
-
-    c1.metric(
-        "OFFSEASON",
-        (
-            f"{state['completed_checks']}/"
-            f"{state['total_checks']} complete"
-        ),
-    )
-
-    c2.metric(
-        "DRAFT",
-        state[
-            "draft_phase"
-        ],
-    )
-
-    c3.metric(
-        "POST-DRAFT",
-        state[
-            "post_phase"
-        ],
-    )
-
-    progress = (
-        state[
-            "completed_checks"
-        ]
-        / max(
-            1,
-            state[
-                "total_checks"
-            ],
-        )
-    )
-
-    st.progress(
-        progress
     )
 
     housekeeping = state[
@@ -848,13 +859,29 @@ def render_commissioner_checklist(
     # OFFSEASON
     # ------------------------------------------------------------
 
-    with st.expander(
+    offseason_title = (
         (
+            "✓ Offseason complete — "
+            f"{state['completed_checks']}/"
+            f"{state['total_checks']}"
+        )
+        if state[
+            "offseason_complete"
+        ]
+        else (
             "Offseason Checklist — "
             f"{state['completed_checks']}/"
             f"{state['total_checks']} complete"
+        )
+    )
+
+    with st.expander(
+        offseason_title,
+        expanded=(
+            not state[
+                "offseason_complete"
+            ]
         ),
-        expanded=False,
     ):
         _render_check(
             "League membership",
@@ -1074,7 +1101,14 @@ def render_commissioner_checklist(
             "Draft Checklist — "
             f"{state['draft_phase']}"
         ),
-        expanded=False,
+        expanded=(
+            state[
+                "offseason_complete"
+            ]
+            and not state[
+                "draft_complete"
+            ]
+        ),
     ):
         _render_check(
             "Draft Board ready",
@@ -1115,7 +1149,7 @@ def render_commissioner_checklist(
         )
 
         _render_check(
-            "Draft completed",
+            "Draft progress",
             state=(
                 "complete"
                 if state[
@@ -1128,11 +1162,9 @@ def render_commissioner_checklist(
                 )
             ),
             detail=(
-                "Complete"
-                if state[
-                    "draft_complete"
-                ]
-                else "Waiting for final selection"
+                f"{state['completed_selection_count']}/"
+                f"{state['expected_picks']} "
+                "selections complete"
             ),
         )
 
@@ -1140,50 +1172,32 @@ def render_commissioner_checklist(
             "Clock, pause/resume, and current-pick "
             "adjustments remain under Draft Operations."
         )
-
     # ------------------------------------------------------------
-    # POST-DRAFT
+    # POST-DRAFT — ONLY WHEN ACTIONABLE
     # ------------------------------------------------------------
 
-    with st.expander(
-        (
-            "Post-Draft Checklist — "
-            f"{state['post_phase']}"
-        ),
-        expanded=False,
-    ):
-        _render_check(
-            "Draft completion",
-            state=(
-                "complete"
-                if state[
-                    "draft_complete"
-                ]
-                else "locked"
-            ),
-            detail=(
-                state[
-                    "draft_status"
-                ]
-                or "UNKNOWN"
-            ),
-        )
+    if state[
+        "draft_complete"
+    ]:
+        with st.expander(
+            "Post-Draft Checklist — Ready for closeout",
+            expanded=True,
+        ):
+            _render_check(
+                "Draft completion",
+                state="complete",
+                detail=(
+                    f"{state['completed_selection_count']}/"
+                    f"{state['expected_picks']} "
+                    "selections complete"
+                ),
+            )
 
-        _render_check(
-            "Post-draft closeout",
-            state=(
-                "action"
-                if state[
-                    "draft_complete"
-                ]
-                else "locked"
-            ),
-            detail=(
-                "Validate final draft results "
-                "and complete league handoff"
-                if state[
-                    "draft_complete"
-                ]
-                else "Available after draft completion"
-            ),
-        )
+            _render_check(
+                "Post-draft closeout",
+                state="action",
+                detail=(
+                    "Validate final draft results and "
+                    "complete league handoff"
+                ),
+            )

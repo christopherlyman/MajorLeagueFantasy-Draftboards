@@ -81,6 +81,8 @@ from draftboard.ui.components.postgres_board_html import (
 )
 
 
+
+
 def _fmt_remaining(
     snapshot: dict[str, Any],
 ) -> str:
@@ -323,6 +325,7 @@ def render_live_draft_experience(
     *,
     gateway_context: dict[str, object],
     players: list[dict],
+    status_only: bool = False,
 ) -> None:
     """
     NFFL-style NFHL live Draft Board and manual picker.
@@ -339,7 +342,10 @@ def render_live_draft_experience(
             or ""
         ).upper()
 
-        if draft_status == "ACTIVE":
+        if (
+            draft_status == "ACTIVE"
+            and not status_only
+        ):
             process_live_draft_clock()
 
             live_state = (
@@ -534,6 +540,24 @@ def render_live_draft_experience(
         if target_pick_id
         else None
     )
+
+    # ============================================================
+    # TERMINAL DRAFT STATE
+    # ============================================================
+
+    if (
+        not preview_mode
+        and draft_status == "COMPLETE"
+    ):
+        if status_only:
+            return
+
+        render_postgres_board_html(
+            board_rows,
+            players=players,
+        )
+
+        return
 
     # ============================================================
     # FIXED DESKTOP PICK DOCK
@@ -1085,13 +1109,17 @@ def render_live_draft_experience(
                     st.cache_data.clear()
                     st.rerun()
 
+    if status_only:
+        return
+
     # ============================================================
     # AUTHORITATIVE GRAPHICAL BOARD
     # ============================================================
 
     if not preview_mode:
         render_postgres_board_html(
-            board_rows
+            board_rows,
+            players=players,
         )
 
     # For a logged-in manager who cannot pick right now, keep the

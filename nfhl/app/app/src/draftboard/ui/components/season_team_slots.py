@@ -196,7 +196,7 @@ def render_season_team_slots(
         "#### Roll Call & Team Mapping"
     )
 
-    # Full 14-row table: no inner vertical scrolling.
+    # Full team table: no inner vertical scrolling.
     st.dataframe(
         pd.DataFrame(
             display_rows
@@ -485,21 +485,35 @@ def render_preview_draft_board() -> None:
 
     rounds_total = int(
         meta.get("rounds_total")
-        or 18
+        or 0
     )
 
-    if len(slots) != 14:
+    manager_count = int(
+        meta.get("manager_count")
+        or 0
+    )
+
+    if rounds_total <= 0:
         st.warning(
-            "Draft preview requires exactly fourteen league slots."
+            "Draft preview requires a positive "
+            "configured round count."
         )
         return
 
-    st.caption(
-        "PRE-DRAFT PREVIEW — Team columns are shown so the complete "
-        "board can be reviewed while roll call is still underway. "
-        "The official column order will be set by the finalized "
-        "Draft Lottery."
-    )
+    if manager_count <= 0:
+        st.warning(
+            "Draft preview requires a positive "
+            "configured manager count."
+        )
+        return
+
+    if len(slots) != manager_count:
+        st.warning(
+            "Draft preview requires exactly "
+            f"{manager_count} league slots; "
+            f"found {len(slots)}."
+        )
+        return
 
     # NFFL visual geometry:
     #   header height 74px
@@ -510,11 +524,6 @@ def render_preview_draft_board() -> None:
     # NFHL changes only the league palette.
     st.markdown(
         f"""
-        <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1.0"
-        >
-
         <style>
           .nfhl-db-wrap {{
               color: #111 !important;
@@ -524,7 +533,7 @@ def render_preview_draft_board() -> None:
           .nfhl-db-header {{
               display: grid;
               grid-template-columns:
-                  repeat(14, minmax(72px, 1fr));
+                  repeat({manager_count}, minmax(72px, 1fr));
               gap: 4px;
 
               position: sticky;
@@ -581,7 +590,7 @@ def render_preview_draft_board() -> None:
           .nfhl-db-grid {{
               display: grid;
               grid-template-columns:
-                  repeat(14, minmax(72px, 1fr));
+                  repeat({manager_count}, minmax(72px, 1fr));
 
               gap: 4px;
               align-items: stretch;
@@ -654,7 +663,7 @@ def render_preview_draft_board() -> None:
     ):
         for slot_number in range(
             1,
-            15,
+            manager_count + 1,
         ):
             label = (
                 f"R{round_number:02d}."
@@ -680,6 +689,8 @@ def render_preview_draft_board() -> None:
     )
 
     st.caption(
-        f"14 teams × {rounds_total} rounds = "
-        f"{14 * rounds_total} draft cells."
+        f"{manager_count} teams × "
+        f"{rounds_total} rounds = "
+        f"{manager_count * rounds_total} "
+        "draft cells."
     )

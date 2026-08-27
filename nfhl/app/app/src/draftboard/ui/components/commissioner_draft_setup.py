@@ -32,7 +32,15 @@ def _commissioner(
     )
 
 
-def _refresh() -> None:
+def _refresh(
+    *,
+    force_open_key: str | None = None,
+) -> None:
+    if force_open_key:
+        st.session_state[
+            force_open_key
+        ] = True
+
     st.cache_data.clear()
     st.rerun()
 
@@ -48,9 +56,28 @@ def render_draft_setup_panel(
     ):
         return
 
+    force_open_draft_setup = bool(
+        st.session_state.pop(
+            "nfhl_force_open_draft_setup",
+            False,
+        )
+    )
+
+    keep_draft_setup_open = bool(
+        force_open_draft_setup
+        or st.session_state.get(
+            "nfhl_confirm_finalize_build",
+            False,
+        )
+        or st.session_state.get(
+            "nfhl_draft_setup_notice",
+            None,
+        )
+    )
+
     with st.expander(
         "Draft Setup",
-        expanded=False,
+        expanded=keep_draft_setup_open,
     ):
         notice = (
             st.session_state.pop(
@@ -238,7 +265,7 @@ def render_draft_setup_panel(
                     )
 
                 else:
-                    _refresh()
+                    _refresh(force_open_key="nfhl_force_open_draft_setup")
 
             st.divider()
 
@@ -281,119 +308,19 @@ def render_draft_setup_panel(
             or 0
         )
 
-        c1, c2 = st.columns(
-            2
-        )
-
-        c1.metric(
-            "Lottery Status",
-            status,
-        )
-
-        c2.metric(
-            "Revealed",
+        hidden_slots = sorted(
             (
-                f"{revealed_count}/"
-                f"{configured_team_count}"
+                int(pick.get("slot_number") or 0)
+                for pick in picks
+                if pick.get("revealed_at_utc") is None
             ),
+            reverse=True,
         )
 
-        rows = []
-        hidden_slots = []
-
-        for pick in picks:
-            revealed = (
-                pick.get(
-                    "revealed_at_utc"
-                )
-                is not None
-            )
-
-            slot = int(
-                pick[
-                    "slot_number"
-                ]
-            )
-
-            if not revealed:
-                hidden_slots.append(
-                    slot
-                )
-
-            rows.append(
-                {
-                    "Draft Slot":
-                        slot,
-                    "Status": (
-                        "REVEALED"
-                        if revealed
-                        else "HIDDEN"
-                    ),
-                    "Team": (
-                        pick.get(
-                            "team_name"
-                        )
-                        if revealed
-                        else "—"
-                    ),
-                    "Manager": (
-                        pick.get(
-                            "owner_name"
-                        )
-                        if revealed
-                        else "—"
-                    ),
-                }
-            )
-
-        st.dataframe(
-            pd.DataFrame(
-                rows
-            ),
-            hide_index=True,
-            use_container_width=True,
-        )
-
-        # --------------------------------------------------------
-        # Reveal 14 -> 1
-        # --------------------------------------------------------
-
-        if hidden_slots:
-            next_slot = max(
-                hidden_slots
-            )
-
-            st.caption(
-                "The complete lottery order was persisted "
-                "when the lottery was initialized. "
-                "Revealing the next pick does not rerandomize it."
-            )
-
-            if st.button(
-                f"Reveal Pick {next_slot}",
-                type="primary",
-                use_container_width=True,
-                key="nfhl_commissioner_reveal_lottery",
-            ):
-                try:
-                    reveal_next_lottery_slot(
-                        actor="commissioner_link",
-                    )
-
-                except Exception as exc:
-                    st.error(
-                        "Could not reveal "
-                        f"Pick {next_slot}: {exc}"
-                    )
-
-                else:
-                    _refresh()
-
-        # --------------------------------------------------------
-        # All revealed -> finalize AND build
-        # --------------------------------------------------------
-
-        elif status != "FINALIZED":
+        if (
+            not hidden_slots
+            and status != "FINALIZED"
+        ):
             st.info(
                 "All lottery positions have been revealed. "
                 "The order is ready for final confirmation."
@@ -466,14 +393,13 @@ def render_draft_setup_panel(
                     f"{result['draft_pick_count']} picks."
                 )
 
-                _refresh()
+                _refresh(force_open_key="nfhl_force_open_draft_setup")
 
-        else:
+        elif status == "FINALIZED":
             st.success(
                 "Draft Lottery finalized. "
                 "The persisted order is locked."
             )
-
         st.divider()
 
         # Re-fetch because lottery may have been finalized
@@ -595,7 +521,7 @@ def _render_board_state(
                 f"{result['draft_pick_count']} picks."
             )
 
-            _refresh()
+            _refresh(force_open_key="nfhl_force_open_draft_setup")
 
         return
 
@@ -625,7 +551,12 @@ def render_danger_zone(
 
     with st.expander(
         "Danger Zone",
-        expanded=False,
+        expanded=bool(
+            st.session_state.pop(
+                "nfhl_force_open_danger_zone",
+                False,
+            )
+        ),
     ):
         st.warning(
             "Destructive commissioner actions live here. "
@@ -732,4 +663,4 @@ def render_danger_zone(
                 )
 
             else:
-                _refresh()
+                _refresh(force_open_key="nfhl_force_open_danger_zone")

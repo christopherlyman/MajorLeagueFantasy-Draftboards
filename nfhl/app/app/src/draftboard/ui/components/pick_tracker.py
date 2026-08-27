@@ -9,158 +9,16 @@ from draftboard.data.db import (
     get_live_draft_board,
 )
 
-from draftboard.data.season_team_slots import (
-    get_season_team_slots,
-)
 
 
-def _rank_value(
-    player: dict[str, Any],
-) -> tuple[
-    bool,
-    float,
-    str,
-]:
-    rank = player.get(
-        "rank_value"
-    )
-
-    try:
-        numeric_rank = (
-            float(rank)
-            if rank is not None
-            else None
-        )
-    except Exception:
-        numeric_rank = None
-
-    return (
-        numeric_rank is None,
-        (
-            numeric_rank
-            if numeric_rank is not None
-            else 999999.0
-        ),
-        str(
-            player.get(
-                "full_name"
-            )
-            or ""
-        ).casefold(),
-    )
 
 
-def _preview_rows(
-    players: list[dict],
-) -> list[dict[str, Any]]:
-    """
-    Representative PREP-only rows.
-
-    These rows are generated in memory solely so the Commissioner
-    can approve the Pick Tracker layout before the draft exists.
-    Nothing is persisted.
-    """
-    slots = (
-        get_season_team_slots()
-    )
-
-    ranked_players = [
-        player
-        for player in players
-        if player.get(
-            "yahoo_player_key"
-        )
-    ]
-
-    ranked_players.sort(
-        key=_rank_value
-    )
-
-    sample_players = (
-        ranked_players[:8]
-    )
-
-    rows: list[
-        dict[str, Any]
-    ] = []
-
-    for index, player in enumerate(
-        sample_players,
-        start=1,
-    ):
-        slot_index = (
-            index - 1
-        ) % max(
-            len(slots),
-            1,
-        )
-
-        slot = (
-            slots[slot_index]
-            if slots
-            else {}
-        )
-
-        team_name = str(
-            slot.get(
-                "current_team_name"
-            )
-            or slot.get(
-                "replacement_team_name"
-            )
-            or slot.get(
-                "prior_team_name"
-            )
-            or "Preview Team"
-        )
-
-        owner_name = str(
-            slot.get(
-                "current_owner_name"
-            )
-            or slot.get(
-                "replacement_manager_name"
-            )
-            or slot.get(
-                "prior_manager_name"
-            )
-            or ""
-        )
-
-        rows.append(
-            {
-                "Owner": owner_name,
-                "Team Name": team_name,
-                "Round": 1,
-                "Pick #": index,
-                "Overall #": index,
-                "Player Name": str(
-                    player.get(
-                        "full_name"
-                    )
-                    or ""
-                ),
-                "Pos": str(
-                    player.get(
-                        "primary_position"
-                    )
-                    or ""
-                ),
-                "NHL Team": str(
-                    player.get(
-                        "nhl_team_abbr"
-                    )
-                    or ""
-                ),
-            }
-        )
-
-    return rows
 
 
 def render_pick_tracker(
     *,
     players: list[dict],
+    teams: list[dict],
 ) -> None:
     st.subheader(
         "Pick Tracker"
@@ -190,67 +48,150 @@ def render_pick_tracker(
     ]
 
     if not completed:
-        preview_rows = (
-            _preview_rows(
-                players
-            )
-        )
-
-        st.caption(
-            "PRE-DRAFT PREVIEW — Representative rows are shown "
-            "only so the Pick Tracker layout can be reviewed. "
-            "These are not draft selections."
-        )
-
-        if not preview_rows:
-            st.info(
-                "No preview players are available."
-            )
-            return
-
-        st.dataframe(
-            pd.DataFrame(
-                preview_rows
-            ),
-            hide_index=True,
-            use_container_width=True,
-        )
-
+        st.info("No picks yet.")
         return
 
-    completed.sort(
-        key=lambda row: (
-            row.get(
-                "selected_at_utc"
-            ),
-            int(
-                row.get(
-                    "round_number"
-                )
-                or 0
-            ),
+    total_slots = max(
+        (
             int(
                 row.get(
                     "slot_number"
                 )
                 or 0
-            ),
+            )
+            for row
+            in board_rows
+        ),
+        default=0,
+    )
+
+    if total_slots <= 0:
+        st.error(
+            "Could not determine Draft Board team count."
+        )
+        return
+
+    def _draft_position(
+        row: dict[str, Any],
+    ) -> tuple[int, int, int]:
+        round_number = int(
+            row.get(
+                "round_number"
+            )
+            or 0
+        )
+
+        slot_number = int(
+            row.get(
+                "slot_number"
+            )
+            or 0
+        )
+
+        pick_number = (
+            slot_number
+            if round_number % 2 == 1
+            else (
+                total_slots
+                + 1
+                - slot_number
+            )
+        )
+
+        overall_number = (
+            (
+                round_number
+                - 1
+            )
+            * total_slots
+            + pick_number
+        )
+
+        return (
+            round_number,
+            pick_number,
+            overall_number,
+        )
+
+    # Display completed selections in authoritative draft order,
+    # independent of when a late or makeup selection was recorded.
+    completed.sort(
+        key=lambda row: (
+            _draft_position(
+                row
+            )[2]
         )
     )
+
+    player_lookup = {
+        str(
+            player.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ).strip(): player
+        for player in players
+        if str(
+            player.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ).strip()
+    }
+
+    team_lookup = {
+        str(
+            team.get(
+                "team_key"
+            )
+            or ""
+        ).strip(): team
+        for team in teams
+        if str(
+            team.get(
+                "team_key"
+            )
+            or ""
+        ).strip()
+    }
 
     rows: list[
         dict[str, Any]
     ] = []
 
-    for overall_number, row in enumerate(
-        completed,
-        start=1,
-    ):
+    for row in completed:
+        (
+            round_number,
+            pick_number,
+            overall_number,
+        ) = _draft_position(
+            row
+        )
+        owner_team = team_lookup.get(
+            str(
+                row.get(
+                    "current_owner_team_key"
+                )
+                or ""
+            ).strip(),
+            {},
+        )
+
+        selected_player = player_lookup.get(
+            str(
+                row.get(
+                    "yahoo_player_key"
+                )
+                or ""
+            ).strip(),
+            {},
+        )
+
         rows.append(
             {
                 "Owner": str(
-                    row.get(
-                        "current_owner_name"
+                    owner_team.get(
+                        "owner_name"
                     )
                     or ""
                 ),
@@ -260,18 +201,8 @@ def render_pick_tracker(
                     )
                     or ""
                 ),
-                "Round": int(
-                    row.get(
-                        "round_number"
-                    )
-                    or 0
-                ),
-                "Pick #": int(
-                    row.get(
-                        "slot_number"
-                    )
-                    or 0
-                ),
+                "Round": round_number,
+                "Pick #": pick_number,
                 "Overall #": overall_number,
                 "Player Name": str(
                     row.get(
@@ -286,13 +217,27 @@ def render_pick_tracker(
                     or ""
                 ),
                 "NHL Team": str(
-                    row.get(
-                        "selected_nhl_team_abbr"
+                    selected_player.get(
+                        "nhl_team_abbr"
                     )
                     or ""
                 ),
             }
         )
+
+    # Let the page own vertical scrolling rather than putting
+    # a second scrollbar inside the Pick Tracker table.
+    #
+    # Streamlit dataframe rows are approximately 35 px tall.
+    # Add room for the header/borders and size to the actual
+    # completed-pick count.
+    tracker_height = max(
+        120,
+        38 + (
+            len(rows)
+            * 35
+        ),
+    )
 
     st.dataframe(
         pd.DataFrame(
@@ -300,4 +245,5 @@ def render_pick_tracker(
         ),
         hide_index=True,
         use_container_width=True,
+        height=tracker_height,
     )

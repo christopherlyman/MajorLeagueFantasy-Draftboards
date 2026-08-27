@@ -11,6 +11,7 @@
   "draft": {
     "draft_key": "nfhl_2026_preseason",
     "rounds_total": 18,
+    "opening_day_date": "2026-09-29",
     "rounds_total_status": "inferred_from_active_plus_bench_roster",
     "order_mode": "snake",
     "order_mode_status": "verified"

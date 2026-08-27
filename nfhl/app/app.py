@@ -53,6 +53,9 @@ from draftboard.state.runtime import (
 )
 
 
+from draftboard.ui.components.draft_lottery import (
+    render_nfhl_lottery_board,
+)
 CONFIG_PATH = Path(
     f"/league_runtime/config/nfhl_{get_season_year()}.json"
 )
@@ -1045,7 +1048,7 @@ def render_manager_links() -> None:
         110
         + (
             len(display_rows)
-            * 58
+            * 72
         )
     )
 
@@ -1431,41 +1434,712 @@ def player_dataframe(
 def render_teams(
     teams: list[dict],
     target_teams: int,
+    players: list[dict],
+    *,
+    gateway_context: dict[str, object],
 ) -> None:
-    st.subheader("NFHL Teams")
-
-    st.caption(
-        "Current Yahoo roll-call membership. "
-        "Only real current-season Yahoo teams are shown."
-    )
+    st.subheader("Teams")
 
     if not teams:
         st.info("No Yahoo teams are loaded.")
         return
 
-    display = pd.DataFrame(teams)[
-        [
-            "team_id",
-            "team_name",
-            "owner_name",
-        ]
-    ].copy()
+    if len(teams) != target_teams:
+        st.warning(
+            f"Expected {target_teams} teams but found "
+            f"{len(teams)}."
+        )
 
-    display.columns = [
-        "#",
-        "Team",
-        "Manager",
+    try:
+        board_rows = get_live_draft_board()
+
+    except Exception as exc:
+        st.error(
+            "Could not load finalized Draft Board team order: "
+            f"{exc}"
+        )
+        return
+
+    # ------------------------------------------------------------
+    # CANONICAL TEAM ORDER
+    # ------------------------------------------------------------
+
+    team_lookup = {
+        str(team.get("team_key") or ""): team
+        for team in teams
+        if str(team.get("team_key") or "")
+    }
+
+    first_round = sorted(
+        (
+            row
+            for row in board_rows
+            if int(row.get("round_number") or 0) == 1
+        ),
+        key=lambda row: int(
+            row.get("slot_number") or 0
+        ),
+    )
+
+    ordered_team_keys: list[str] = []
+
+    for row in first_round:
+        team_key = str(
+            row.get("column_team_key")
+            or ""
+        ).strip()
+
+        if (
+            team_key
+            and team_key in team_lookup
+            and team_key not in ordered_team_keys
+        ):
+            ordered_team_keys.append(
+                team_key
+            )
+
+    for team in teams:
+        team_key = str(
+            team.get("team_key")
+            or ""
+        ).strip()
+
+        if (
+            team_key
+            and team_key not in ordered_team_keys
+        ):
+            ordered_team_keys.append(
+                team_key
+            )
+
+    ordered_teams = [
+        team_lookup[team_key]
+        for team_key in ordered_team_keys
+        if team_key in team_lookup
     ]
 
-    st.dataframe(
-        display,
-        hide_index=True,
-        use_container_width=True,
+    # Logged-in managers see their own team first. The remaining
+    # teams retain the finalized Draft Board order exactly.
+    gateway_role = str(
+        gateway_context.get(
+            "role"
+        )
+        or "public"
+    ).strip().lower()
+
+    gateway_team_key = str(
+        gateway_context.get(
+            "team_key"
+        )
+        or ""
+    ).strip()
+
+    if (
+        gateway_role == "manager"
+        and gateway_team_key
+        and gateway_team_key in team_lookup
+    ):
+        manager_team = (
+            team_lookup[
+                gateway_team_key
+            ]
+        )
+
+        ordered_teams = [
+            manager_team,
+            *[
+                team
+                for team
+                in ordered_teams
+                if str(
+                    team.get(
+                        "team_key"
+                    )
+                    or ""
+                ).strip()
+                != gateway_team_key
+            ],
+        ]
+
+    if not ordered_teams:
+        st.info("No current NFHL teams are available.")
+        return
+
+    # ------------------------------------------------------------
+    # PLAYER / ROSTER LOOKUPS
+    # ------------------------------------------------------------
+
+    players_by_key = {
+        str(
+            player.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ): player
+        for player in players
+        if player.get(
+            "yahoo_player_key"
+        )
+    }
+
+    roster_rows_by_team: dict[
+        str,
+        list[dict],
+    ] = {}
+
+    for board_row in board_rows:
+        if (
+            not board_row.get(
+                "selected_at_utc"
+            )
+            or not board_row.get(
+                "yahoo_player_key"
+            )
+        ):
+            continue
+
+        owner_team_key = str(
+            board_row.get(
+                "current_owner_team_key"
+            )
+            or board_row.get(
+                "column_team_key"
+            )
+            or ""
+        ).strip()
+
+        if not owner_team_key:
+            continue
+
+        roster_rows_by_team.setdefault(
+            owner_team_key,
+            [],
+        ).append(
+            board_row
+        )
+
+    stat_years: list[int] = []
+
+    for player in players:
+        value = player.get(
+            "stats_season_year"
+        )
+
+        try:
+            if value is not None:
+                stat_years.append(
+                    int(value)
+                )
+        except Exception:
+            pass
+
+    prior_year = (
+        max(stat_years)
+        if stat_years
+        else get_season_year() - 1
+    )
+
+    fpts_label = (
+        f"{prior_year} NFHL FPTS"
+    )
+
+    # ------------------------------------------------------------
+    # DISPLAY HELPERS
+    # ------------------------------------------------------------
+
+    def _eligible_display(
+        player: dict,
+    ) -> str:
+        eligible = player.get(
+            "eligible_positions"
+        )
+
+        if isinstance(
+            eligible,
+            (list, tuple),
+        ):
+            return "/".join(
+                str(pos)
+                for pos in eligible
+                if str(pos).strip()
+            )
+
+        return str(
+            eligible or ""
+        )
+
+    def _number(
+        value: object,
+        decimals: int = 0,
+    ) -> str:
+        if value is None or value == "":
+            return ""
+
+        try:
+            numeric = float(value)
+
+        except Exception:
+            return str(value)
+
+        if decimals == 0:
+            return str(
+                int(round(numeric))
+            )
+
+        return (
+            f"{numeric:.{decimals}f}"
+        )
+
+    def _percent(
+        value: object,
+    ) -> str:
+        if value is None or value == "":
+            return ""
+
+        try:
+            numeric = float(value)
+
+        except Exception:
+            return str(value)
+
+        if 0.0 <= numeric <= 1.0:
+            numeric *= 100.0
+
+        return f"{numeric:.0f}%"
+
+    def _group_for(
+        player: dict,
+        board_row: dict,
+    ) -> str:
+        primary = str(
+            player.get(
+                "primary_position"
+            )
+            or board_row.get(
+                "selected_primary_position"
+            )
+            or ""
+        ).upper()
+
+        eligible_raw = player.get(
+            "eligible_positions"
+        )
+
+        eligible = {
+            str(pos).upper()
+            for pos in (
+                eligible_raw
+                if isinstance(
+                    eligible_raw,
+                    (list, tuple),
+                )
+                else []
+            )
+        }
+
+        position_type = str(
+            player.get(
+                "position_type"
+            )
+            or ""
+        ).upper()
+
+        if (
+            primary == "G"
+            or "G" in eligible
+            or position_type == "G"
+        ):
+            return "Goalies"
+
+        if (
+            primary == "D"
+            or "D" in eligible
+        ):
+            return "Defense"
+
+        return "Forwards"
+
+    def _base_row(
+        board_row: dict,
+        player: dict,
+    ) -> dict[str, str]:
+        return {
+            "Player": str(
+                player.get(
+                    "full_name"
+                )
+                or board_row.get(
+                    "selected_player_name"
+                )
+                or ""
+            ),
+            "NHL": str(
+                player.get(
+                    "nhl_team_abbr"
+                )
+                or board_row.get(
+                    "selected_nhl_team_abbr"
+                )
+                or ""
+            ),
+            "Pos": str(
+                player.get(
+                    "primary_position"
+                )
+                or board_row.get(
+                    "selected_primary_position"
+                )
+                or ""
+            ),
+            "Eligible": (
+                _eligible_display(
+                    player
+                )
+            ),
+            "Rank": _number(
+                player.get(
+                    "rank_value"
+                )
+            ),
+            "% Ros": _percent(
+                player.get(
+                    "percent_owned"
+                )
+            ),
+            fpts_label: _number(
+                player.get(
+                    "nfhl_fpts"
+                ),
+                1,
+            ),
+            "FPTS/GP": _number(
+                player.get(
+                    "nfhl_fpts_per_game"
+                ),
+                2,
+            ),
+            "GP": _number(
+                player.get(
+                    "gp"
+                )
+            ),
+        }
+
+    def _table_rows(
+        rows: list[
+            tuple[
+                dict,
+                dict,
+            ]
+        ],
+        *,
+        goalie: bool,
+    ) -> list[dict[str, str]]:
+        result: list[
+            dict[str, str]
+        ] = []
+
+        for board_row, player in rows:
+            row = _base_row(
+                board_row,
+                player,
+            )
+
+            if goalie:
+                row.update(
+                    {
+                        "W": _number(
+                            player.get("w")
+                        ),
+                        "GA": _number(
+                            player.get("ga")
+                        ),
+                        "SV": _number(
+                            player.get("sv")
+                        ),
+                        "SHO": _number(
+                            player.get("sho")
+                        ),
+                    }
+                )
+
+            else:
+                row.update(
+                    {
+                        "G": _number(
+                            player.get("g")
+                        ),
+                        "A": _number(
+                            player.get("a")
+                        ),
+                        "PIM": _number(
+                            player.get("pim")
+                        ),
+                        "PPP": _number(
+                            player.get("ppp")
+                        ),
+                        "SHP": _number(
+                            player.get("shp")
+                        ),
+                        "SOG": _number(
+                            player.get("sog")
+                        ),
+                        "HIT": _number(
+                            player.get("hit")
+                        ),
+                        "BLK": _number(
+                            player.get("blk")
+                        ),
+                    }
+                )
+
+            result.append(
+                row
+            )
+
+        def sort_key(
+            item: dict[str, str],
+        ) -> tuple[
+            bool,
+            float,
+            str,
+        ]:
+            raw = item.get(
+                fpts_label
+            )
+
+            try:
+                points = float(raw)
+
+            except Exception:
+                points = None
+
+            return (
+                points is None,
+                -points
+                if points is not None
+                else 0.0,
+                item.get(
+                    "Player",
+                    "",
+                ).casefold(),
+            )
+
+        result.sort(
+            key=sort_key
+        )
+
+        return result
+
+    st.markdown(
+        """
+        <style>
+          div[data-testid="stMarkdownContainer"]:has(table.nfhl-team-table) {
+              width: 100%;
+              max-width: 100%;
+              overflow-x: auto;
+              -webkit-overflow-scrolling: touch;
+          }
+
+          table.nfhl-team-table {
+              width: 100%;
+              border-collapse: separate;
+              border-spacing: 0;
+              font-size: 0.86rem;
+              margin: 0.40rem 0 1.25rem 0;
+              border: 1px solid #8EA5C4;
+              border-radius: 8px;
+              overflow: hidden;
+              background: #FFFFFF;
+              color: #0F172A;
+          }
+
+          table.nfhl-team-table th {
+              text-align: center;
+              background: #0B234A;
+              color: #FFFFFF;
+              font-weight: 800;
+              border-bottom: 2px solid #334E73;
+              padding: 0.48rem 0.56rem;
+              white-space: nowrap;
+          }
+
+          table.nfhl-team-table td {
+              text-align: center;
+              color: #0F172A;
+              background: #FFFFFF;
+              border-bottom: 1px solid #CBD5E1;
+              padding: 0.40rem 0.56rem;
+              white-space: nowrap;
+          }
+
+          table.nfhl-team-table tr:nth-child(even) td {
+              background: #EEF3F8;
+          }
+
+          table.nfhl-team-table tr:hover td {
+              background: #DCE8F5;
+          }
+
+          table.nfhl-team-table th:first-child,
+          table.nfhl-team-table td:first-child {
+              text-align: left;
+              font-weight: 700;
+              min-width: 11rem;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.caption(
-        f"{len(teams)} of {target_teams} teams enrolled."
+        "Skaters: G 4.0 • A 2.5 • PIM 0.2 • PPP 1.0 • "
+        "SHP 1.25 • SOG 0.25 • HIT 0.5 • BLK 0.5  |  "
+        "Goalies: W 3.0 • GA -1.0 • SV 0.25 • SHO 2.5"
     )
+
+    tabs = st.tabs(
+        [
+            str(
+                team.get(
+                    "team_name"
+                )
+                or "Team"
+            )
+            for team in ordered_teams
+        ]
+    )
+
+    for tab, team in zip(
+        tabs,
+        ordered_teams,
+    ):
+        with tab:
+            team_key = str(
+                team.get(
+                    "team_key"
+                )
+                or ""
+            )
+
+            team_name = str(
+                team.get(
+                    "team_name"
+                )
+                or ""
+            )
+
+            owner_name = str(
+                team.get(
+                    "owner_name"
+                )
+                or ""
+            )
+
+            drafted_rows = (
+                roster_rows_by_team.get(
+                    team_key,
+                    [],
+                )
+            )
+
+            st.markdown(
+                f"### {team_name}"
+            )
+
+            st.caption(
+                f"Manager: {owner_name}  •  "
+                f"Drafted: {len(drafted_rows)} / 18"
+            )
+
+            grouped: dict[
+                str,
+                list[
+                    tuple[
+                        dict,
+                        dict,
+                    ]
+                ],
+            ] = {
+                "Forwards": [],
+                "Defense": [],
+                "Goalies": [],
+            }
+
+            for board_row in drafted_rows:
+                player_key = str(
+                    board_row.get(
+                        "yahoo_player_key"
+                    )
+                    or ""
+                )
+
+                player = (
+                    players_by_key.get(
+                        player_key,
+                        {},
+                    )
+                )
+
+                group = _group_for(
+                    player,
+                    board_row,
+                )
+
+                grouped[
+                    group
+                ].append(
+                    (
+                        board_row,
+                        player,
+                    )
+                )
+
+            for group_name in (
+                "Forwards",
+                "Defense",
+                "Goalies",
+            ):
+                st.markdown(
+                    f"#### {group_name}"
+                )
+
+                rows = grouped[
+                    group_name
+                ]
+
+                if not rows:
+                    st.caption(
+                        "No players drafted yet."
+                    )
+                    continue
+
+                table_rows = (
+                    _table_rows(
+                        rows,
+                        goalie=(
+                            group_name
+                            == "Goalies"
+                        ),
+                    )
+                )
+
+                table_df = (
+                    pd.DataFrame(
+                        table_rows
+                    )
+                )
+
+                st.markdown(
+                    table_df.to_html(
+                        index=False,
+                        escape=True,
+                        classes=(
+                            "nfhl-team-table"
+                        ),
+                    ),
+                    unsafe_allow_html=True,
+                )
 
 
 def render_players(
@@ -1479,14 +2153,136 @@ def render_players(
         f"{prior_year} statistics are supplemental only."
     )
 
+    try:
+        board_rows = get_live_draft_board()
+
+    except Exception as exc:
+        st.error(
+            "Could not load current NFHL roster status: "
+            f"{exc}"
+        )
+        return
+
     df = player_dataframe(players)
 
     if df.empty:
         st.warning("No current Yahoo players are loaded.")
         return
 
-    row1, row2, row3, row4 = st.columns(
-        [2.2, 1.35, 1.35, 1.35]
+    if "yahoo_player_key" not in df.columns:
+        st.error(
+            "Current Yahoo player data is missing "
+            "yahoo_player_key."
+        )
+        return
+
+    total_slots = max(
+        (
+            int(
+                row.get(
+                    "slot_number"
+                )
+                or 0
+            )
+            for row in board_rows
+        ),
+        default=0,
+    )
+
+    drafted_status_by_key: dict[
+        str,
+        str,
+    ] = {}
+
+    if total_slots > 0:
+        for board_row in board_rows:
+            player_key = str(
+                board_row.get(
+                    "yahoo_player_key"
+                )
+                or ""
+            ).strip()
+
+            if (
+                not player_key
+                or not board_row.get(
+                    "selected_at_utc"
+                )
+            ):
+                continue
+
+            round_number = int(
+                board_row.get(
+                    "round_number"
+                )
+                or 0
+            )
+
+            slot_number = int(
+                board_row.get(
+                    "slot_number"
+                )
+                or 0
+            )
+
+            pick_number = (
+                slot_number
+                if round_number % 2 == 1
+                else (
+                    total_slots
+                    + 1
+                    - slot_number
+                )
+            )
+
+            owner_name = str(
+                board_row.get(
+                    "current_owner_team_name"
+                )
+                or board_row.get(
+                    "column_team_name"
+                )
+                or "Drafted"
+            ).strip()
+
+            drafted_status_by_key[
+                player_key
+            ] = (
+                f"{owner_name} "
+                f"({round_number}.{pick_number})"
+            )
+
+    df["roster_status_display"] = (
+        df["yahoo_player_key"]
+        .fillna("")
+        .astype(str)
+        .map(
+            lambda player_key: (
+                drafted_status_by_key.get(
+                    player_key,
+                    "Available",
+                )
+            )
+        )
+    )
+
+    df["is_nfhl_drafted"] = (
+        df["yahoo_player_key"]
+        .fillna("")
+        .astype(str)
+        .isin(
+            drafted_status_by_key
+        )
+    )
+
+    row1, row2, row3, row4, row5 = st.columns(
+        [
+            2.2,
+            1.20,
+            1.20,
+            1.20,
+            1.65,
+        ]
     )
 
     search = row1.text_input(
@@ -1530,7 +2326,26 @@ def render_players(
         ["All"] + status_options,
     )
 
+    roster_status = row5.selectbox(
+        "Roster Status",
+        [
+            "All Players",
+            "All Available Players",
+        ],
+        index=1,
+    )
+
     filtered = df.copy()
+
+    if (
+        roster_status
+        == "All Available Players"
+    ):
+        filtered = filtered[
+            ~filtered[
+                "is_nfhl_drafted"
+            ]
+        ]
 
     if search.strip():
         query = search.strip()
@@ -1574,27 +2389,6 @@ def render_players(
             == status
         ]
 
-    metric1, metric2, metric3, metric4 = st.columns(4)
-
-    metric1.metric(
-        "Matching Players",
-        f"{len(filtered):,}",
-    )
-
-    metric2.metric(
-        f"With {prior_year} Stats",
-        f"{int(filtered['stats_season_year'].notna().sum()):,}",
-    )
-
-    metric3.metric(
-        "Yahoo Ranked",
-        f"{int(filtered['rank_value'].notna().sum()):,}",
-    )
-
-    metric4.metric(
-        "Draft % Available",
-        f"{int(filtered['percent_drafted'].notna().sum()):,}",
-    )
 
     display = filtered[
         [
@@ -1604,6 +2398,7 @@ def render_players(
             "primary_position",
             "eligible_display",
             "status_display",
+            "roster_status_display",
 
             "nfhl_fpts",
             "nfhl_fpts_per_game",
@@ -1635,6 +2430,7 @@ def render_players(
         "Pos",
         "Eligible",
         "Status",
+        "Roster Status",
 
         f"{prior_year} NFHL FPTS",
         "FPTS/GP",
@@ -1701,41 +2497,9 @@ def render_players(
 def render_draft_lottery(
     current_teams: int,
     target_teams: int,
+    *,
+    is_commissioner: bool,
 ) -> None:
-    st.subheader("Draft Lottery")
-
-    commissioner_mode = False
-
-    if commissioner_mode:
-        st.caption(
-            "Commissioner View — draft lottery controls enabled."
-        )
-
-    st.caption(
-        "All NFHL teams receive equal odds. "
-        "The complete random order is persisted before the first "
-        "result is revealed, and results reveal from the final "
-        "draft slot back to Pick 1."
-    )
-
-    readiness_col, odds_col = st.columns(2)
-
-    readiness_col.metric(
-        "League Readiness",
-        f"{current_teams}/{target_teams}",
-    )
-
-    equal_odds = (
-        (100.0 / target_teams)
-        if target_teams > 0
-        else 0.0
-    )
-
-    odds_col.metric(
-        "Initial Chance Per Slot",
-        f"{equal_odds:.2f}%",
-    )
-
     league_ready = (
         current_teams == target_teams
     )
@@ -1748,271 +2512,53 @@ def render_draft_lottery(
             f"{current_teams}/{target_teams}."
         )
     else:
-        st.success(
-            f"League membership complete: "
-            f"{current_teams}/{target_teams} teams."
+        equal_odds = (
+            100.0 / target_teams
+            if target_teams
+            else 0.0
+        )
+
+        st.caption(
+            "All NFHL teams receive equal odds "
+            f"({equal_odds:.2f}% per draft slot). "
+            "The complete random order is persisted "
+            "before the first result is revealed."
         )
 
     lottery = load_lottery_state()
-
-    # ============================================================
-    # NO LOTTERY EXISTS YET
-    # ============================================================
 
     if lottery is None:
         st.info(
             "No NFHL Draft Lottery has been initialized."
         )
 
-        if commissioner_mode:
-            st.markdown("#### Commissioner Controls")
-
-            initialize_clicked = st.button(
-                "Initialize Draft Lottery",
-                disabled=not league_ready,
-                type="primary",
-                key="nfhl_lottery_initialize",
-            )
-
-            if not league_ready:
-                st.caption(
-                    "Initialization remains disabled until the "
-                    f"league has exactly {target_teams} real teams."
-                )
-
-            if initialize_clicked:
-                try:
-                    initialize_lottery(
-                        expected_team_count=target_teams,
-                        actor="commissioner_link",
-                    )
-                except Exception as exc:
-                    st.error(
-                        f"Could not initialize lottery: {exc}"
-                    )
-                else:
-                    load_lottery_state.clear()
-                    st.rerun()
-
-        else:
-            st.caption(
-                "Lottery administration is available only from "
-                "the Commissioner View."
-            )
+        st.caption(
+            "Lottery administration is available "
+            "from the Commissioner View."
+        )
 
         return
 
-    # ============================================================
-    # EXISTING LOTTERY
-    # ============================================================
-
-    run = lottery["run"]
-    picks = lottery["picks"]
-
-    status = str(
-        run["status"]
-    ).upper()
-
-    configured_team_count = int(
-        run["configured_team_count"]
+    render_nfhl_lottery_board(
+        lottery=lottery,
+        is_commissioner=is_commissioner,
+        key_prefix=(
+            "nfhl_commissioner_lottery"
+            if is_commissioner
+            else "nfhl_public_lottery"
+        ),
     )
 
-    revealed_count = int(
-        lottery["revealed_count"]
-    )
-
-    status_col, reveal_col = st.columns(2)
-
-    status_col.metric(
-        "Lottery Status",
-        status,
-    )
-
-    reveal_col.metric(
-        "Revealed",
-        f"{revealed_count}/{configured_team_count}",
-    )
-
-    rows = []
-
-    hidden_slots = []
-
-    for pick in picks:
-
-        revealed = (
-            pick["revealed_at_utc"]
-            is not None
+    if is_commissioner:
+        st.caption(
+            "Commissioner View — reveal the next pick "
+            "directly from its lottery card."
         )
-
-        if not revealed:
-            hidden_slots.append(
-                int(pick["slot_number"])
-            )
-
-        rows.append(
-            {
-                "Draft Slot": pick["slot_number"],
-                "Status": (
-                    "REVEALED"
-                    if revealed
-                    else "HIDDEN"
-                ),
-                "Team": (
-                    pick["team_name"]
-                    if revealed
-                    else "—"
-                ),
-                "Manager": (
-                    pick["owner_name"]
-                    if revealed
-                    else "—"
-                ),
-            }
-        )
-
-    st.dataframe(
-        pd.DataFrame(rows),
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    if status == "FINALIZED":
-        st.success(
-            "Lottery finalized. "
-            "The persisted draft order is locked."
-        )
-
-    elif revealed_count == configured_team_count:
-        st.info(
-            "All positions have been revealed. "
-            "Commissioner finalization is still required."
-        )
-
-    # ============================================================
-    # COMMISSIONER WRITE CONTROLS
-    # ============================================================
-
-    if commissioner_mode:
-        st.markdown("#### Commissioner Controls")
-
-        # --------------------------------------------------------
-        # REVEAL
-        # --------------------------------------------------------
-
-        if hidden_slots:
-            next_slot = max(hidden_slots)
-
-            st.caption(
-                "The next reveal is fixed by the persisted "
-                "lottery result. No rerandomization occurs."
-            )
-
-            if st.button(
-                f"Reveal Pick {next_slot}",
-                type="primary",
-                key="nfhl_lottery_reveal_next",
-            ):
-                try:
-                    reveal_next_lottery_slot(
-                        actor="commissioner_link",
-                    )
-                except Exception as exc:
-                    st.error(
-                        f"Could not reveal Pick "
-                        f"{next_slot}: {exc}"
-                    )
-                else:
-                    load_lottery_state.clear()
-                    st.rerun()
-
-        # --------------------------------------------------------
-        # FINALIZE
-        # --------------------------------------------------------
-
-        elif status != "FINALIZED":
-            confirm_finalize = st.checkbox(
-                "Confirm final lottery order",
-                value=False,
-                key="nfhl_lottery_confirm_finalize",
-            )
-
-            if st.button(
-                "Finalize Draft Lottery",
-                disabled=not confirm_finalize,
-                type="primary",
-                key="nfhl_lottery_finalize",
-            ):
-                try:
-                    finalize_lottery(
-                        actor="commissioner_link",
-                    )
-                except Exception as exc:
-                    st.error(
-                        f"Could not finalize lottery: {exc}"
-                    )
-                else:
-                    load_lottery_state.clear()
-                    st.rerun()
-
-        # --------------------------------------------------------
-        # VOID / RESET
-        # --------------------------------------------------------
-
-        with st.expander(
-            "Commissioner Reset / Void Lottery",
-            expanded=False,
-        ):
-            st.warning(
-                "This preserves the existing lottery in history "
-                "as VOID and permits a new lottery to be created. "
-                "Use only when the lottery must be explicitly "
-                "invalidated."
-            )
-
-            void_reason = st.text_input(
-                "Reason for voiding lottery",
-                key="nfhl_lottery_void_reason",
-            )
-
-            confirm_void = st.checkbox(
-                "Confirm void/reset",
-                value=False,
-                key="nfhl_lottery_confirm_void",
-            )
-
-            void_ready = bool(
-                confirm_void
-                and str(void_reason).strip()
-            )
-
-            if st.button(
-                "Void Current Lottery",
-                disabled=not void_ready,
-                key="nfhl_lottery_void",
-            ):
-                try:
-                    void_lottery(
-                        actor="commissioner_link",
-                        reason=str(void_reason).strip(),
-                    )
-                except Exception as exc:
-                    st.error(
-                        f"Could not void lottery: {exc}"
-                    )
-                else:
-                    load_lottery_state.clear()
-                    st.rerun()
-
     else:
         st.caption(
-            "Lottery results are read-only on the public DraftBoard."
+            "Lottery results are read-only on the "
+            "public DraftBoard."
         )
-
-    st.caption(
-        "Production draft-pick initialization remains a separate "
-        "step after the lottery is finalized and draft order mode "
-        "is confirmed."
-    )
 
 
 
@@ -2042,7 +2588,12 @@ def render_autopick_panel(
 
     with st.expander(
         "Draft Queue & Auto-Pick",
-        expanded=False,
+        expanded=bool(
+            st.session_state.pop(
+                "nfhl_force_open_autopick",
+                False,
+            )
+        ),
     ):
         _render_autopick_panel_contents(
             gateway_context=gateway_context,
@@ -2143,6 +2694,12 @@ def _render_autopick_panel_contents(
                 f"— {team_lookup[key].get('owner_name', '')}"
             ),
             key="nfhl_autopick_commissioner_team",
+            on_change=lambda: (
+                st.session_state.__setitem__(
+                    "nfhl_force_open_autopick",
+                    True,
+                )
+            ),
         )
 
         selected_team = team_lookup[
@@ -2193,45 +2750,43 @@ def _render_autopick_panel_contents(
     )
 
     # ------------------------------------------------------------
-    # STATUS
-    # ------------------------------------------------------------
-
-    s1, s2, s3 = st.columns(3)
-
-    s1.metric(
-        "Queue",
-        f"{len(queue_rows)}/5",
-    )
-
-    s2.metric(
-        "Auto-Pick",
-        "ARMED"
-        if enabled
-        else "OFF",
-    )
-
-    if next_pick:
-        next_pick_label = (
-            f"R{next_pick['round_number']} "
-            f"• {next_pick['pick_id']}"
-        )
-    else:
-        next_pick_label = (
-            "Not Initialized"
-        )
-
-    s3.metric(
-        "Next Pick",
-        next_pick_label,
-    )
-
-    # ------------------------------------------------------------
     # PLAYER OPTIONS
     # ------------------------------------------------------------
 
     player_lookup: dict[str, dict] = {}
 
     player_keys: list[str] = []
+
+    try:
+        board_rows = get_live_draft_board()
+    except Exception as exc:
+        st.error(
+            "Unable to load current NFHL "
+            "player availability: "
+            f"{exc}"
+        )
+        return
+
+    drafted_player_keys = {
+        str(
+            board_row.get(
+                "yahoo_player_key"
+            )
+            or ""
+        ).strip()
+        for board_row in board_rows
+        if (
+            board_row.get(
+                "selected_at_utc"
+            )
+            and str(
+                board_row.get(
+                    "yahoo_player_key"
+                )
+                or ""
+            ).strip()
+        )
+    }
 
     for player in players:
         player_key = str(
@@ -2247,6 +2802,9 @@ def _render_autopick_panel_contents(
         player_lookup[
             player_key
         ] = player
+
+        if player_key in drafted_player_keys:
+            continue
 
         player_keys.append(
             player_key
@@ -2308,12 +2866,43 @@ def _render_autopick_panel_contents(
         ""
     ] + player_keys
 
+    effective_queue_rows = sorted(
+        (
+            row
+            for row in queue_rows
+            if (
+                str(
+                    row.get(
+                        "yahoo_player_key"
+                    )
+                    or ""
+                ).strip()
+                and str(
+                    row.get(
+                        "yahoo_player_key"
+                    )
+                    or ""
+                ).strip()
+                not in drafted_player_keys
+            )
+        ),
+        key=lambda row: int(
+            row.get(
+                "queue_rank"
+            )
+            or 0
+        ),
+    )
+
     current_by_rank = {
-        int(row["queue_rank"]):
+        display_rank:
         str(
             row["yahoo_player_key"]
         )
-        for row in queue_rows
+        for display_rank, row in enumerate(
+            effective_queue_rows,
+            start=1,
+        )
     }
 
     # ------------------------------------------------------------
@@ -2419,6 +3008,10 @@ def _render_autopick_panel_contents(
                     "you explicitly arm it."
                 )
 
+                st.session_state[
+                    "nfhl_force_open_autopick"
+                ] = True
+
                 st.rerun()
 
             except Exception as exc:
@@ -2435,29 +3028,135 @@ def _render_autopick_panel_contents(
         "**Auto-Pick Control**"
     )
 
+    actor = (
+        "commissioner_link"
+        if role == "commissioner"
+        else (
+            "manager:"
+            + selected_team_key
+        )
+    )
+
+    draft_active = (
+        str(
+            draft_status
+        ).upper()
+        == "ACTIVE"
+    )
+
+    can_arm = (
+        draft_active
+        and next_pick is not None
+        and bool(effective_queue_rows)
+    )
+
+    # Database state remains authoritative. Including the control
+    # update timestamp in the widget key gives each DB mutation a
+    # fresh widget identity, so a prior browser toggle cannot
+    # silently re-arm Auto-Pick after Save Queue disarms it.
+    toggle_version = str(
+        autopick_state.get(
+            "updated_at_utc"
+        )
+        or "initial"
+    )
+
+    toggle_key = (
+        "nfhl_autopick_enabled_"
+        + selected_team_key
+        + "_"
+        + toggle_version
+    )
+
+    requested_enabled = st.toggle(
+        "Auto-Pick",
+        value=bool(enabled),
+        key=toggle_key,
+        disabled=(
+            not enabled
+            and not can_arm
+        ),
+        help=(
+            "When enabled, Auto-Pick is armed for "
+            "this team's exact next open pick. "
+            "It executes only after the configured "
+            "3-minute active-clock grace period. "
+            "Saving or editing the queue turns "
+            "Auto-Pick off."
+        ),
+    )
+
     if enabled:
         st.success(
-            "Auto-Pick is armed for "
+            "Auto-Pick is ON for "
             f"`{armed_pick_id}`."
         )
 
-        if st.button(
-            "Disable Auto-Pick",
-            key=(
-                "nfhl_disable_autopick_"
-                + selected_team_key
-            ),
-            use_container_width=True,
-        ):
-            actor = (
-                "commissioner_link"
-                if role == "commissioner"
-                else (
-                    "manager:"
-                    + selected_team_key
-                )
-            )
+    elif not draft_active:
+        st.info(
+            "Your queue can be prepared now. "
+            "Auto-Pick becomes available when "
+            "the NFHL draft is ACTIVE."
+        )
 
+    elif next_pick is None:
+        st.info(
+            "No open draft pick exists for this team."
+        )
+
+    elif not effective_queue_rows:
+        st.info(
+            "Add at least one player to the queue "
+            "before enabling Auto-Pick."
+        )
+
+    else:
+        st.caption(
+            "Auto-Pick is OFF. Turn it on to arm "
+            f"Round {next_pick['round_number']} "
+            f"({next_pick['pick_id']})."
+        )
+
+    if requested_enabled != bool(enabled):
+        if requested_enabled:
+            if not can_arm:
+                st.error(
+                    "Auto-Pick cannot be enabled "
+                    "for this team right now."
+                )
+                return
+
+            try:
+                arm_autopick(
+                    team_key=(
+                        selected_team_key
+                    ),
+                    pick_id=str(
+                        next_pick[
+                            "pick_id"
+                        ]
+                    ),
+                    actor=actor,
+                )
+
+                st.success(
+                    "Auto-Pick enabled for "
+                    f"`{next_pick['pick_id']}`."
+                )
+
+                st.session_state[
+                    "nfhl_force_open_autopick"
+                ] = True
+
+                st.rerun()
+
+            except Exception as exc:
+                st.error(
+                    "Unable to enable Auto-Pick: "
+                    f"{exc}"
+                )
+
+        else:
             try:
                 disable_autopick(
                     team_key=(
@@ -2470,6 +3169,10 @@ def _render_autopick_panel_contents(
                     "Auto-Pick disabled."
                 )
 
+                st.session_state[
+                    "nfhl_force_open_autopick"
+                ] = True
+
                 st.rerun()
 
             except Exception as exc:
@@ -2477,82 +3180,6 @@ def _render_autopick_panel_contents(
                     "Unable to disable Auto-Pick: "
                     f"{exc}"
                 )
-
-        return
-
-    # PREP / SETUP state: queue works, arming does not.
-    if str(
-        draft_status
-    ).upper() != "ACTIVE":
-        st.info(
-            "Your queue can be prepared now. "
-            "Auto-Pick becomes available when "
-            "the NFHL draft is ACTIVE."
-        )
-        return
-
-    if next_pick is None:
-        st.info(
-            "No open draft pick exists for this team."
-        )
-        return
-
-    if not queue_rows:
-        st.info(
-            "Add at least one player to the queue "
-            "before enabling Auto-Pick."
-        )
-        return
-
-    arm_label = (
-        "Arm Auto-Pick for "
-        f"Round {next_pick['round_number']} "
-        f"({next_pick['pick_id']})"
-    )
-
-    if st.button(
-        arm_label,
-        key=(
-            "nfhl_arm_autopick_"
-            + selected_team_key
-        ),
-        use_container_width=True,
-        type="primary",
-    ):
-        actor = (
-            "commissioner_link"
-            if role == "commissioner"
-            else (
-                "manager:"
-                + selected_team_key
-            )
-        )
-
-        try:
-            arm_autopick(
-                team_key=(
-                    selected_team_key
-                ),
-                pick_id=str(
-                    next_pick[
-                        "pick_id"
-                    ]
-                ),
-                actor=actor,
-            )
-
-            st.success(
-                "Auto-Pick armed for the "
-                "team's next open pick."
-            )
-
-            st.rerun()
-
-        except Exception as exc:
-            st.error(
-                "Unable to arm Auto-Pick: "
-                f"{exc}"
-            )
 
 
 # NFHL_AUTOPICK_PANEL_END
@@ -2742,7 +3369,12 @@ def render_draft_lifecycle_panel(
 
     with st.expander(
         "Draft Operations",
-        expanded=False,
+        expanded=bool(
+            st.session_state.pop(
+                "nfhl_force_open_draft_operations",
+                False,
+            )
+        ),
     ):
 
         st.markdown(
@@ -2897,6 +3529,7 @@ def render_draft_lifecycle_panel(
 
                 else:
                     st.cache_data.clear()
+                    st.session_state["nfhl_force_open_draft_operations"] = True
                     st.rerun()
 
         elif clock_ready:
@@ -3004,6 +3637,7 @@ def render_draft_lifecycle_panel(
                         )
 
                         st.cache_data.clear()
+                        st.session_state["nfhl_force_open_draft_operations"] = True
                         st.rerun()
 
             with lifecycle_cols[1]:
@@ -3083,6 +3717,7 @@ def render_draft_lifecycle_panel(
                         )
 
                         st.cache_data.clear()
+                        st.session_state["nfhl_force_open_draft_operations"] = True
                         st.rerun()
 
         else:
@@ -3112,6 +3747,7 @@ def render_draft_lifecycle_panel(
                         )
 
                         st.cache_data.clear()
+                        st.session_state["nfhl_force_open_draft_operations"] = True
                         st.rerun()
 
         with c2:
@@ -3142,6 +3778,7 @@ def render_draft_lifecycle_panel(
                     )
 
                     st.cache_data.clear()
+                    st.session_state["nfhl_force_open_draft_operations"] = True
                     st.rerun()
 
         st.divider()
@@ -3215,6 +3852,7 @@ def render_draft_lifecycle_panel(
                 )
 
                 st.cache_data.clear()
+                st.session_state["nfhl_force_open_draft_operations"] = True
                 st.rerun()
 
 
@@ -3303,6 +3941,56 @@ def render_draft_readiness_panel(
                 )
 
                 st.cache_data.clear()
+                st.session_state["nfhl_force_open_league_setup"] = True
+                st.rerun()
+
+        if st.button(
+            "Refresh Yahoo Player Data",
+            use_container_width=True,
+            key="nfhl_refresh_yahoo_players",
+        ):
+            try:
+                with st.spinner(
+                    "Refreshing Yahoo player data..."
+                ):
+                    player_refresh_result = (
+                        refresh_yahoo_teams_live(
+                            actor="commissioner_link",
+                            include_players=True,
+                        )
+                    )
+
+                    from draftboard.data.season_team_slots import (
+                        auto_match_season_team_slots,
+                    )
+
+                    auto_match_season_team_slots()
+
+            except Exception as exc:
+                st.error(
+                    "Yahoo player refresh failed: "
+                    f"{exc}"
+                )
+
+            else:
+                st.session_state[
+                    "nfhl_yahoo_team_refresh_notice"
+                ] = (
+                    "Yahoo player refresh complete: "
+                    f"{player_refresh_result['yahoo_player_count']} "
+                    "players fetched; "
+                    f"{player_refresh_result['db_player_count']} "
+                    "player rows available. "
+                    "Yahoo rankings, roster percentage, "
+                    "eligibility, status, and draft analysis "
+                    "were refreshed. Team metadata was "
+                    "refreshed too."
+                )
+
+                st.cache_data.clear()
+                st.session_state[
+                    "nfhl_force_open_league_setup"
+                ] = True
                 st.rerun()
 
         st.caption(
@@ -3414,10 +4102,44 @@ def render_draft_readiness_panel(
 # ================================================================
 
 
+def render_nfhl_draft_complete_banner(
+    *,
+    season_year: int,
+    draft_status: str,
+) -> None:
+    """
+    Render the terminal NFHL draft experience.
+
+    PostgreSQL remains authoritative; this presentation is driven
+    by its COMPLETE lifecycle state.
+    """
+
+    if str(
+        draft_status
+        or ""
+    ).upper() != "COMPLETE":
+        return
+
+    st.markdown(
+        "## 🏆 CONGRATULATIONS! 🏆"
+    )
+
+    st.markdown(
+        f"### THE {season_year} NFHL DRAFT IS COMPLETE"
+    )
+
+    st.success(
+        "The rosters are set and the chase for the championship "
+        "begins. Good luck this season—may your stars stay healthy, "
+        "your goalies stand tall, and your waiver claims clear! 🏒"
+    )
+
+
 def render_live_draft(
     *,
     gateway_context: dict[str, object],
     players: list[dict],
+    status_only: bool = False,
 ) -> None:
     from draftboard.ui.components.live_draft import (
         render_live_draft_experience,
@@ -3426,6 +4148,7 @@ def render_live_draft(
     render_live_draft_experience(
         gateway_context=gateway_context,
         players=players,
+        status_only=status_only,
     )
 
 
@@ -3442,8 +4165,6 @@ def render_draft_board(
     players: list[dict],
     draft_status: str,
 ) -> None:
-    st.subheader("Draft Board")
-
     if current_teams != target_teams:
         st.info(
             f"League formation in progress: "
@@ -3464,7 +4185,7 @@ def render_draft_board(
 
     render_draft_lifecycle_panel(
         gateway_context=gateway_context,
-        show_status=True,
+        show_status=False,
         show_commissioner_controls=False,
     )
 
@@ -3473,12 +4194,6 @@ def render_draft_board(
         players=players,
     )
 
-    render_autopick_panel(
-        gateway_context=gateway_context,
-        teams=teams,
-        players=players,
-        draft_status=draft_status,
-    )
 
 
 def main() -> None:
@@ -3513,10 +4228,6 @@ def main() -> None:
         summary["team_count"]
     )
 
-    player_count = int(
-        summary["player_count"]
-    )
-
     draft_status = str(
         summary["draft_status"]
         or "UNKNOWN"
@@ -3524,38 +4235,18 @@ def main() -> None:
 
     render_banner(season_year)
 
-    if draft_status.upper() == "PREP":
-        st.info(
-            "PREP MODE — Roll call is in progress. "
-            "Player research is available now."
+    render_nfhl_draft_complete_banner(
+        season_year=season_year,
+        draft_status=draft_status,
+    )
+
+    if draft_status != "COMPLETE":
+        render_autopick_panel(
+            gateway_context=gateway_context,
+            teams=teams,
+            players=players,
+            draft_status=draft_status,
         )
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-
-    m1.metric(
-        "Teams",
-        f"{current_teams}/{target_teams}",
-    )
-
-    m2.metric(
-        "Current Players",
-        f"{player_count:,}",
-    )
-
-    m3.metric(
-        "Rounds",
-        draft["rounds_total"],
-    )
-
-    m4.metric(
-        "Season",
-        season_year,
-    )
-
-    m5.metric(
-        "Status",
-        draft_status,
-    )
 
     commissioner_mode = (
         str(
@@ -3585,12 +4276,25 @@ def main() -> None:
         "NFHL View",
         options=tab_names,
         default="Draft Board",
-        key="nfhl_main_view",
+        key="nfhl_main_view_final",
         label_visibility="collapsed",
     )
 
     if selected_view not in tab_names:
         selected_view = "Draft Board"
+
+    # Keep Pick / Clock / Time visible across every ACTIVE
+    # DraftBoard view. Only the Draft Board itself gets picker
+    # controls and the graphical board.
+    if (
+        draft_status == "ACTIVE"
+        and selected_view != "Draft Board"
+    ):
+        render_live_draft(
+            gateway_context=gateway_context,
+            players=players,
+            status_only=True,
+        )
 
     if selected_view == "Draft Board":
         render_draft_board(
@@ -3618,12 +4322,15 @@ def main() -> None:
         render_teams(
             teams,
             target_teams,
+            players,
+            gateway_context=gateway_context,
         )
 
     elif selected_view == "Draft Lottery":
         render_draft_lottery(
             current_teams,
             target_teams,
+            is_commissioner=commissioner_mode,
         )
 
     elif selected_view == "Pick Tracker":
@@ -3633,6 +4340,7 @@ def main() -> None:
 
         render_pick_tracker(
             players=players,
+            teams=teams,
         )
 
     elif selected_view == "Draft Statistics":
