@@ -2906,126 +2906,68 @@ def _render_autopick_panel_contents(
     }
 
     # ------------------------------------------------------------
-    # QUEUE EDITOR
-    # ------------------------------------------------------------
-
-    with st.form(
-        key=(
-            "nfhl_autopick_queue_"
-            + selected_team_key
-        )
-    ):
-        st.markdown(
-            "**Priority Queue**"
-        )
-
-        selections: list[str] = []
-
-        for rank in range(
-            1,
-            6,
-        ):
-            current_key = (
-                current_by_rank.get(
-                    rank,
-                    "",
-                )
-            )
-
-            try:
-                current_index = (
-                    options.index(
-                        current_key
-                    )
-                )
-            except ValueError:
-                current_index = 0
-
-            selected = st.selectbox(
-                f"#{rank}",
-                options=options,
-                index=current_index,
-                format_func=player_label,
-                key=(
-                    f"nfhl_autopick_"
-                    f"{selected_team_key}_"
-                    f"rank_{rank}"
-                ),
-            )
-
-            selections.append(
-                selected
-            )
-
-        save_queue = (
-            st.form_submit_button(
-                "Save Queue",
-                use_container_width=True,
-            )
-        )
-
-    if save_queue:
-        normalized = [
-            player_key
-            for player_key
-            in selections
-            if player_key
-        ]
-
-        if (
-            len(normalized)
-            != len(set(normalized))
-        ):
-            st.error(
-                "A player can appear only once "
-                "in the queue."
-            )
-
-        else:
-            actor = (
-                "commissioner_link"
-                if role == "commissioner"
-                else (
-                    "manager:"
-                    + selected_team_key
-                )
-            )
-
-            try:
-                save_autopick_queue(
-                    team_key=(
-                        selected_team_key
-                    ),
-                    player_keys=(
-                        normalized
-                    ),
-                    actor=actor,
-                )
-
-                st.success(
-                    "Draft queue saved. "
-                    "Auto-Pick is OFF until "
-                    "you explicitly arm it."
-                )
-
-                st.session_state[
-                    "nfhl_force_open_autopick"
-                ] = True
-
-                st.rerun()
-
-            except Exception as exc:
-                st.error(
-                    "Unable to save queue: "
-                    f"{exc}"
-                )
-
-    # ------------------------------------------------------------
-    # AUTO-PICK CONTROL
+    # QUEUE EDITOR / STAGED AUTO-PICK SETTINGS
     # ------------------------------------------------------------
 
     st.markdown(
-        "**Auto-Pick Control**"
+        "**Priority Queue**"
+    )
+
+    selections: list[str] = []
+
+    for rank in range(
+        1,
+        6,
+    ):
+        current_key = (
+            current_by_rank.get(
+                rank,
+                "",
+            )
+        )
+
+        try:
+            current_index = (
+                options.index(
+                    current_key
+                )
+            )
+        except ValueError:
+            current_index = 0
+
+        selected = st.selectbox(
+            f"#{rank}",
+            options=options,
+            index=current_index,
+            format_func=player_label,
+            key=(
+                f"nfhl_autopick_"
+                f"{selected_team_key}_"
+                f"rank_{rank}"
+            ),
+        )
+
+        selections.append(
+            selected
+        )
+
+    normalized = [
+        player_key
+        for player_key
+        in selections
+        if player_key
+    ]
+
+    saved_queue_keys = [
+        str(
+            row["yahoo_player_key"]
+        )
+        for row in effective_queue_rows
+    ]
+
+    queue_dirty = (
+        normalized
+        != saved_queue_keys
     )
 
     actor = (
@@ -3044,16 +2986,15 @@ def _render_autopick_panel_contents(
         == "ACTIVE"
     )
 
-    can_arm = (
+    can_stage_arm = (
         draft_active
         and next_pick is not None
-        and bool(effective_queue_rows)
+        and bool(normalized)
     )
 
-    # Database state remains authoritative. Including the control
-    # update timestamp in the widget key gives each DB mutation a
-    # fresh widget identity, so a prior browser toggle cannot
-    # silently re-arm Auto-Pick after Save Queue disarms it.
+    # Use the database control timestamp as the widget version.
+    # Database mutations therefore receive a new widget identity,
+    # while unsaved queue edits preserve the manager's staged choice.
     toggle_version = str(
         autopick_state.get(
             "updated_at_utc"
@@ -3074,19 +3015,93 @@ def _render_autopick_panel_contents(
         key=toggle_key,
         disabled=(
             not enabled
-            and not can_arm
+            and not can_stage_arm
         ),
         help=(
-            "When enabled, Auto-Pick is armed for "
-            "this team's exact next open pick. "
-            "It executes only after the configured "
-            "3-minute active-clock grace period. "
-            "Saving or editing the queue turns "
-            "Auto-Pick off."
+            "Choose whether Auto-Pick should be ON "
+            "after Save Queue. Saving commits both "
+            "the ranked queue and this setting in "
+            "one manager action. Auto-Pick remains "
+            "limited to this team's exact next open "
+            "pick and retains the configured "
+            "3-minute active-clock grace period."
         ),
     )
 
-    if enabled:
+    settings_dirty = (
+        queue_dirty
+        or requested_enabled
+        != bool(enabled)
+    )
+
+    if settings_dirty:
+        st.caption(
+            "Unsaved queue / Auto-Pick changes."
+        )
+
+        st.markdown(
+            """
+            <style>
+            .st-key-nfhl_autopick_save_pending button {
+                background-color: #C62828 !important;
+                border-color: #C62828 !important;
+                color: #FFFFFF !important;
+            }
+
+            .st-key-nfhl_autopick_save_pending button:hover {
+                background-color: #B71C1C !important;
+                border-color: #B71C1C !important;
+                color: #FFFFFF !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if settings_dirty:
+        save_container_key = (
+            "nfhl_autopick_save_pending"
+        )
+        save_button_type = "primary"
+    else:
+        save_container_key = (
+            "nfhl_autopick_save_clean"
+        )
+        save_button_type = "secondary"
+
+    with st.container(
+        key=save_container_key
+    ):
+        save_queue = st.button(
+            "Save Queue",
+            type=save_button_type,
+            use_container_width=True,
+            key=(
+                "nfhl_autopick_save_"
+                + selected_team_key
+            ),
+        )
+
+    if settings_dirty:
+        if requested_enabled:
+            if can_stage_arm:
+                st.caption(
+                    "Save Queue will save these rankings "
+                    "and turn Auto-Pick ON for "
+                    f"`{next_pick['pick_id']}`."
+                )
+            else:
+                st.warning(
+                    "Auto-Pick cannot be enabled with "
+                    "the current unsaved settings."
+                )
+        else:
+            st.caption(
+                "Save Queue will save these rankings "
+                "with Auto-Pick OFF."
+            )
+
+    elif enabled:
         st.success(
             "Auto-Pick is ON for "
             f"`{armed_pick_id}`."
@@ -3104,7 +3119,7 @@ def _render_autopick_panel_contents(
             "No open draft pick exists for this team."
         )
 
-    elif not effective_queue_rows:
+    elif not normalized:
         st.info(
             "Add at least one player to the queue "
             "before enabling Auto-Pick."
@@ -3112,74 +3127,99 @@ def _render_autopick_panel_contents(
 
     else:
         st.caption(
-            "Auto-Pick is OFF. Turn it on to arm "
-            f"Round {next_pick['round_number']} "
-            f"({next_pick['pick_id']})."
+            "Auto-Pick is OFF."
         )
 
-    if requested_enabled != bool(enabled):
-        if requested_enabled:
-            if not can_arm:
-                st.error(
-                    "Auto-Pick cannot be enabled "
-                    "for this team right now."
-                )
-                return
+    if not save_queue:
+        return
 
-            try:
-                arm_autopick(
-                    team_key=(
-                        selected_team_key
-                    ),
-                    pick_id=str(
-                        next_pick[
-                            "pick_id"
-                        ]
-                    ),
-                    actor=actor,
-                )
+    if (
+        len(normalized)
+        != len(set(normalized))
+    ):
+        st.error(
+            "A player can appear only once "
+            "in the queue."
+        )
+        return
 
-                st.success(
-                    "Auto-Pick enabled for "
-                    f"`{next_pick['pick_id']}`."
-                )
+    if (
+        requested_enabled
+        and not can_stage_arm
+    ):
+        st.error(
+            "Auto-Pick cannot be enabled "
+            "for this team right now."
+        )
+        return
 
-                st.session_state[
-                    "nfhl_force_open_autopick"
-                ] = True
+    try:
+        save_autopick_queue(
+            team_key=(
+                selected_team_key
+            ),
+            player_keys=(
+                normalized
+            ),
+            actor=actor,
+        )
 
-                st.rerun()
+    except Exception as exc:
+        st.error(
+            "Unable to save queue: "
+            f"{exc}"
+        )
+        return
 
-            except Exception as exc:
-                st.error(
-                    "Unable to enable Auto-Pick: "
-                    f"{exc}"
-                )
+    # save_autopick_queue intentionally leaves Auto-Pick OFF.
+    # If the manager requested ON, re-arm only through the existing
+    # validated database helper. A failure therefore leaves the safe
+    # state: queue saved, Auto-Pick OFF.
+    if requested_enabled:
+        try:
+            arm_autopick(
+                team_key=(
+                    selected_team_key
+                ),
+                pick_id=str(
+                    next_pick[
+                        "pick_id"
+                    ]
+                ),
+                actor=actor,
+            )
 
-        else:
-            try:
-                disable_autopick(
-                    team_key=(
-                        selected_team_key
-                    ),
-                    actor=actor,
-                )
+        except Exception as exc:
+            st.error(
+                "Queue was saved, but Auto-Pick "
+                "could not be enabled. "
+                "Auto-Pick remains OFF: "
+                f"{exc}"
+            )
 
-                st.success(
-                    "Auto-Pick disabled."
-                )
+            st.session_state[
+                "nfhl_force_open_autopick"
+            ] = True
 
-                st.session_state[
-                    "nfhl_force_open_autopick"
-                ] = True
+            return
 
-                st.rerun()
+        st.success(
+            "Draft queue saved and Auto-Pick "
+            "enabled for "
+            f"`{next_pick['pick_id']}`."
+        )
 
-            except Exception as exc:
-                st.error(
-                    "Unable to disable Auto-Pick: "
-                    f"{exc}"
-                )
+    else:
+        st.success(
+            "Draft queue saved. "
+            "Auto-Pick is OFF."
+        )
+
+    st.session_state[
+        "nfhl_force_open_autopick"
+    ] = True
+
+    st.rerun()
 
 
 # NFHL_AUTOPICK_PANEL_END
