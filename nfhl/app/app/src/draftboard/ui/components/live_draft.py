@@ -694,10 +694,15 @@ def render_live_draft_experience(
         if (
             preview_mode
             or (
-                role in {
-                    "manager",
-                    "commissioner",
-                }
+                role == "manager"
+                and draft_status == "ACTIVE"
+                and (
+                    target_pick
+                    or not status_only
+                )
+            )
+            or (
+                role == "commissioner"
                 and target_pick
                 and draft_status == "ACTIVE"
             )
@@ -992,6 +997,19 @@ def render_live_draft_experience(
                         )
                         return
 
+                    if not target_pick:
+                        waiting_on = (
+                            current_team_name
+                            or "another team"
+                        )
+
+                        st.error(
+                            "You cannot draft right now. "
+                            f"{waiting_on} is currently "
+                            "on the clock."
+                        )
+                        return
+
                     if chosen_player_key is None:
                         st.warning(
                             "Pick a player first."
@@ -1004,13 +1022,6 @@ def render_live_draft_experience(
                     ):
                         st.error(
                             "Player already drafted."
-                        )
-                        return
-
-                    if not target_pick:
-                        st.error(
-                            "You are not authorized "
-                            "to submit a pick."
                         )
                         return
 
@@ -1122,9 +1133,9 @@ def render_live_draft_experience(
             players=players,
         )
 
-    # For a logged-in manager who cannot pick right now, keep the
-    # status concise and below the board rather than rendering a
-    # disabled picker.
+    # Keep player search available to authenticated managers while
+    # they wait. Submission remains protected by the authoritative
+    # target-pick gate above.
     if (
         not preview_mode
         and role == "manager"
@@ -1132,6 +1143,7 @@ def render_live_draft_experience(
         and target_pick_id is None
     ):
         st.caption(
-            "Draft controls will appear when your team is on the "
-            "clock or if you have an unresolved expired pick."
+            "Player search remains available while you wait. "
+            "SUBMIT will only work when your team is on the clock "
+            "or has an unresolved expired pick."
         )
