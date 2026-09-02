@@ -2568,6 +2568,10 @@ def render_draft_lottery(
 # ================================================================
 
 
+def _keep_autopick_panel_open() -> None:
+    st.session_state["nfhl_force_open_autopick"] = True
+
+
 def render_autopick_panel(
     *,
     gateway_context: dict[str, object],
@@ -2945,6 +2949,7 @@ def _render_autopick_panel_contents(
                 f"{selected_team_key}_"
                 f"rank_{rank}"
             ),
+            on_change=_keep_autopick_panel_open,
         )
 
         selections.append(
@@ -3013,6 +3018,7 @@ def _render_autopick_panel_contents(
         "Auto-Pick",
         value=bool(enabled),
         key=toggle_key,
+        on_change=_keep_autopick_panel_open,
         disabled=(
             not enabled
             and not can_stage_arm
