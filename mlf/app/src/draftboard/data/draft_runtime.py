@@ -39,7 +39,7 @@ def submit_draft_pick_atomic(
     pick_id: str,
     expected_owner_team_key: str,
     yahoo_player_key: str,
-    expected_pick_kind: str,
+    expected_pick_kind: str | None = None,
     selected_by: str = "draftboard_manual",
 ) -> DraftPickExecution:
     """
@@ -72,16 +72,14 @@ def submit_draft_pick_atomic(
         yahoo_player_key,
         field="yahoo_player_key",
     )
-    kind = _required_text(
-        expected_pick_kind,
-        field="expected_pick_kind",
-    ).upper()
+    kind_text = str(expected_pick_kind or "").strip().upper()
+    kind = kind_text or None
     actor = _required_text(
         selected_by,
         field="selected_by",
     )
 
-    if kind not in _ALLOWED_PICK_KINDS:
+    if kind is not None and kind not in _ALLOWED_PICK_KINDS:
         raise ValueError(
             "expected_pick_kind must be one of "
             f"{sorted(_ALLOWED_PICK_KINDS)}; got {kind!r}."
@@ -176,7 +174,10 @@ def submit_draft_pick_atomic(
             f"expected {player!r}, got {result.selected_player_key!r}."
         )
 
-    if result.selected_pick_kind != kind:
+    if (
+        kind is not None
+        and result.selected_pick_kind != kind
+    ):
         raise RuntimeError(
             "MLF atomic draft executor classification disagreed with "
             f"the caller: expected {kind!r}, "

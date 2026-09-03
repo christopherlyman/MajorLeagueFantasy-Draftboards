@@ -14,11 +14,16 @@ import psycopg
 import extra_streamlit_components as stx
 
 from draftboard.data.picks_grid import build_picks_grid
+from draftboard.data.draft_projection import load_draft_state_projection
+from draftboard.data.draft_runtime import (
+    DraftPickExecution,
+    submit_draft_pick_atomic,
+)
 from draftboard.domain.clock import compute_clock_status
 from draftboard.domain.models import Position, PickLogEntry, PickSlot, Team
 from draftboard.state.autosave import try_load_autosave, save_autosave
-from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
-from draftboard.state.store import DraftClock, DraftState, has_state, init_state, get_state, set_current_pick
+from draftboard.state.runtime import get_draft_key, get_league_key, get_postgres_dsn, get_season_year
+from draftboard.state.store import DraftClock, DraftState, has_state, init_state, get_state, replace_state, set_current_pick
 from draftboard.state.init_restore import (
     _team_to_slot_from_order,
     _is_legacy_team_keyspace,
@@ -330,44 +335,53 @@ def _next_open_pick_id(state: DraftState, after_pick_id: str | None = None) -> s
     return ""
 
 
-def _apply_pick(state: DraftState, pick_id: str, player_key: str, pick_kind: str = "FA") -> None:
-    pick = state.picks[pick_id]
-    ts = datetime.utcnow().isoformat()
+def _apply_pick(
+    state: DraftState,
+    pick_id: str,
+    player_key: str,
+    pick_kind: str | None = None,
+) -> DraftPickExecution:
+    """
+    Submit a real pick transactionally, then replace the session DraftState
+    with a fresh relational projection.
 
-    pick.selected_player_key = player_key
-    pick.selected_ts_iso = ts
+    PostgreSQL owns the selection, legality, QO/POACH classification,
+    concurrency protection, QO mutation, and next-pick advancement.
+    """
+    pick_id_text = str(pick_id or "").strip()
+    player_key_text = str(player_key or "").strip()
 
-    player = state.players[player_key]
-    state.pick_log.append(
-        PickLogEntry(
-            event_id=str(uuid4()),
-            pick_id=pick.pick_id,
-            owner_team_key=pick.owner_team_key,
-            player_key=player.player_key,
-            player_name=player.name,
-            primary_position=player.primary_position if isinstance(player.primary_position, Position) else Position(str(player.primary_position)),
-            pick_kind=pick_kind,
-            ts_iso=ts,
+    pick = state.picks.get(pick_id_text)
+
+    if pick is None:
+        raise RuntimeError(
+            f"Cannot submit draft pick: unknown pick {pick_id_text!r}."
         )
+
+    if player_key_text not in state.players:
+        raise RuntimeError(
+            f"Cannot submit draft pick: unknown player {player_key_text!r}."
+        )
+
+    execution = submit_draft_pick_atomic(
+        dsn=get_postgres_dsn(),
+        draft_key=get_draft_key(),
+        pick_id=pick_id_text,
+        expected_owner_team_key=str(pick.owner_team_key),
+        yahoo_player_key=player_key_text,
+        expected_pick_kind=pick_kind,
+        selected_by="draftboard_manual",
     )
 
-    next_pick_id = _next_open_pick_id(state, after_pick_id=pick.pick_id)
-    if next_pick_id:
-        state.clock.current_pick_id = next_pick_id
+    refreshed = load_draft_state_projection(
+        dsn=get_postgres_dsn(),
+        draft_key=get_draft_key(),
+        base_state=state,
+    )
 
-        if bool(getattr(state.clock, "auto_advance", True)):
-            from draftboard.domain.clock import start_pick_clock
-            state.clock.pick_started_ts_iso = start_pick_clock()
-            state.clock.pick_paused_ts_iso = None
-            state.clock.elapsed_paused_seconds = 0
-            state.clock.is_running = True
-    else:
-        state.clock.is_running = False
-        state.clock.pick_started_ts_iso = None
-        state.clock.pick_paused_ts_iso = None
-        state.clock.elapsed_paused_seconds = 0
+    replace_state(refreshed)
 
-    save_autosave(state)
+    return execution
 
 
 def render_pick_controls(state: DraftState) -> None:
@@ -566,9 +580,23 @@ def render_pick_controls(state: DraftState) -> None:
                     return
             # ---- END QO / POACH / RELEASE LOGIC ----
 
-            _apply_pick(state, state.clock.current_pick_id, chosen_player_key, pick_kind=pick_kind)
+            submit_pick_id = state.clock.current_pick_id
+
+            try:
+                execution = _apply_pick(
+                    state,
+                    submit_pick_id,
+                    chosen_player_key,
+                    pick_kind=pick_kind,
+                )
+            except (ValueError, RuntimeError, psycopg.Error) as exc:
+                st.error(f"Pick was not submitted: {exc}")
+                return
+
             st.success(
-                f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [{pick_kind}]"
+                f"Picked {state.players[chosen_player_key].name} "
+                f"at {execution.executed_pick_id} "
+                f"[{execution.selected_pick_kind}]"
             )
 
             # Clear selection for THIS pick + rerun so UI updates immediately
@@ -684,8 +712,26 @@ def render_mobile_pick(state: DraftState) -> None:
         if chosen_player_key in drafted:
             st.error("Player already drafted.")
             return
-        _apply_pick(state, current_pick_id, chosen_player_key, pick_kind="FA")
-        st.success(f"Picked {state.players[chosen_player_key].name} at {state.clock.current_pick_id} [FA]")
+        try:
+            execution = _apply_pick(
+                state,
+                current_pick_id,
+                chosen_player_key,
+                pick_kind=None,
+            )
+        except (ValueError, RuntimeError, psycopg.Error) as exc:
+            st.error(f"Pick was not submitted: {exc}")
+            return
+
+        st.success(
+            f"Picked {state.players[chosen_player_key].name} "
+            f"at {execution.executed_pick_id} "
+            f"[{execution.selected_pick_kind}]"
+        )
+
+        st.session_state.pop("mobile_selected_player_key", None)
+        st.session_state.pop("mobile_player_query", None)
+        st.rerun()
 
 def _build_players_df(
     players: list["Player"],
