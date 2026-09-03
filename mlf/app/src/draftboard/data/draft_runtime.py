@@ -427,3 +427,145 @@ def rebase_draft_order_atomic(
                 )
 
     return changed
+
+def upsert_prospect_tag_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    team_key: str,
+    yahoo_player_key: str,
+    note: str | None = None,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    team = _required_text(
+        team_key,
+        field="team_key",
+    )
+    player = _required_text(
+        yahoo_player_key,
+        field="yahoo_player_key",
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.upsert_prospect_tag_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    team,
+                    player,
+                    note,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF Prospect Tag upsert returned no row."
+        )
+
+    return int(row[0])
+
+
+def delete_prospect_tag_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    yahoo_player_key: str,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    player = _required_text(
+        yahoo_player_key,
+        field="yahoo_player_key",
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.delete_prospect_tag_atomic(
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    player,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF Prospect Tag deletion returned no row."
+        )
+
+    return int(row[0])
+
+
+def transfer_active_contract_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    yahoo_player_key: str,
+    to_team_key: str,
+    note: str | None = None,
+) -> str:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    player = _required_text(
+        yahoo_player_key,
+        field="yahoo_player_key",
+    )
+    team = _required_text(
+        to_team_key,
+        field="to_team_key",
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.transfer_active_contract_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    player,
+                    team,
+                    note,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF active-contract transfer returned no row."
+        )
+
+    return str(row[0])
