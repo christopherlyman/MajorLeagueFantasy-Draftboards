@@ -344,6 +344,40 @@ def transfer_draft_pick_atomic(
     return str(row[0] or "")
 
 
+
+
+def rebuild_draft_keeper_assignments(
+    *,
+    dsn: str,
+    draft_key: str,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.rebuild_draft_keeper_assignments(
+                    %s
+                )
+                """,
+                (draft,),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF keeper rebuild returned no row."
+        )
+
+    return int(row[0])
+
+
 def rebase_draft_order_atomic(
     *,
     dsn: str,
@@ -369,7 +403,27 @@ def rebase_draft_order_atomic(
             )
             row = cur.fetchone()
 
-    if row is None:
-        raise RuntimeError("MLF draft-order rebase returned no row.")
+            if row is None:
+                raise RuntimeError(
+                    "MLF draft-order rebase returned no row."
+                )
 
-    return int(row[0])
+            changed = int(row[0])
+
+            cur.execute(
+                """
+                SELECT mlf.rebuild_draft_keeper_assignments(
+                    %s
+                )
+                """,
+                (draft,),
+            )
+            keeper_row = cur.fetchone()
+
+            if keeper_row is None:
+                raise RuntimeError(
+                    "MLF keeper rebuild after draft-order "
+                    "rebase returned no row."
+                )
+
+    return changed
