@@ -185,3 +185,191 @@ def submit_draft_pick_atomic(
         )
 
     return result
+
+def reset_draft_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+) -> str:
+    draft = _required_text(draft_key, field="draft_key")
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT mlf.reset_draft_atomic(%s)",
+                (draft,),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF draft reset returned no row.")
+
+    return str(row[0] or "")
+
+
+def delete_draft_selection_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    pick_id: str,
+    rewind_clock: bool,
+) -> str:
+    draft = _required_text(draft_key, field="draft_key")
+    pick = _required_text(pick_id, field="pick_id")
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.delete_draft_selection_atomic(
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (draft, pick, bool(rewind_clock)),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF delete-pick operation returned no row.")
+
+    return str(row[0] or "")
+
+
+def set_current_pick_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    pick_id: str,
+) -> str:
+    draft = _required_text(draft_key, field="draft_key")
+    pick = _required_text(pick_id, field="pick_id")
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT mlf.set_current_pick_atomic(%s, %s)",
+                (draft, pick),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF set-current-pick returned no row.")
+
+    return str(row[0] or "")
+
+
+def update_draft_clock_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    action: str,
+    seconds_per_pick: int | None = None,
+    weekends_count: bool | None = None,
+) -> str:
+    draft = _required_text(draft_key, field="draft_key")
+    action_text = _required_text(action, field="action").upper()
+
+    allowed = {
+        "START",
+        "PAUSE",
+        "RESUME",
+        "STOP",
+        "SET_DURATION",
+        "SET_WEEKENDS",
+    }
+
+    if action_text not in allowed:
+        raise ValueError(
+            f"Unsupported clock action {action_text!r}."
+        )
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.update_draft_clock_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    action_text,
+                    seconds_per_pick,
+                    weekends_count,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF clock update returned no row.")
+
+    return str(row[0] or "")
+
+
+def transfer_draft_pick_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    pick_id: str,
+    to_team_key: str,
+    note: str | None = None,
+) -> str:
+    draft = _required_text(draft_key, field="draft_key")
+    pick = _required_text(pick_id, field="pick_id")
+    team = _required_text(to_team_key, field="to_team_key")
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.transfer_draft_pick_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (draft, pick, team, note),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF pick transfer returned no row.")
+
+    return str(row[0] or "")
+
+
+def rebase_draft_order_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    team_keys: list[str],
+) -> int:
+    draft = _required_text(draft_key, field="draft_key")
+    teams = [
+        _required_text(team_key, field="team_key")
+        for team_key in team_keys
+    ]
+
+    with psycopg.connect(_required_text(dsn, field="dsn")) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.rebase_draft_order_atomic(
+                    %s,
+                    %s::text[]
+                )
+                """,
+                (draft, teams),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError("MLF draft-order rebase returned no row.")
+
+    return int(row[0])
