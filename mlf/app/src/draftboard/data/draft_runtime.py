@@ -569,3 +569,108 @@ def transfer_active_contract_atomic(
         )
 
     return str(row[0])
+
+def upsert_contract_override_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    yahoo_player_key: str,
+    team_key: str | None,
+    years_remaining: int,
+    note: str | None = None,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    player = _required_text(
+        yahoo_player_key,
+        field="yahoo_player_key",
+    )
+
+    years = int(years_remaining)
+
+    if years < 0:
+        raise ValueError(
+            "years_remaining must be zero or greater."
+        )
+
+    team_text = str(team_key or "").strip()
+    team = team_text or None
+
+    if years > 0 and team is None:
+        raise ValueError(
+            "Active contract override requires team_key."
+        )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.upsert_contract_override_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    player,
+                    team,
+                    years,
+                    note,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF contract-override upsert returned no row."
+        )
+
+    return int(row[0])
+
+
+def delete_contract_override_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    yahoo_player_key: str,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    player = _required_text(
+        yahoo_player_key,
+        field="yahoo_player_key",
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.delete_contract_override_atomic(
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    player,
+                ),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF contract-override deletion returned no row."
+        )
+
+    return int(row[0])
