@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -674,3 +676,125 @@ def delete_contract_override_atomic(
         )
 
     return int(row[0])
+
+
+
+def replace_prospect_tag_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    old_yahoo_player_key: str | None,
+    team_key: str,
+    new_yahoo_player_key: str,
+    note: str | None = None,
+) -> int:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+    team = _required_text(
+        team_key,
+        field="team_key",
+    )
+    new_player = _required_text(
+        new_yahoo_player_key,
+        field="new_yahoo_player_key",
+    )
+
+    old_text = str(
+        old_yahoo_player_key or ""
+    ).strip()
+
+    old_player = old_text or None
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mlf.replace_prospect_tag_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    old_player,
+                    team,
+                    new_player,
+                    note,
+                ),
+            )
+
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF Prospect Tag replacement returned no row."
+        )
+
+    return int(row[0])
+
+
+def apply_trade_assets_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    assets: list[dict],
+    note: str | None = None,
+) -> tuple[int, int, int]:
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+
+    if not isinstance(assets, list):
+        raise TypeError(
+            "assets must be a list."
+        )
+
+    payload = json.dumps(
+        assets,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    with psycopg.connect(
+        _required_text(dsn, field="dsn")
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    player_updates,
+                    pick_updates,
+                    keeper_assignments
+                FROM mlf.apply_trade_assets_atomic(
+                    %s,
+                    %s::jsonb,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    payload,
+                    note,
+                ),
+            )
+
+            row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "MLF atomic trade returned no row."
+        )
+
+    return (
+        int(row[0]),
+        int(row[1]),
+        int(row[2]),
+    )
