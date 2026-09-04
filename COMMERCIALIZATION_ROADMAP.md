@@ -70,38 +70,39 @@ Purpose:
 - use NFFL and MLF as empirical evidence rather than assuming the current
   league implementations are commercially optimal.
 
-Current approximate completion: **88%**
+Current approximate completion: **100%**
 
-Current analytical workstream:
+The evidence and product-discovery stage is complete.
 
-**MLF League Health cross-validation: approximately 89% complete**
+MLF League Health cross-validation is **100% complete**.
 
-The remaining MLF work is intentionally bounded:
+All bounded MLF tasks were completed:
 
-1. freeze the historical hitter/pitcher quality methodology;
-2. build the 2017-2025 controlled-asset quality dataset;
-3. test controlled quantity versus finish;
-4. test controlled quality versus finish;
-5. test persistent elite control versus finish;
-6. analyze expiration, retention, FT/QO, and recirculation outcomes;
-7. compare the MLF findings with the previously completed NFFL findings;
-8. issue a concise MLF League Health conclusion.
+1. historical hitter/pitcher quality methodology was frozen;
+2. the 2017-2025 controlled-asset quality dataset was built;
+3. controlled quantity versus finish was tested;
+4. controlled quality versus finish was tested;
+5. persistent elite control versus finish was tested;
+6. expiration, retention, FT, and recirculation outcomes were tested;
+7. MLF findings were compared with NFFL;
+8. the final MLF League Health classification was issued.
 
 ### MLF Research Stopping Rule
 
-Historical MLF research ends when there is sufficient evidence to classify
-the NFFL competitive-balance mechanism as:
+**Status: SATISFIED**
 
-- corroborated;
-- partially corroborated; or
-- contradicted.
+Final classification:
 
-The goal is not to perfect a historical baseball analytics system.
+**CORROBORATED**
 
-Additional source archaeology or model refinement is justified only if it
-could materially change the commercial product decision.
+Historical MLF research is closed.
 
-After the MLF League Health conclusion, proceed to the Product Decision Gate.
+Additional source archaeology or model refinement is justified only if a
+specific unresolved question could materially change the commercial product
+decision.
+
+The active workstream is now the Product Decision Gate and Commercial Product
+Decision Record.
 
 ### Stage 2 - Commercial Product Decision and Specification
 
@@ -134,8 +135,11 @@ that freezes:
 
 Current approximate completion: **50%**
 
-Much of the supporting research exists, but the decision is not final until
-MLF cross-validation is complete.
+The supporting discovery research and MLF cross-validation are complete.
+
+The active Stage 2 task is now to convert that evidence into the versioned
+Commercial Product Decision Record. The stage remains at approximately 50%
+until that decision is explicitly frozen.
 
 ### Stage 3 - Build the Minimum Sellable Product
 
@@ -204,11 +208,11 @@ Current baseline:
 
 | Stage | Weight | Approx. Stage Completion | Approx. Earned Progress |
 | --- | ---: | ---: | ---: |
-| Evidence and Product Discovery | 25% | 88% | 22.0% |
+| Evidence and Product Discovery | 25% | 100% | 25.0% |
 | Product Decision and Specification | 10% | 50% | 5.0% |
 | Minimum Sellable Product | 35% | 8% | 2.8% |
 | Outsider Validation and Economics | 30% | 0% | 0.0% |
-| **Overall Commercialization** | **100%** |  | **~30%** |
+| **Overall Commercialization** | **100%** |  | **~33%** |
 
 This percentage is deliberately conservative.
 
@@ -245,13 +249,67 @@ The appropriate conclusion is not that contracts inherently create dynasties
 or make leagues unfair. Manager skill, drafting, injuries, and other factors
 remain potential confounders.
 
-MLF exists as the long-horizon, second-sport test of whether the mechanism is
-repeatable.
+## Completed MLF League Health Evidence
+
+MLF provides the long-horizon, second-sport validation.
+
+Across 144 franchise-seasons from 2017 through 2025:
+
+- raw controlled quantity was weakly associated with finish;
+- average controlled quality was materially associated with stronger finish;
+- elite controlled-player count and elite share were materially associated
+  with stronger finish;
+- Top-6 franchises had higher average controlled quality in every season;
+- persistent elite portfolios were materially associated with stronger
+  finish;
+- elite next-year same-franchise retention was 89.27%, versus 73.24% for
+  non-elite assets;
+- conditional elite-retention share was much more weakly associated with
+  finish than persistent elite count;
+- overall incumbent-control break at contractual endpoints was 71.34%;
+- elite same-franchise continuation at expiration was 59.21%;
+- non-elite same-franchise continuation at expiration was 20.75%;
+- elite assets were approximately 2.85 times as likely as non-elite assets to
+  remain with the incumbent after an endpoint.
+
+Final MLF classification:
+
+**CORROBORATED**
+
+## Cross-League League Health Conclusion
+
+NFFL and MLF independently support the same practical mechanism:
+
+**Competitive Balance**
+-> **Asset Quality**
+-> **Contract Duration**
+-> **Expiration**
+-> **FT / QO**
+-> **Recirculation**
+
+The strongest common signal is not the number of controlled assets.
+
+It is the concentration, persistence, and recirculation behavior of elite
+controlled assets.
+
+This supports League Health as a credible product differentiator, with
+commissioner-facing measures centered on:
+
+- elite-asset concentration;
+- persistent elite control;
+- elite retention;
+- elite expiration outcomes;
+- incumbent-control break;
+- recirculation of competitively meaningful assets.
+
+The evidence is observational and does not establish that contract rules
+alone cause competitive imbalance.
 
 ## Product Decision Gate
 
-After the MLF League Health conclusion, discovery stops and a Commercial
-Product Decision Record must be written.
+The MLF League Health conclusion is complete and discovery is closed.
+
+A Commercial Product Decision Record must now be written.
 
 The decision should answer whether the first commercial product is:
 
@@ -316,12 +374,16 @@ future evidence materially changes their commercial attractiveness.
 
 The next milestone is:
 
-**MLF League Health Conclusion**
+**Commercial Product Decision Record**
+
+That decision will freeze the first commercial product, target customer,
+positioning, standardized rules, minimum sellable feature set, Trade Lab
+scope, League Health scope, onboarding model, pricing hypothesis, pilot
+scope, success criteria, and stop/pivot criteria.
 
 After that milestone:
 
-**Commercial Product Decision Record**
-→ **Minimum Sellable Product specification**
+**Minimum Sellable Product specification**
 → **build**
 → **outsider pilots**
 → **paid experiment**

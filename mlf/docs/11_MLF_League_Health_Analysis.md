@@ -361,16 +361,161 @@ football.
 The purpose is to determine whether the underlying contract-control mechanism
 is repeatable enough to support League Health as a commercial differentiator.
 
-## Required Conclusion
+## Final Conclusion
 
-The MLF workstream ends with one classification:
+**Classification: CORROBORATED**
 
-- **CORROBORATED**
-- **PARTIALLY CORROBORATED**
-- **CONTRADICTED**
+The historical MLF League Health cross-validation is complete.
 
-The conclusion should be supported by a concise set of material findings and
-caveats.
+The results independently reproduce the principal competitive-balance pattern
+previously found in NFFL.
 
-After that conclusion, historical research stops and the project advances to
-the Commercial Product Decision Record.
+### Controlled Quantity Versus Quality
+
+Across 144 franchise-seasons from 2017 through 2025:
+
+- controlled-player quantity had only a weak relationship with finish
+  (Pearson -0.0868; Spearman -0.0874);
+- active controlled-player quantity was also weak
+  (Pearson -0.1024; Spearman -0.1073);
+- average active controlled-player quality was substantially associated with
+  stronger finishes
+  (Pearson -0.5449; Spearman -0.5421);
+- realized quality sum was substantially associated with stronger finishes
+  (Pearson -0.4585; Spearman -0.4578);
+- elite controlled-player count was substantially associated with stronger
+  finishes
+  (Pearson -0.4994; Spearman -0.4939);
+- elite share was substantially associated with stronger finishes
+  (Pearson -0.4586; Spearman -0.4687).
+
+Top-6 franchises had higher average controlled-player quality than non-Top-6
+franchises in every season from 2017 through 2025.
+
+The principal quantity-versus-quality conclusion is:
+
+**Having more controlled assets did not materially distinguish successful
+franchises. Having better controlled assets did.**
+
+### Persistent Elite Control
+
+Across next-season opportunities:
+
+- elite controlled assets remained with the same franchise 89.27% of the
+  time;
+- non-elite controlled assets remained with the same franchise 73.24% of the
+  time;
+- the difference was 16.03 percentage points.
+
+Two-season persistent elite count was substantially associated with stronger
+finishes
+(Pearson -0.4631; Spearman -0.4599).
+
+Three-season persistent elite count was also substantially associated with
+stronger finishes
+(Pearson -0.4311; Spearman -0.4318).
+
+Top-6 franchises had more two-season persistent elite assets than non-Top-6
+franchises in every season from 2018 through 2025.
+
+However, conditional retention share after already possessing an elite asset
+was much more weakly associated with finish
+(Pearson -0.1555; Spearman -0.0950).
+
+The persistence result therefore does not support the stronger claim that
+successful franchises possess a uniquely superior probability of retaining
+each elite asset once acquired.
+
+A more defensible interpretation is:
+
+**Successful franchises tend to carry larger elite portfolios forward, with
+the advantage driven substantially by elite-asset accumulation rather than
+only by higher conditional retention efficiency.**
+
+### Expiration and Elite-Asset Recirculation
+
+The 2018-2024 historical window contained 335 evaluable contractual
+endpoints.
+
+Across all endpoints:
+
+- 96 remained under the same franchise;
+- 239 broke the incumbent controlled relationship;
+- overall incumbent-control break rate was 71.34%.
+
+That overall rate masks a material quality difference.
+
+Among 76 elite endpoints:
+
+- 45 remained with the incumbent franchise;
+- 31 broke incumbent control;
+- same-franchise continuation rate was 59.21%.
+
+Among 241 non-elite endpoints:
+
+- 50 remained with the incumbent franchise;
+- 191 broke incumbent control;
+- same-franchise continuation rate was 20.75%.
+
+Elite assets were therefore:
+
+- 38.46 percentage points more likely to remain with the incumbent;
+- approximately 2.85 times as likely as non-elite assets to remain with the
+  incumbent.
+
+The expiration conclusion is:
+
+**The expiration boundary is a much weaker competitive reset for elite assets
+than for ordinary assets.**
+
+A league can therefore appear highly recirculatory in aggregate while the
+assets most associated with competitive advantage remain disproportionately
+concentrated with incumbent franchises.
+
+### Cross-League Interpretation
+
+MLF and NFFL independently support the same general mechanism:
+
+**Competitive Balance**
+-> **Asset Quality**
+-> **Contract Duration**
+-> **Expiration**
+-> **FT / QO**
+-> **Recirculation**
+
+In both leagues:
+
+- raw controlled-player quantity was a weak competitive signal;
+- controlled-player quality was a materially stronger signal;
+- persistent elite portfolios were associated with stronger finishes;
+- elite assets were materially more likely than non-elite assets to remain
+  with incumbent franchises after reaching the expiration boundary.
+
+The numerical behavior does not need to be identical across baseball and
+football for the mechanism to be commercially useful.
+
+The repeatability is sufficient to support League Health as a credible
+commercial differentiator for contract-keeper commissioner software.
+
+### Causal Caveat
+
+These results are observational.
+
+They do not establish that contract rules alone cause competitive imbalance.
+
+Manager skill, drafting, trading, injuries, prospect evaluation, waiver
+activity, and other factors can influence both elite-asset accumulation and
+competitive success.
+
+The supported product claim is therefore about measurable competitive
+structure and asset-flow behavior, not deterministic causation.
+
+### Research Stopping Rule
+
+The MLF historical research stopping rule is satisfied.
+
+Further historical baseball source archaeology or model refinement should
+occur only if a specific unresolved question could materially change a
+commercial product decision.
+
+The project now advances to the Commercial Product Decision Record.
