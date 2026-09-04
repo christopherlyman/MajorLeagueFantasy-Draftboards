@@ -6,16 +6,22 @@ MLF historical League Health analysis.
 Methodology:
     ../docs/11_MLF_League_Health_Analysis.md
 
-This first implementation increment validates the frozen historical
-contract and standings foundations. It performs no database writes and
-no external API calls.
+The analysis validates the frozen historical contract and standings
+foundation, then resolves historical MLB player identity and season
+activity. It performs no database writes. Historical identity retrieval
+uses the public MLB Stats API.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import re
 import subprocess
+import time
+import unicodedata
+import urllib.parse
+import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -52,6 +58,40 @@ EXPECTED_FRANCHISE_COUNT = 16
 # Source files are preserved unchanged.
 OWNER_ALIASES = {
     "Nate": "Nate H",
+}
+
+
+MLB_BASE = "https://statsapi.mlb.com/api/v1"
+
+EXPECTED_DISTINCT_CONTRACT_NAMES = 473
+
+
+# Historical contract-name aliases proven during discovery.
+PLAYER_NAME_ALIASES = {
+    "Brendan McKay (p)": "Brendan McKay",
+    "Dee Gordon": "Dee Strange-Gordon",
+    "Hyun-Jin Ryu": "Hyun Jin Ryu",
+    "JD Martinez": "J.D. Martinez",
+    "Jose Miranda": "José Miranda",
+    "JT Realmuto": "J.T. Realmuto",
+    "Mike Soroka": "Michael Soroka",
+    "Nicholas Castellanos": "Nick Castellanos",
+    "Ronald Acuna": "Ronald Acuña Jr.",
+    "Shohei Ohtani (B)": "Shohei Ohtani",
+    "Shohei Ohtani (bat)": "Shohei Ohtani",
+    "Shohei Ohtani (P)": "Shohei Ohtani",
+    "Shohei Ohtani (pitch)": "Shohei Ohtani",
+    "Vincent Velasquez": "Vince Velasquez",
+    "Wilson Contreras": "Willson Contreras",
+}
+
+
+# Explicit identity closures for historical same-name/search exceptions.
+DIRECT_MLBAM = {
+    "José Ramírez": 608070,
+    "Jose Ramirez": 608070,
+    "Will Smith": 669257,
+    "Jose Miranda": 669304,
 }
 
 
@@ -366,7 +406,662 @@ def load_standings() -> dict[
     return standings
 
 
-def validate_foundation() -> None:
+def normalize_player_name(value: str) -> str:
+    text = str(value or "").strip()
+
+    text = unicodedata.normalize(
+        "NFKD",
+        text,
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if not unicodedata.combining(char)
+    )
+
+    text = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        text.lower(),
+    )
+
+    return " ".join(
+        text.split()
+    )
+
+
+def parse_number(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    if text in {
+        "",
+        "-",
+        "--",
+    }:
+        return None
+
+    text = text.replace(
+        ",",
+        "",
+    )
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def get_mlb_json(
+    path: str,
+    params: dict[str, Any] | None = None,
+    attempts: int = 5,
+) -> dict[str, Any]:
+    url = MLB_BASE + path
+
+    if params:
+        url += (
+            "?"
+            + urllib.parse.urlencode(
+                params
+            )
+        )
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent":
+                "MLF-League-Health-Analysis/1.0",
+        },
+    )
+
+    last_error: Exception | None = None
+
+    for attempt in range(
+        1,
+        attempts + 1,
+    ):
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=45,
+            ) as response:
+                return json.load(
+                    response
+                )
+
+        except Exception as exc:
+            last_error = exc
+
+            if attempt < attempts:
+                time.sleep(
+                    min(
+                        2 ** attempt,
+                        10,
+                    )
+                )
+
+    raise RuntimeError(
+        f"MLB API request failed: {url}"
+    ) from last_error
+
+
+def exact_name_candidates(
+    contract_name: str,
+) -> list[dict[str, Any]]:
+    if contract_name in DIRECT_MLBAM:
+        return [
+            {
+                "mlbam_id":
+                    DIRECT_MLBAM[
+                        contract_name
+                    ],
+                "full_name":
+                    contract_name,
+                "direct_override":
+                    True,
+            }
+        ]
+
+    search_name = PLAYER_NAME_ALIASES.get(
+        contract_name,
+        contract_name,
+    )
+
+    payload = get_mlb_json(
+        "/people/search",
+        {
+            "names": search_name,
+        },
+    )
+
+    target = normalize_player_name(
+        search_name
+    )
+
+    candidates = []
+
+    for person in payload.get(
+        "people",
+        [],
+    ):
+        person_id = person.get(
+            "id"
+        )
+
+        full_name = str(
+            person.get(
+                "fullName"
+            )
+            or ""
+        ).strip()
+
+        if not person_id:
+            continue
+
+        if (
+            normalize_player_name(
+                full_name
+            )
+            != target
+        ):
+            continue
+
+        candidates.append(
+            {
+                "mlbam_id":
+                    int(person_id),
+                "full_name":
+                    full_name,
+                "direct_override":
+                    False,
+            }
+        )
+
+    return candidates
+
+
+def load_year_by_year(
+    mlbam_id: int,
+    group: str,
+) -> dict[int, dict[str, Any]]:
+    payload = get_mlb_json(
+        f"/people/{mlbam_id}/stats",
+        {
+            "stats":
+                "yearByYear",
+            "group":
+                group,
+        },
+    )
+
+    by_season: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for block in payload.get(
+        "stats",
+        [],
+    ):
+        for split in block.get(
+            "splits",
+            [],
+        ):
+            season_text = str(
+                split.get(
+                    "season"
+                )
+                or ""
+            )
+
+            if not season_text.isdigit():
+                continue
+
+            season = int(
+                season_text
+            )
+
+            stat = (
+                split.get(
+                    "stat"
+                )
+                or {}
+            )
+
+            if season not in by_season:
+                by_season[
+                    season
+                ] = stat
+                continue
+
+            old_games = (
+                parse_number(
+                    by_season[
+                        season
+                    ].get(
+                        "gamesPlayed"
+                    )
+                )
+                or 0
+            )
+
+            new_games = (
+                parse_number(
+                    stat.get(
+                        "gamesPlayed"
+                    )
+                )
+                or 0
+            )
+
+            if new_games > old_games:
+                by_season[
+                    season
+                ] = stat
+
+    return by_season
+
+
+def hitting_activity(
+    stat: dict[str, Any] | None,
+) -> bool:
+    if not stat:
+        return False
+
+    games = (
+        parse_number(
+            stat.get(
+                "gamesPlayed"
+            )
+        )
+        or 0
+    )
+
+    plate_appearances = (
+        parse_number(
+            stat.get(
+                "plateAppearances"
+            )
+        )
+        or 0
+    )
+
+    at_bats = (
+        parse_number(
+            stat.get(
+                "atBats"
+            )
+        )
+        or 0
+    )
+
+    return (
+        games > 0
+        or plate_appearances > 0
+        or at_bats > 0
+    )
+
+
+def pitching_activity(
+    stat: dict[str, Any] | None,
+) -> bool:
+    if not stat:
+        return False
+
+    games = parse_number(
+        stat.get(
+            "gamesPitched"
+        )
+    )
+
+    if games is None:
+        games = parse_number(
+            stat.get(
+                "gamesPlayed"
+            )
+        )
+
+    innings = (
+        parse_number(
+            stat.get(
+                "inningsPitched"
+            )
+        )
+        or 0
+    )
+
+    return (
+        (games or 0) > 0
+        or innings > 0
+    )
+
+
+def validate_historical_identity(
+    controlled_rows: list[dict[str, Any]],
+) -> None:
+    print()
+    print("=" * 76)
+    print(
+        "MLF HISTORICAL IDENTITY "
+        "VALIDATION"
+    )
+    print("=" * 76)
+
+    names = sorted(
+        {
+            row["player_name"]
+            for row in controlled_rows
+        },
+        key=normalize_player_name,
+    )
+
+    print(
+        f"DISTINCT_CONTRACT_NAMES="
+        f"{len(names)}"
+    )
+
+    if (
+        len(names)
+        != EXPECTED_DISTINCT_CONTRACT_NAMES
+    ):
+        raise RuntimeError(
+            "Distinct contract-name invariant "
+            "failed. Expected "
+            f"{EXPECTED_DISTINCT_CONTRACT_NAMES}, "
+            f"found {len(names)}."
+        )
+
+    candidate_cache: dict[
+        str,
+        list[dict[str, Any]],
+    ] = {}
+
+    for index, name in enumerate(
+        names,
+        start=1,
+    ):
+        candidate_cache[
+            name
+        ] = exact_name_candidates(
+            name
+        )
+
+        if (
+            index % 100 == 0
+            or index == len(names)
+        ):
+            print(
+                f"IDENTITY_SEARCH_PROGRESS="
+                f"{index}/{len(names)}"
+            )
+
+        time.sleep(0.02)
+
+    mlbam_ids = sorted(
+        {
+            candidate["mlbam_id"]
+            for candidates
+            in candidate_cache.values()
+            for candidate in candidates
+        }
+    )
+
+    print(
+        f"DISTINCT_CANDIDATE_MLBAM_IDS="
+        f"{len(mlbam_ids)}"
+    )
+
+    stats_cache: dict[
+        int,
+        dict[str, dict[int, dict[str, Any]]],
+    ] = {}
+
+    for index, mlbam_id in enumerate(
+        mlbam_ids,
+        start=1,
+    ):
+        hitting = load_year_by_year(
+            mlbam_id,
+            "hitting",
+        )
+
+        pitching = load_year_by_year(
+            mlbam_id,
+            "pitching",
+        )
+
+        stats_cache[
+            mlbam_id
+        ] = {
+            "hitting":
+                hitting,
+            "pitching":
+                pitching,
+        }
+
+        if (
+            index % 50 == 0
+            or index == len(mlbam_ids)
+        ):
+            print(
+                f"MLB_STAT_PROGRESS="
+                f"{index}/{len(mlbam_ids)}"
+            )
+
+        time.sleep(0.02)
+
+    statuses = Counter()
+    ambiguous_rows = []
+    exception_rows = []
+
+    for row in controlled_rows:
+        contract_name = row[
+            "player_name"
+        ]
+
+        season = row[
+            "season_year"
+        ]
+
+        candidates = candidate_cache.get(
+            contract_name,
+            [],
+        )
+
+        active_candidates = []
+
+        for candidate in candidates:
+            mlbam_id = candidate[
+                "mlbam_id"
+            ]
+
+            cache = stats_cache[
+                mlbam_id
+            ]
+
+            hit_stat = cache[
+                "hitting"
+            ].get(
+                season
+            )
+
+            pitch_stat = cache[
+                "pitching"
+            ].get(
+                season
+            )
+
+            if (
+                hitting_activity(
+                    hit_stat
+                )
+                or pitching_activity(
+                    pitch_stat
+                )
+            ):
+                active_candidates.append(
+                    candidate
+                )
+
+        if contract_name in DIRECT_MLBAM:
+            selected_id = DIRECT_MLBAM[
+                contract_name
+            ]
+
+            direct_active = any(
+                candidate[
+                    "mlbam_id"
+                ] == selected_id
+                for candidate
+                in active_candidates
+            )
+
+            if direct_active:
+                status = (
+                    "RESOLVED_ACTIVE_DIRECT"
+                )
+            else:
+                status = (
+                    "RESOLVED_NO_ACTIVITY_DIRECT"
+                )
+
+        elif len(active_candidates) == 1:
+            status = "RESOLVED_ACTIVE"
+
+        elif len(active_candidates) > 1:
+            status = "AMBIGUOUS_ACTIVE"
+
+        elif len(candidates) == 1:
+            status = "RESOLVED_NO_ACTIVITY"
+
+        elif len(candidates) == 0:
+            status = "NO_IDENTITY_MATCH"
+
+        else:
+            status = (
+                "MULTIPLE_IDS_NO_ACTIVITY"
+            )
+
+        statuses[
+            status
+        ] += 1
+
+        if status == "AMBIGUOUS_ACTIVE":
+            ambiguous_rows.append(
+                {
+                    "season_year":
+                        season,
+                    "owner_name":
+                        row["owner_name"],
+                    "player_name":
+                        contract_name,
+                    "candidates":
+                        candidates,
+                }
+            )
+
+        if status not in {
+            "RESOLVED_ACTIVE",
+            "RESOLVED_ACTIVE_DIRECT",
+        }:
+            exception_rows.append(
+                {
+                    "season_year":
+                        season,
+                    "owner_name":
+                        row["owner_name"],
+                    "player_name":
+                        contract_name,
+                    "identity_status":
+                        status,
+                    "candidate_count":
+                        len(candidates),
+                }
+            )
+
+    print()
+    print(
+        "IDENTITY_STATUS_COUNTS="
+    )
+
+    for status in sorted(
+        statuses
+    ):
+        print(
+            f"{status}="
+            f"{statuses[status]}"
+        )
+
+    active_count = (
+        statuses[
+            "RESOLVED_ACTIVE"
+        ]
+        + statuses[
+            "RESOLVED_ACTIVE_DIRECT"
+        ]
+    )
+
+    print(
+        f"RESOLVED_ACTIVE_PLAYER_SEASONS="
+        f"{active_count}"
+    )
+
+    print(
+        f"NON_ACTIVE_OR_UNRESOLVED_PLAYER_SEASONS="
+        f"{len(controlled_rows) - active_count}"
+    )
+
+    print()
+    print(
+        "IDENTITY_EXCEPTION_SAMPLE="
+    )
+
+    for row in exception_rows[:30]:
+        print(
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+
+    print()
+    print(
+        f"AMBIGUOUS_ACTIVE_COUNT="
+        f"{len(ambiguous_rows)}"
+    )
+
+    if ambiguous_rows:
+        for row in ambiguous_rows:
+            print(
+                "AMBIGUOUS_ACTIVE="
+                + json.dumps(
+                    row,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+
+        raise RuntimeError(
+            "Historical identity validation "
+            "found active ambiguities."
+        )
+
+    print()
+    print(
+        "HISTORICAL_IDENTITY_VALIDATION=PASS"
+    )
+
+
+def validate_foundation() -> tuple[
+    list[dict[str, Any]],
+    dict[tuple[int, str], int],
+]:
     print()
     print("=" * 76)
     print(
@@ -532,9 +1227,18 @@ def validate_foundation() -> None:
         "FOUNDATION_VALIDATION=PASS"
     )
 
+    return controlled_rows, standings
+
 
 def main() -> None:
-    validate_foundation()
+    (
+        controlled_rows,
+        _standings,
+    ) = validate_foundation()
+
+    validate_historical_identity(
+        controlled_rows
+    )
 
 
 if __name__ == "__main__":
