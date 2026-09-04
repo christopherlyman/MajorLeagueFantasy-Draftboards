@@ -393,6 +393,10 @@ def render_pick_controls(state: DraftState) -> None:
     current_qos = _compute_current_qos_from_log(predraft_qos_current, state.pick_log)
 
     current_pick_id = state.clock.current_pick_id
+    if not current_pick_id:
+        st.info("Draft complete.")
+        return
+
     current_pick = state.picks[current_pick_id]
 
     if not _is_pick_open_for_live_draft(current_pick):
@@ -590,6 +594,10 @@ def render_mobile_pick(state: DraftState) -> None:
     )
 
     current_pick_id = state.clock.current_pick_id
+    if not current_pick_id:
+        st.info("Draft complete.")
+        return
+
     current_pick = state.picks[current_pick_id]
     on_clock_team = state.teams.get(current_pick.owner_team_key)
     hhmm = _clock_hhmm(state)
