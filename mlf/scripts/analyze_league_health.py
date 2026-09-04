@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import re
 import subprocess
 import time
@@ -92,6 +93,16 @@ DIRECT_MLBAM = {
     "Jose Ramirez": 608070,
     "Will Smith": 669257,
     "Jose Miranda": 669304,
+}
+
+
+# Explicit fantasy-role labels for historical two-way assets.
+FANTASY_GROUP_OVERRIDES = {
+    "Brendan McKay (p)": "pitching",
+    "Shohei Ohtani (B)": "hitting",
+    "Shohei Ohtani (bat)": "hitting",
+    "Shohei Ohtani (P)": "pitching",
+    "Shohei Ohtani (pitch)": "pitching",
 }
 
 
@@ -522,6 +533,8 @@ def exact_name_candidates(
                     ],
                 "full_name":
                     contract_name,
+                "primary_position":
+                    "",
                 "direct_override":
                     True,
             }
@@ -577,6 +590,18 @@ def exact_name_candidates(
                     int(person_id),
                 "full_name":
                     full_name,
+                "primary_position":
+                    str(
+                        (
+                            person.get(
+                                "primaryPosition"
+                            )
+                            or {}
+                        ).get(
+                            "abbreviation"
+                        )
+                        or ""
+                    ).upper(),
                 "direct_override":
                     False,
             }
@@ -743,7 +768,10 @@ def pitching_activity(
 
 def validate_historical_identity(
     controlled_rows: list[dict[str, Any]],
-) -> None:
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    dict[int, dict[str, dict[int, dict[str, Any]]]],
+]:
     print()
     print("=" * 76)
     print(
@@ -1057,6 +1085,1361 @@ def validate_historical_identity(
         "HISTORICAL_IDENTITY_VALIDATION=PASS"
     )
 
+    return candidate_cache, stats_cache
+
+
+def ip_to_outs(value: Any) -> int:
+    if value is None:
+        return 0
+
+    text = str(value).strip()
+
+    if not text or text == "-":
+        return 0
+
+    if "." not in text:
+        return int(text) * 3
+
+    whole, fraction = text.split(
+        ".",
+        1,
+    )
+
+    whole_value = int(
+        whole or 0
+    )
+
+    digit = (
+        fraction[:1]
+        if fraction
+        else "0"
+    )
+
+    if digit not in {
+        "0",
+        "1",
+        "2",
+    }:
+        raise ValueError(
+            f"Invalid baseball IP value: {value!r}"
+        )
+
+    return (
+        whole_value * 3
+        + int(digit)
+    )
+
+
+def infer_fantasy_group(
+    contract_name: str,
+    primary_position: str,
+    hitting_stat: dict[str, Any] | None,
+    pitching_stat: dict[str, Any] | None,
+) -> str | None:
+    override = FANTASY_GROUP_OVERRIDES.get(
+        contract_name
+    )
+
+    if override:
+        return override
+
+    position = str(
+        primary_position
+        or ""
+    ).upper()
+
+    if position == "P":
+        return "pitching"
+
+    if position:
+        return "hitting"
+
+    hit_active = hitting_activity(
+        hitting_stat
+    )
+
+    pitch_active = pitching_activity(
+        pitching_stat
+    )
+
+    if hit_active and not pitch_active:
+        return "hitting"
+
+    if pitch_active and not hit_active:
+        return "pitching"
+
+    return None
+
+
+def percentile_ranks(
+    indexed_values: list[
+        tuple[int, float | None]
+    ],
+) -> dict[int, float]:
+    valid = []
+
+    for index, value in indexed_values:
+        if value is None:
+            continue
+
+        numeric = float(value)
+
+        if not math.isfinite(
+            numeric
+        ):
+            continue
+
+        valid.append(
+            (
+                index,
+                numeric,
+            )
+        )
+
+    result: dict[int, float] = {}
+
+    if not valid:
+        return result
+
+    valid.sort(
+        key=lambda item: item[1]
+    )
+
+    total = len(valid)
+    position = 0
+
+    while position < total:
+        end = position + 1
+
+        while (
+            end < total
+            and valid[end][1]
+            == valid[position][1]
+        ):
+            end += 1
+
+        average_rank = (
+            (position + 1)
+            + end
+        ) / 2.0
+
+        percentile = (
+            0.5
+            if total == 1
+            else (
+                average_rank - 1
+            ) / (
+                total - 1
+            )
+        )
+
+        for offset in range(
+            position,
+            end,
+        ):
+            result[
+                valid[offset][0]
+            ] = percentile
+
+        position = end
+
+    return result
+
+
+def pearson(
+    xs: list[float],
+    ys: list[float],
+) -> float | None:
+    if len(xs) != len(ys):
+        raise ValueError(
+            "Pearson inputs differ in length."
+        )
+
+    if len(xs) < 3:
+        return None
+
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+
+    numerator = sum(
+        (x - x_mean)
+        * (y - y_mean)
+        for x, y in zip(
+            xs,
+            ys,
+        )
+    )
+
+    x_denominator = math.sqrt(
+        sum(
+            (x - x_mean) ** 2
+            for x in xs
+        )
+    )
+
+    y_denominator = math.sqrt(
+        sum(
+            (y - y_mean) ** 2
+            for y in ys
+        )
+    )
+
+    if (
+        x_denominator == 0
+        or y_denominator == 0
+    ):
+        return None
+
+    return numerator / (
+        x_denominator
+        * y_denominator
+    )
+
+
+def average_ranks(
+    values: list[float],
+) -> list[float]:
+    indexed = list(
+        enumerate(values)
+    )
+
+    indexed.sort(
+        key=lambda item: item[1]
+    )
+
+    ranks: list[
+        float | None
+    ] = [
+        None
+    ] * len(values)
+
+    position = 0
+
+    while position < len(indexed):
+        end = position + 1
+
+        while (
+            end < len(indexed)
+            and indexed[end][1]
+            == indexed[position][1]
+        ):
+            end += 1
+
+        average_rank = (
+            (position + 1)
+            + end
+        ) / 2.0
+
+        for offset in range(
+            position,
+            end,
+        ):
+            original_index = (
+                indexed[offset][0]
+            )
+
+            ranks[
+                original_index
+            ] = average_rank
+
+        position = end
+
+    if any(
+        value is None
+        for value in ranks
+    ):
+        raise RuntimeError(
+            "Rank construction failed."
+        )
+
+    return [
+        float(value)
+        for value in ranks
+    ]
+
+
+def spearman(
+    xs: list[float],
+    ys: list[float],
+) -> float | None:
+    if len(xs) != len(ys):
+        raise ValueError(
+            "Spearman inputs differ in length."
+        )
+
+    if len(xs) < 3:
+        return None
+
+    return pearson(
+        average_ranks(xs),
+        average_ranks(ys),
+    )
+
+
+def derived_pitching_total_bases(
+    stat: dict[str, Any],
+) -> float:
+    supplied = parse_number(
+        stat.get(
+            "totalBases"
+        )
+    )
+
+    if supplied is not None:
+        return supplied
+
+    hits = (
+        parse_number(
+            stat.get(
+                "hits"
+            )
+        )
+        or 0.0
+    )
+
+    doubles = (
+        parse_number(
+            stat.get(
+                "doubles"
+            )
+        )
+        or 0.0
+    )
+
+    triples = (
+        parse_number(
+            stat.get(
+                "triples"
+            )
+        )
+        or 0.0
+    )
+
+    home_runs = (
+        parse_number(
+            stat.get(
+                "homeRuns"
+            )
+        )
+        or 0.0
+    )
+
+    singles = (
+        hits
+        - doubles
+        - triples
+        - home_runs
+    )
+
+    return (
+        singles
+        + 2.0 * doubles
+        + 3.0 * triples
+        + 4.0 * home_runs
+    )
+
+
+def build_player_quality_rows(
+    controlled_rows: list[dict[str, Any]],
+    candidate_cache: dict[
+        str,
+        list[dict[str, Any]],
+    ],
+    stats_cache: dict[
+        int,
+        dict[
+            str,
+            dict[int, dict[str, Any]],
+        ],
+    ],
+) -> list[dict[str, Any]]:
+    player_rows: list[
+        dict[str, Any]
+    ] = []
+
+    for source in controlled_rows:
+        contract_name = source[
+            "player_name"
+        ]
+
+        season = source[
+            "season_year"
+        ]
+
+        candidates = candidate_cache.get(
+            contract_name,
+            [],
+        )
+
+        active_candidates = []
+
+        for candidate in candidates:
+            mlbam_id = candidate[
+                "mlbam_id"
+            ]
+
+            cached = stats_cache[
+                mlbam_id
+            ]
+
+            hitting_stat = cached[
+                "hitting"
+            ].get(
+                season
+            )
+
+            pitching_stat = cached[
+                "pitching"
+            ].get(
+                season
+            )
+
+            if (
+                hitting_activity(
+                    hitting_stat
+                )
+                or pitching_activity(
+                    pitching_stat
+                )
+            ):
+                active_candidates.append(
+                    {
+                        **candidate,
+                        "hitting_stat":
+                            hitting_stat,
+                        "pitching_stat":
+                            pitching_stat,
+                    }
+                )
+
+        selected = None
+
+        if contract_name in DIRECT_MLBAM:
+            direct_id = DIRECT_MLBAM[
+                contract_name
+            ]
+
+            direct_matches = [
+                candidate
+                for candidate
+                in active_candidates
+                if candidate[
+                    "mlbam_id"
+                ] == direct_id
+            ]
+
+            if len(direct_matches) > 1:
+                raise RuntimeError(
+                    "Multiple direct active matches for "
+                    f"{contract_name!r}, {season}."
+                )
+
+            if len(direct_matches) == 1:
+                selected = direct_matches[0]
+
+        elif len(active_candidates) == 1:
+            selected = active_candidates[0]
+
+        elif len(active_candidates) > 1:
+            raise RuntimeError(
+                "Quality build reached unresolved "
+                "active identity for "
+                f"{contract_name!r}, {season}."
+            )
+
+        output = dict(source)
+
+        output.update(
+            {
+                "mlbam_id": None,
+                "mlb_activity": False,
+                "fantasy_group": None,
+                "role": None,
+                "quality_pct": None,
+                "elite": False,
+            }
+        )
+
+        if selected is None:
+            player_rows.append(
+                output
+            )
+            continue
+
+        hitting_stat = selected[
+            "hitting_stat"
+        ]
+
+        pitching_stat = selected[
+            "pitching_stat"
+        ]
+
+        fantasy_group = infer_fantasy_group(
+            contract_name,
+            selected.get(
+                "primary_position",
+                "",
+            ),
+            hitting_stat,
+            pitching_stat,
+        )
+
+        if fantasy_group is None:
+            raise RuntimeError(
+                "Could not determine fantasy group "
+                f"for {contract_name!r}, {season}, "
+                f"MLBAM {selected['mlbam_id']}."
+            )
+
+        output[
+            "mlbam_id"
+        ] = selected[
+            "mlbam_id"
+        ]
+
+        output[
+            "mlb_activity"
+        ] = True
+
+        output[
+            "fantasy_group"
+        ] = fantasy_group
+
+        if fantasy_group == "hitting":
+            stat = hitting_stat or {}
+
+            output[
+                "role"
+            ] = "B"
+
+            output.update(
+                {
+                    "ab":
+                        parse_number(
+                            stat.get(
+                                "atBats"
+                            )
+                        )
+                        or 0.0,
+                    "h":
+                        parse_number(
+                            stat.get(
+                                "hits"
+                            )
+                        )
+                        or 0.0,
+                    "r":
+                        parse_number(
+                            stat.get(
+                                "runs"
+                            )
+                        )
+                        or 0.0,
+                    "hr":
+                        parse_number(
+                            stat.get(
+                                "homeRuns"
+                            )
+                        )
+                        or 0.0,
+                    "rbi":
+                        parse_number(
+                            stat.get(
+                                "rbi"
+                            )
+                        )
+                        or 0.0,
+                    "sb":
+                        parse_number(
+                            stat.get(
+                                "stolenBases"
+                            )
+                        )
+                        or 0.0,
+                    "bb":
+                        parse_number(
+                            stat.get(
+                                "baseOnBalls"
+                            )
+                        )
+                        or 0.0,
+                    "k":
+                        parse_number(
+                            stat.get(
+                                "strikeOuts"
+                            )
+                        )
+                        or 0.0,
+                }
+            )
+
+        else:
+            stat = pitching_stat or {}
+
+            games = parse_number(
+                stat.get(
+                    "gamesPitched"
+                )
+            )
+
+            if games is None:
+                games = parse_number(
+                    stat.get(
+                        "gamesPlayed"
+                    )
+                )
+
+            games = games or 0.0
+
+            starts = (
+                parse_number(
+                    stat.get(
+                        "gamesStarted"
+                    )
+                )
+                or 0.0
+            )
+
+            outs_value = parse_number(
+                stat.get(
+                    "outs"
+                )
+            )
+
+            if outs_value is None:
+                outs = ip_to_outs(
+                    stat.get(
+                        "inningsPitched"
+                    )
+                )
+            else:
+                outs = int(
+                    round(
+                        outs_value
+                    )
+                )
+
+            innings = (
+                outs / 3.0
+            )
+
+            role = (
+                "SP"
+                if (
+                    starts >= 3
+                    and games > 0
+                    and (
+                        starts / games
+                    ) >= 0.40
+                )
+                else "RP"
+            )
+
+            output[
+                "role"
+            ] = role
+
+            output.update(
+                {
+                    "ip":
+                        innings,
+                    "games_started":
+                        starts,
+                    "wins":
+                        parse_number(
+                            stat.get(
+                                "wins"
+                            )
+                        )
+                        or 0.0,
+                    "pk":
+                        parse_number(
+                            stat.get(
+                                "strikeOuts"
+                            )
+                        )
+                        or 0.0,
+                    "saves":
+                        parse_number(
+                            stat.get(
+                                "saves"
+                            )
+                        )
+                        or 0.0,
+                    "holds":
+                        parse_number(
+                            stat.get(
+                                "holds"
+                            )
+                        )
+                        or 0.0,
+                    "era":
+                        parse_number(
+                            stat.get(
+                                "era"
+                            )
+                        ),
+                    "whip":
+                        parse_number(
+                            stat.get(
+                                "whip"
+                            )
+                        ),
+                    "ph":
+                        parse_number(
+                            stat.get(
+                                "hits"
+                            )
+                        )
+                        or 0.0,
+                    "pbb":
+                        parse_number(
+                            stat.get(
+                                "baseOnBalls"
+                            )
+                        )
+                        or 0.0,
+                    "earned_runs":
+                        parse_number(
+                            stat.get(
+                                "earnedRuns"
+                            )
+                        )
+                        or 0.0,
+                    "tb_allowed":
+                        derived_pitching_total_bases(
+                            stat
+                        ),
+                }
+            )
+
+        player_rows.append(
+            output
+        )
+
+    return player_rows
+
+
+def calculate_quality_percentiles(
+    player_rows: list[dict[str, Any]],
+) -> None:
+    role_groups: dict[
+        tuple[int, str],
+        list[int],
+    ] = defaultdict(list)
+
+    for index, row in enumerate(
+        player_rows
+    ):
+        if (
+            row["mlb_activity"]
+            and row["role"]
+        ):
+            role_groups[
+                (
+                    row["season_year"],
+                    row["role"],
+                )
+            ].append(index)
+
+    for (
+        season,
+        role,
+    ), indices in sorted(
+        role_groups.items()
+    ):
+        if role == "B":
+            total_h = sum(
+                player_rows[index]["h"]
+                for index in indices
+            )
+
+            total_ab = sum(
+                player_rows[index]["ab"]
+                for index in indices
+            )
+
+            baseline_avg = (
+                total_h / total_ab
+                if total_ab > 0
+                else 0.0
+            )
+
+            for index in indices:
+                row = player_rows[
+                    index
+                ]
+
+                row[
+                    "avg_impact"
+                ] = (
+                    row["h"]
+                    - baseline_avg
+                    * row["ab"]
+                )
+
+                row[
+                    "neg_k"
+                ] = -row["k"]
+
+            components = [
+                "r",
+                "hr",
+                "rbi",
+                "sb",
+                "bb",
+                "neg_k",
+                "avg_impact",
+            ]
+
+        else:
+            total_ip = sum(
+                player_rows[index][
+                    "ip"
+                ]
+                for index in indices
+            )
+
+            total_er = sum(
+                player_rows[index][
+                    "earned_runs"
+                ]
+                for index in indices
+            )
+
+            total_hits = sum(
+                player_rows[index][
+                    "ph"
+                ]
+                for index in indices
+            )
+
+            total_walks = sum(
+                player_rows[index][
+                    "pbb"
+                ]
+                for index in indices
+            )
+
+            total_tb = sum(
+                player_rows[index][
+                    "tb_allowed"
+                ]
+                for index in indices
+            )
+
+            baseline_era = (
+                total_er * 9.0
+                / total_ip
+                if total_ip > 0
+                else 0.0
+            )
+
+            baseline_whip = (
+                (
+                    total_hits
+                    + total_walks
+                )
+                / total_ip
+                if total_ip > 0
+                else 0.0
+            )
+
+            baseline_tb_per_ip = (
+                total_tb / total_ip
+                if total_ip > 0
+                else 0.0
+            )
+
+            for index in indices:
+                row = player_rows[
+                    index
+                ]
+
+                row[
+                    "svh"
+                ] = (
+                    row["saves"]
+                    + row["holds"]
+                )
+
+                row[
+                    "era_impact"
+                ] = (
+                    (
+                        baseline_era
+                        - row["era"]
+                    )
+                    * row["ip"]
+                    / 9.0
+                    if row["era"]
+                    is not None
+                    else None
+                )
+
+                row[
+                    "whip_impact"
+                ] = (
+                    (
+                        baseline_whip
+                        - row["whip"]
+                    )
+                    * row["ip"]
+                    if row["whip"]
+                    is not None
+                    else None
+                )
+
+                row[
+                    "tb_impact"
+                ] = (
+                    baseline_tb_per_ip
+                    * row["ip"]
+                    - row[
+                        "tb_allowed"
+                    ]
+                )
+
+            components = [
+                "wins",
+                "pk",
+                "ip",
+                "svh",
+                "era_impact",
+                "whip_impact",
+                "tb_impact",
+            ]
+
+        percentile_columns = []
+
+        for component in components:
+            column = (
+                component
+                + "_pct"
+            )
+
+            percentile_columns.append(
+                column
+            )
+
+            ranks = percentile_ranks(
+                [
+                    (
+                        index,
+                        player_rows[
+                            index
+                        ].get(
+                            component
+                        ),
+                    )
+                    for index in indices
+                ]
+            )
+
+            for index in indices:
+                player_rows[index][
+                    column
+                ] = ranks.get(
+                    index
+                )
+
+        for index in indices:
+            available = [
+                player_rows[
+                    index
+                ].get(
+                    column
+                )
+                for column
+                in percentile_columns
+                if player_rows[
+                    index
+                ].get(
+                    column
+                )
+                is not None
+            ]
+
+            if not available:
+                raise RuntimeError(
+                    "No quality components for "
+                    f"{season} {role}."
+                )
+
+            player_rows[index][
+                "quality_composite_raw"
+            ] = (
+                sum(available)
+                / len(available)
+            )
+
+        final_ranks = percentile_ranks(
+            [
+                (
+                    index,
+                    player_rows[
+                        index
+                    ].get(
+                        "quality_composite_raw"
+                    ),
+                )
+                for index in indices
+            ]
+        )
+
+        for index in indices:
+            quality = final_ranks.get(
+                index
+            )
+
+            player_rows[index][
+                "quality_pct"
+            ] = quality
+
+            player_rows[index][
+                "elite"
+            ] = (
+                quality is not None
+                and quality >= 0.75
+            )
+
+
+def build_franchise_quality_rows(
+    player_rows: list[dict[str, Any]],
+    standings: dict[
+        tuple[int, str],
+        int,
+    ],
+) -> list[dict[str, Any]]:
+    portfolios: dict[
+        tuple[int, str],
+        list[dict[str, Any]],
+    ] = defaultdict(list)
+
+    for row in player_rows:
+        portfolios[
+            (
+                row["season_year"],
+                row["owner_name"],
+            )
+        ].append(row)
+
+    result = []
+
+    for (
+        season,
+        owner,
+    ), finish_rank in sorted(
+        standings.items()
+    ):
+        assets = portfolios.get(
+            (
+                season,
+                owner,
+            ),
+            [],
+        )
+
+        active = [
+            row
+            for row in assets
+            if row.get(
+                "quality_pct"
+            )
+            is not None
+        ]
+
+        qualities = [
+            float(
+                row["quality_pct"]
+            )
+            for row in active
+        ]
+
+        elite = [
+            row
+            for row in active
+            if row.get(
+                "elite"
+            )
+        ]
+
+        result.append(
+            {
+                "season_year":
+                    season,
+                "owner_name":
+                    owner,
+                "finish_rank":
+                    finish_rank,
+                "top6":
+                    finish_rank <= 6,
+                "controlled_count":
+                    len(assets),
+                "active_count":
+                    len(active),
+                "nonproducing_count":
+                    (
+                        len(assets)
+                        - len(active)
+                    ),
+                "avg_active_quality":
+                    (
+                        sum(qualities)
+                        / len(qualities)
+                        if qualities
+                        else None
+                    ),
+                "realized_quality_sum":
+                    sum(qualities),
+                "elite_count":
+                    len(elite),
+                "elite_share":
+                    (
+                        len(elite)
+                        / len(active)
+                        if active
+                        else None
+                    ),
+            }
+        )
+
+    return result
+
+
+def print_quantity_quality_results(
+    player_rows: list[dict[str, Any]],
+    franchise_rows: list[dict[str, Any]],
+) -> None:
+    print()
+    print("=" * 76)
+    print(
+        "MLF REALIZED QUALITY VALIDATION"
+    )
+    print("=" * 76)
+
+    active_count = sum(
+        1
+        for row in player_rows
+        if row.get(
+            "quality_pct"
+        )
+        is not None
+    )
+
+    elite_count = sum(
+        1
+        for row in player_rows
+        if row.get(
+            "elite"
+        )
+    )
+
+    print(
+        f"QUALITY_PLAYER_SEASONS="
+        f"{active_count}"
+    )
+
+    print(
+        f"ELITE_PLAYER_SEASONS="
+        f"{elite_count}"
+    )
+
+    print(
+        f"FRANCHISE_SEASONS="
+        f"{len(franchise_rows)}"
+    )
+
+    if len(franchise_rows) != 144:
+        raise RuntimeError(
+            "Expected 144 quality "
+            "franchise-seasons."
+        )
+
+    role_counts = Counter(
+        (
+            row["season_year"],
+            row["role"],
+        )
+        for row in player_rows
+        if row.get(
+            "quality_pct"
+        )
+        is not None
+    )
+
+    print()
+    print(
+        "ACTIVE_ROLE_COUNTS="
+    )
+
+    for season in range(
+        2017,
+        2026,
+    ):
+        print(
+            f"{season} | "
+            f"B={role_counts[(season, 'B')]} | "
+            f"SP={role_counts[(season, 'SP')]} | "
+            f"RP={role_counts[(season, 'RP')]}"
+        )
+
+    print()
+    print("=" * 76)
+    print(
+        "PRIMARY QUANTITY / QUALITY RESULTS"
+    )
+    print("=" * 76)
+
+    metrics = [
+        "controlled_count",
+        "active_count",
+        "avg_active_quality",
+        "realized_quality_sum",
+        "elite_count",
+        "elite_share",
+    ]
+
+    for metric in metrics:
+        valid = [
+            row
+            for row in franchise_rows
+            if row[
+                metric
+            ] is not None
+        ]
+
+        values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+        ]
+
+        finishes = [
+            float(
+                row["finish_rank"]
+            )
+            for row in valid
+        ]
+
+        top6_values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+            if row["top6"]
+        ]
+
+        other_values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+            if not row["top6"]
+        ]
+
+        p_value = pearson(
+            values,
+            finishes,
+        )
+
+        s_value = spearman(
+            values,
+            finishes,
+        )
+
+        top6_avg = (
+            sum(top6_values)
+            / len(top6_values)
+        )
+
+        other_avg = (
+            sum(other_values)
+            / len(other_values)
+        )
+
+        print(
+            f"{metric} | "
+            f"n={len(valid)} | "
+            f"pearson_finish="
+            f"{p_value:.4f} | "
+            f"spearman_finish="
+            f"{s_value:.4f} | "
+            f"top6_avg="
+            f"{top6_avg:.4f} | "
+            f"non_top6_avg="
+            f"{other_avg:.4f}"
+        )
+
+    print()
+    print("=" * 76)
+    print(
+        "SEASON-BY-SEASON AVG QUALITY"
+    )
+    print("=" * 76)
+
+    for season in range(
+        2017,
+        2026,
+    ):
+        rows = [
+            row
+            for row in franchise_rows
+            if row[
+                "season_year"
+            ] == season
+            and row[
+                "avg_active_quality"
+            ] is not None
+        ]
+
+        top6 = [
+            row[
+                "avg_active_quality"
+            ]
+            for row in rows
+            if row["top6"]
+        ]
+
+        others = [
+            row[
+                "avg_active_quality"
+            ]
+            for row in rows
+            if not row["top6"]
+        ]
+
+        top6_avg = (
+            sum(top6)
+            / len(top6)
+        )
+
+        other_avg = (
+            sum(others)
+            / len(others)
+        )
+
+        direction = (
+            "TOP6_HIGHER"
+            if top6_avg > other_avg
+            else "TOP6_NOT_HIGHER"
+        )
+
+        print(
+            f"{season} | "
+            f"top6_avg_quality="
+            f"{top6_avg:.4f} | "
+            f"non_top6_avg_quality="
+            f"{other_avg:.4f} | "
+            f"{direction}"
+        )
+
+    print()
+    print(
+        "REALIZED_QUALITY_VALIDATION=PASS"
+    )
+
 
 def validate_foundation() -> tuple[
     list[dict[str, Any]],
@@ -1233,11 +2616,36 @@ def validate_foundation() -> tuple[
 def main() -> None:
     (
         controlled_rows,
-        _standings,
+        standings,
     ) = validate_foundation()
 
-    validate_historical_identity(
+    (
+        candidate_cache,
+        stats_cache,
+    ) = validate_historical_identity(
         controlled_rows
+    )
+
+    player_rows = build_player_quality_rows(
+        controlled_rows,
+        candidate_cache,
+        stats_cache,
+    )
+
+    calculate_quality_percentiles(
+        player_rows
+    )
+
+    franchise_rows = (
+        build_franchise_quality_rows(
+            player_rows,
+            standings,
+        )
+    )
+
+    print_quantity_quality_results(
+        player_rows,
+        franchise_rows,
     )
 
 
