@@ -3018,6 +3018,499 @@ def print_persistence_results(
     )
 
 
+def build_expiration_rows(
+    player_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_season_asset: dict[
+        tuple[int, tuple[str, str]],
+        dict[str, Any],
+    ] = {}
+
+    for row in player_rows:
+        key = (
+            row["season_year"],
+            controlled_asset_key(row),
+        )
+
+        if key in by_season_asset:
+            raise RuntimeError(
+                "Duplicate season/asset key "
+                f"during expiration analysis: {key!r}"
+            )
+
+        by_season_asset[key] = row
+
+    endpoints = []
+
+    for row in player_rows:
+        season = row[
+            "season_year"
+        ]
+
+        # A 2025 endpoint cannot be classified
+        # consistently without extending the
+        # frozen historical window into 2026.
+        if season >= 2025:
+            continue
+
+        years = row.get(
+            "years_remaining"
+        )
+
+        label = str(
+            row.get(
+                "contract_label"
+            )
+            or ""
+        ).strip().upper()
+
+        if not (
+            years == 1
+            or label == "FT"
+        ):
+            continue
+
+        endpoint_type = (
+            "FT"
+            if label == "FT"
+            else "YEAR_1"
+        )
+
+        asset_key = (
+            controlled_asset_key(
+                row
+            )
+        )
+
+        next_row = by_season_asset.get(
+            (
+                season + 1,
+                asset_key,
+            )
+        )
+
+        if next_row is None:
+            outcome = "NO_CONTROL"
+            next_owner = None
+            next_years = None
+            next_label = None
+
+        else:
+            next_owner = next_row[
+                "owner_name"
+            ]
+
+            next_years = next_row.get(
+                "years_remaining"
+            )
+
+            next_label = str(
+                next_row.get(
+                    "contract_label"
+                )
+                or ""
+            ).strip().upper()
+
+            if (
+                next_owner
+                != row["owner_name"]
+            ):
+                outcome = (
+                    "OTHER_FRANCHISE_CONTROLLED"
+                )
+
+            elif next_label == "FT":
+                outcome = (
+                    "SAME_FRANCHISE_FT"
+                )
+
+            else:
+                outcome = (
+                    "SAME_FRANCHISE_NEW_CONTRACT"
+                )
+
+        quality = row.get(
+            "quality_pct"
+        )
+
+        if quality is None:
+            quality_class = (
+                "NO_REALIZED_QUALITY"
+            )
+
+        elif row.get(
+            "elite"
+        ):
+            quality_class = "ELITE"
+
+        else:
+            quality_class = "NONELITE"
+
+        endpoints.append(
+            {
+                "season_year":
+                    season,
+                "owner_name":
+                    row["owner_name"],
+                "player_name":
+                    row["player_name"],
+                "quality_pct":
+                    quality,
+                "quality_class":
+                    quality_class,
+                "endpoint_type":
+                    endpoint_type,
+                "outcome":
+                    outcome,
+                "next_owner":
+                    next_owner,
+                "next_years":
+                    next_years,
+                "next_label":
+                    next_label,
+            }
+        )
+
+    if len(endpoints) != 335:
+        raise RuntimeError(
+            "Expiration endpoint invariant "
+            "failed. Expected 335, found "
+            f"{len(endpoints)}."
+        )
+
+    return endpoints
+
+
+def expiration_summary(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    outcomes = Counter(
+        row["outcome"]
+        for row in rows
+    )
+
+    same_franchise = (
+        outcomes[
+            "SAME_FRANCHISE_FT"
+        ]
+        + outcomes[
+            "SAME_FRANCHISE_NEW_CONTRACT"
+        ]
+    )
+
+    incumbent_break = (
+        outcomes[
+            "OTHER_FRANCHISE_CONTROLLED"
+        ]
+        + outcomes[
+            "NO_CONTROL"
+        ]
+    )
+
+    total = len(rows)
+
+    continuation_rate = (
+        same_franchise / total
+        if total
+        else None
+    )
+
+    break_rate = (
+        incumbent_break / total
+        if total
+        else None
+    )
+
+    return {
+        "total":
+            total,
+        "outcomes":
+            outcomes,
+        "same_franchise":
+            same_franchise,
+        "incumbent_break":
+            incumbent_break,
+        "continuation_rate":
+            continuation_rate,
+        "break_rate":
+            break_rate,
+    }
+
+
+def print_expiration_group(
+    label: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary = expiration_summary(
+        rows
+    )
+
+    print()
+    print(
+        f"{label}_ENDPOINTS="
+        f"{summary['total']}"
+    )
+
+    for outcome in (
+        "SAME_FRANCHISE_FT",
+        "SAME_FRANCHISE_NEW_CONTRACT",
+        "OTHER_FRANCHISE_CONTROLLED",
+        "NO_CONTROL",
+    ):
+        print(
+            f"{label}_{outcome}="
+            f"{summary['outcomes'][outcome]}"
+        )
+
+    print(
+        f"{label}_SAME_FRANCHISE_CONTINUATION="
+        f"{summary['same_franchise']}"
+    )
+
+    print(
+        f"{label}_INCUMBENT_CONTROL_BREAK="
+        f"{summary['incumbent_break']}"
+    )
+
+    continuation_rate = summary[
+        "continuation_rate"
+    ]
+
+    break_rate = summary[
+        "break_rate"
+    ]
+
+    if continuation_rate is not None:
+        print(
+            f"{label}_SAME_FRANCHISE_CONTINUATION_RATE="
+            f"{continuation_rate:.4f}"
+        )
+
+    if break_rate is not None:
+        print(
+            f"{label}_INCUMBENT_CONTROL_BREAK_RATE="
+            f"{break_rate:.4f}"
+        )
+
+    return summary
+
+
+def print_expiration_results(
+    endpoints: list[dict[str, Any]],
+) -> None:
+    print()
+    print("=" * 76)
+    print(
+        "EXPIRATION / ELITE RECIRCULATION"
+    )
+    print("=" * 76)
+
+    print(
+        f"EXPIRATION_ENDPOINTS="
+        f"{len(endpoints)}"
+    )
+
+    season_counts = Counter(
+        row["season_year"]
+        for row in endpoints
+    )
+
+    print()
+    print(
+        "EXPIRATION_ENDPOINTS_BY_SEASON="
+    )
+
+    for season in sorted(
+        season_counts
+    ):
+        print(
+            f"{season}="
+            f"{season_counts[season]}"
+        )
+
+    endpoint_type_counts = Counter(
+        row["endpoint_type"]
+        for row in endpoints
+    )
+
+    print()
+    print(
+        f"YEAR_1_ENDPOINTS="
+        f"{endpoint_type_counts['YEAR_1']}"
+    )
+
+    print(
+        f"FT_ENDPOINTS="
+        f"{endpoint_type_counts['FT']}"
+    )
+
+    overall = print_expiration_group(
+        "ALL",
+        endpoints,
+    )
+
+    elite_rows = [
+        row
+        for row in endpoints
+        if row[
+            "quality_class"
+        ] == "ELITE"
+    ]
+
+    nonelite_rows = [
+        row
+        for row in endpoints
+        if row[
+            "quality_class"
+        ] == "NONELITE"
+    ]
+
+    no_quality_rows = [
+        row
+        for row in endpoints
+        if row[
+            "quality_class"
+        ] == "NO_REALIZED_QUALITY"
+    ]
+
+    elite = print_expiration_group(
+        "ELITE",
+        elite_rows,
+    )
+
+    nonelite = print_expiration_group(
+        "NONELITE",
+        nonelite_rows,
+    )
+
+    print_expiration_group(
+        "NO_REALIZED_QUALITY",
+        no_quality_rows,
+    )
+
+    elite_rate = elite[
+        "continuation_rate"
+    ]
+
+    nonelite_rate = nonelite[
+        "continuation_rate"
+    ]
+
+    if (
+        elite_rate is not None
+        and nonelite_rate is not None
+    ):
+        continuation_difference_pp = (
+            elite_rate
+            - nonelite_rate
+        ) * 100.0
+
+        print()
+        print(
+            "ELITE_MINUS_NONELITE_"
+            "CONTINUATION_PP="
+            f"{continuation_difference_pp:.2f}"
+        )
+
+        if nonelite_rate > 0:
+            continuation_ratio = (
+                elite_rate
+                / nonelite_rate
+            )
+
+            print(
+                "ELITE_VS_NONELITE_"
+                "CONTINUATION_RATIO="
+                f"{continuation_ratio:.3f}"
+            )
+
+    elite_break_rate = elite[
+        "break_rate"
+    ]
+
+    nonelite_break_rate = nonelite[
+        "break_rate"
+    ]
+
+    if (
+        elite_break_rate is not None
+        and nonelite_break_rate is not None
+    ):
+        break_difference_pp = (
+            elite_break_rate
+            - nonelite_break_rate
+        ) * 100.0
+
+        print(
+            "ELITE_MINUS_NONELITE_"
+            "INCUMBENT_BREAK_PP="
+            f"{break_difference_pp:.2f}"
+        )
+
+    ft_rows = [
+        row
+        for row in endpoints
+        if row[
+            "endpoint_type"
+        ] == "FT"
+    ]
+
+    ft_new_contract = sum(
+        1
+        for row in ft_rows
+        if row[
+            "outcome"
+        ]
+        == "SAME_FRANCHISE_NEW_CONTRACT"
+    )
+
+    year1_rows = [
+        row
+        for row in endpoints
+        if row[
+            "endpoint_type"
+        ] == "YEAR_1"
+    ]
+
+    year1_to_ft = sum(
+        1
+        for row in year1_rows
+        if row[
+            "outcome"
+        ] == "SAME_FRANCHISE_FT"
+    )
+
+    print()
+    print(
+        f"FT_TO_SAME_FRANCHISE_NEW_CONTRACT="
+        f"{ft_new_contract}"
+    )
+
+    print(
+        f"YEAR1_TO_SAME_FRANCHISE_FT="
+        f"{year1_to_ft}"
+    )
+
+    print()
+    print(
+        "ELITE_ENDPOINT_SAMPLE="
+    )
+
+    for row in elite_rows[:20]:
+        print(
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+
+    print()
+    print(
+        "EXPIRATION_RECIRCULATION_VALIDATION=PASS"
+    )
+
+
 def validate_foundation() -> tuple[
     list[dict[str, Any]],
     dict[tuple[int, str], int],
@@ -3236,6 +3729,16 @@ def main() -> None:
     print_persistence_results(
         persistence_rows,
         retention,
+    )
+
+    expiration_rows = (
+        build_expiration_rows(
+            player_rows
+        )
+    )
+
+    print_expiration_results(
+        expiration_rows
     )
 
 
