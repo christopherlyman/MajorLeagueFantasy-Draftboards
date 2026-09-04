@@ -21,7 +21,6 @@ from draftboard.data.draft_runtime import (
 )
 from draftboard.domain.clock import compute_clock_status
 from draftboard.domain.models import Position, PickLogEntry, PickSlot, Team
-from draftboard.state.autosave import try_load_autosave, save_autosave
 from draftboard.state.runtime import get_draft_key, get_league_key, get_postgres_dsn, get_season_year
 from draftboard.state.store import DraftClock, DraftState, has_state, init_state, get_state, replace_state, set_current_pick
 from draftboard.state.init_restore import (
@@ -264,34 +263,6 @@ def _load_predraft_qo_player_maps_raw(dsn: str, league_key: str, season_year: in
     return predraft_qo_keys, predraft_qo_level_by_player, predraft_qo_team_by_player
 
 
-def _sync_qo_placeholders(state: DraftState, predraft: dict[str, dict[int, str]], current: dict[str, dict[int, str]]) -> None:
-    """
-    Fill grey placeholders for QO rounds based on *current* QOs.
-
-    Canonical rule:
-    - QO-round slot ownership follows the current pick owner (pick.owner_team_key).
-    - Column identity remains fixed by draft_order_team_keys_by_slot.
-    - We do not re-derive QO-round ownership from slot order here because QO-round
-      draft slots are tradable assets.
-    """
-
-    for pick in state.picks.values():
-        if int(getattr(pick, "round_number", 0) or 0) > 5:
-            continue
-
-        # if it's a real pick, never touch it
-        if getattr(pick, "selected_ts_iso", None) is not None:
-            continue
-
-        team_key = str(getattr(pick, "owner_team_key", "") or "").strip()
-        if not team_key or team_key not in (state.teams or {}):
-            continue
-
-        lvl = int(getattr(pick, "round_number", 0) or 0)
-
-        pk = current.get(team_key, {}).get(lvl)
-        pick.selected_player_key = pk if pk else None
-        pick.selected_ts_iso = None
 
 
 def _is_standard_keeper_placeholder_pick(pick: PickSlot) -> bool:
@@ -425,19 +396,21 @@ def render_pick_controls(state: DraftState) -> None:
     current_pick = state.picks[current_pick_id]
 
     if not _is_pick_open_for_live_draft(current_pick):
-        next_pick_id = _next_open_pick_id(state, after_pick_id=current_pick_id)
-        if next_pick_id:
-            state.clock.current_pick_id = next_pick_id
-            save_autosave(state)
-            st.rerun()
-        else:
-            state.clock.is_running = False
-            state.clock.pick_started_ts_iso = None
-            state.clock.pick_paused_ts_iso = None
-            state.clock.elapsed_paused_seconds = 0
-            save_autosave(state)
+        next_pick_id = _next_open_pick_id(
+            state,
+            after_pick_id=current_pick_id,
+        )
+
+        if next_pick_id is None:
             st.info("Draft complete.")
             return
+
+        st.error(
+            "Relational draft runtime inconsistency: "
+            f"current pick {current_pick_id} is not open; "
+            f"canonical next open pick is {next_pick_id}."
+        )
+        return
 
     current_pick_id = state.clock.current_pick_id
     current_pick = state.picks[current_pick_id]
@@ -2696,7 +2669,6 @@ def render_app() -> None:
                 predraft_qos[ntk][int(lvl)] = str(pk)
 
     current_qos = _compute_current_qos_from_log(predraft_qos, state.pick_log)
-    _sync_qo_placeholders(state, predraft_qos, current_qos)
     qo_ph = 0
     for ps in state.picks.values():
         if ps.round_number <= 5 and ps.selected_ts_iso is None and ps.selected_player_key:
@@ -3015,16 +2987,8 @@ def render_app() -> None:
         render_commissioner_actions(state, auth_ctx=auth_ctx)
 
     from pathlib import Path
-    from draftboard.state.autosave import AUTOSAVE_PATH
-
-    autosave_p = Path(str(AUTOSAVE_PATH))
-    autosave_info = ""
-    try:
-        if autosave_p.exists():
-            autosave_info = f" • Autosave: {autosave_p.stat().st_size} bytes @ {datetime.fromtimestamp(autosave_p.stat().st_mtime).isoformat(timespec='seconds')}"
-        else:
-            autosave_info = " • Autosave: (missing)"
-    except Exception:
-        autosave_info = " • Autosave: (unreadable)"
-
-    st.caption(f"Version: {APP_VERSION} • Last modified: {_last_modified_iso(APP_FILE_PATH)}{autosave_info}")
+    st.caption(
+        f"Version: {APP_VERSION} "
+        f"| Last modified: {_last_modified_iso(APP_FILE_PATH)} "
+        "| State: PostgreSQL relational"
+    )
