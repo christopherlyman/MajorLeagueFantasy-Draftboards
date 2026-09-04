@@ -2441,6 +2441,583 @@ def print_quantity_quality_results(
     )
 
 
+def controlled_asset_key(
+    row: dict[str, Any],
+) -> tuple[str, str]:
+    contract_name = row[
+        "player_name"
+    ]
+
+    canonical_name = (
+        PLAYER_NAME_ALIASES.get(
+            contract_name,
+            contract_name,
+        )
+    )
+
+    # Ohtani batting/pitching and other explicit
+    # two-way labels remain distinct fantasy assets.
+    group_marker = (
+        FANTASY_GROUP_OVERRIDES.get(
+            contract_name,
+            ""
+        )
+    )
+
+    return (
+        normalize_player_name(
+            canonical_name
+        ),
+        group_marker,
+    )
+
+
+def build_persistence_rows(
+    player_rows: list[dict[str, Any]],
+    franchise_rows: list[dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, int],
+]:
+    controlled_lookup: dict[
+        tuple[int, str, tuple[str, str]],
+        dict[str, Any],
+    ] = {}
+
+    portfolios: dict[
+        tuple[int, str],
+        list[dict[str, Any]],
+    ] = defaultdict(list)
+
+    for row in player_rows:
+        season = row[
+            "season_year"
+        ]
+
+        owner = row[
+            "owner_name"
+        ]
+
+        asset_key = controlled_asset_key(
+            row
+        )
+
+        lookup_key = (
+            season,
+            owner,
+            asset_key,
+        )
+
+        if lookup_key in controlled_lookup:
+            raise RuntimeError(
+                "Duplicate normalized controlled "
+                "asset key: "
+                f"{lookup_key!r}"
+            )
+
+        controlled_lookup[
+            lookup_key
+        ] = row
+
+        portfolios[
+            (
+                season,
+                owner,
+            )
+        ].append(row)
+
+    franchise_by_key = {
+        (
+            row["season_year"],
+            row["owner_name"],
+        ): row
+        for row in franchise_rows
+    }
+
+    persistence_rows = []
+
+    for (
+        season,
+        owner,
+    ), franchise in sorted(
+        franchise_by_key.items()
+    ):
+        current_assets = portfolios.get(
+            (
+                season,
+                owner,
+            ),
+            [],
+        )
+
+        current_elite = [
+            row
+            for row in current_assets
+            if row.get(
+                "elite"
+            )
+        ]
+
+        persistent_2 = None
+        persistent_3 = None
+        retained_prior_elite_count = None
+        prior_elite_count = None
+        retained_prior_elite_share = None
+        new_elite_count = None
+
+        if season >= 2018:
+            prior_assets = portfolios.get(
+                (
+                    season - 1,
+                    owner,
+                ),
+                [],
+            )
+
+            prior_elite = [
+                row
+                for row in prior_assets
+                if row.get(
+                    "elite"
+                )
+            ]
+
+            prior_elite_count = len(
+                prior_elite
+            )
+
+            retained_prior_elite_count = sum(
+                1
+                for row in prior_elite
+                if (
+                    season,
+                    owner,
+                    controlled_asset_key(
+                        row
+                    ),
+                )
+                in controlled_lookup
+            )
+
+            if prior_elite_count > 0:
+                retained_prior_elite_share = (
+                    retained_prior_elite_count
+                    / prior_elite_count
+                )
+
+            persistent_2 = 0
+
+            for row in current_elite:
+                asset_key = (
+                    controlled_asset_key(
+                        row
+                    )
+                )
+
+                prior_row = controlled_lookup.get(
+                    (
+                        season - 1,
+                        owner,
+                        asset_key,
+                    )
+                )
+
+                if (
+                    prior_row is not None
+                    and prior_row.get(
+                        "elite"
+                    )
+                ):
+                    persistent_2 += 1
+
+            new_elite_count = (
+                len(current_elite)
+                - persistent_2
+            )
+
+        if season >= 2019:
+            persistent_3 = 0
+
+            for row in current_elite:
+                asset_key = (
+                    controlled_asset_key(
+                        row
+                    )
+                )
+
+                prior_row = controlled_lookup.get(
+                    (
+                        season - 1,
+                        owner,
+                        asset_key,
+                    )
+                )
+
+                two_year_row = (
+                    controlled_lookup.get(
+                        (
+                            season - 2,
+                            owner,
+                            asset_key,
+                        )
+                    )
+                )
+
+                if (
+                    prior_row is not None
+                    and two_year_row is not None
+                    and prior_row.get(
+                        "elite"
+                    )
+                    and two_year_row.get(
+                        "elite"
+                    )
+                ):
+                    persistent_3 += 1
+
+        persistence_rows.append(
+            {
+                **franchise,
+                "prior_elite_count":
+                    prior_elite_count,
+                "retained_prior_elite_count":
+                    retained_prior_elite_count,
+                "retained_prior_elite_share":
+                    retained_prior_elite_share,
+                "persistent_elite_2":
+                    persistent_2,
+                "persistent_elite_3":
+                    persistent_3,
+                "new_elite_count":
+                    new_elite_count,
+            }
+        )
+
+    retention = {
+        "elite_opportunities": 0,
+        "elite_retained": 0,
+        "nonelite_opportunities": 0,
+        "nonelite_retained": 0,
+    }
+
+    for row in player_rows:
+        season = row[
+            "season_year"
+        ]
+
+        if season >= 2025:
+            continue
+
+        if row.get(
+            "quality_pct"
+        ) is None:
+            continue
+
+        owner = row[
+            "owner_name"
+        ]
+
+        asset_key = controlled_asset_key(
+            row
+        )
+
+        retained = (
+            (
+                season + 1,
+                owner,
+                asset_key,
+            )
+            in controlled_lookup
+        )
+
+        if row.get(
+            "elite"
+        ):
+            retention[
+                "elite_opportunities"
+            ] += 1
+
+            if retained:
+                retention[
+                    "elite_retained"
+                ] += 1
+
+        else:
+            retention[
+                "nonelite_opportunities"
+            ] += 1
+
+            if retained:
+                retention[
+                    "nonelite_retained"
+                ] += 1
+
+    return (
+        persistence_rows,
+        retention,
+    )
+
+
+def print_persistence_results(
+    persistence_rows: list[dict[str, Any]],
+    retention: dict[str, int],
+) -> None:
+    print()
+    print("=" * 76)
+    print(
+        "PERSISTENT ELITE CONTROL"
+    )
+    print("=" * 76)
+
+    elite_opportunities = retention[
+        "elite_opportunities"
+    ]
+
+    elite_retained = retention[
+        "elite_retained"
+    ]
+
+    nonelite_opportunities = retention[
+        "nonelite_opportunities"
+    ]
+
+    nonelite_retained = retention[
+        "nonelite_retained"
+    ]
+
+    elite_retention_rate = (
+        elite_retained
+        / elite_opportunities
+        if elite_opportunities
+        else None
+    )
+
+    nonelite_retention_rate = (
+        nonelite_retained
+        / nonelite_opportunities
+        if nonelite_opportunities
+        else None
+    )
+
+    print(
+        f"ELITE_NEXT_YEAR_OPPORTUNITIES="
+        f"{elite_opportunities}"
+    )
+
+    print(
+        f"ELITE_NEXT_YEAR_SAME_OWNER="
+        f"{elite_retained}"
+    )
+
+    print(
+        f"ELITE_NEXT_YEAR_RETENTION_RATE="
+        f"{elite_retention_rate:.4f}"
+    )
+
+    print(
+        f"NONELITE_NEXT_YEAR_OPPORTUNITIES="
+        f"{nonelite_opportunities}"
+    )
+
+    print(
+        f"NONELITE_NEXT_YEAR_SAME_OWNER="
+        f"{nonelite_retained}"
+    )
+
+    print(
+        f"NONELITE_NEXT_YEAR_RETENTION_RATE="
+        f"{nonelite_retention_rate:.4f}"
+    )
+
+    elite_minus_nonelite_retention_pp = (
+        elite_retention_rate
+        - nonelite_retention_rate
+    ) * 100.0
+
+    print(
+        f"ELITE_MINUS_NONELITE_RETENTION_PP="
+        f"{elite_minus_nonelite_retention_pp:.2f}"
+    )
+
+    print()
+    print(
+        "PERSISTENCE VS FINISH="
+    )
+
+    metrics = [
+        "persistent_elite_2",
+        "persistent_elite_3",
+        "retained_prior_elite_count",
+        "retained_prior_elite_share",
+        "new_elite_count",
+    ]
+
+    for metric in metrics:
+        valid = [
+            row
+            for row in persistence_rows
+            if row[
+                metric
+            ] is not None
+        ]
+
+        values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+        ]
+
+        finishes = [
+            float(
+                row["finish_rank"]
+            )
+            for row in valid
+        ]
+
+        top6_values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+            if row["top6"]
+        ]
+
+        other_values = [
+            float(
+                row[metric]
+            )
+            for row in valid
+            if not row["top6"]
+        ]
+
+        p_value = pearson(
+            values,
+            finishes,
+        )
+
+        s_value = spearman(
+            values,
+            finishes,
+        )
+
+        top6_avg = (
+            sum(top6_values)
+            / len(top6_values)
+            if top6_values
+            else None
+        )
+
+        other_avg = (
+            sum(other_values)
+            / len(other_values)
+            if other_values
+            else None
+        )
+
+        p_text = (
+            f"{p_value:.4f}"
+            if p_value is not None
+            else "NA"
+        )
+
+        s_text = (
+            f"{s_value:.4f}"
+            if s_value is not None
+            else "NA"
+        )
+
+        top6_text = (
+            f"{top6_avg:.4f}"
+            if top6_avg is not None
+            else "NA"
+        )
+
+        other_text = (
+            f"{other_avg:.4f}"
+            if other_avg is not None
+            else "NA"
+        )
+
+        print(
+            f"{metric} | "
+            f"n={len(valid)} | "
+            f"pearson_finish={p_text} | "
+            f"spearman_finish={s_text} | "
+            f"top6_avg={top6_text} | "
+            f"non_top6_avg={other_text}"
+        )
+
+    print()
+    print(
+        "SEASON-BY-SEASON PERSISTENT_ELITE_2="
+    )
+
+    for season in range(
+        2018,
+        2026,
+    ):
+        rows = [
+            row
+            for row in persistence_rows
+            if row[
+                "season_year"
+            ] == season
+            and row[
+                "persistent_elite_2"
+            ] is not None
+        ]
+
+        top6 = [
+            row[
+                "persistent_elite_2"
+            ]
+            for row in rows
+            if row["top6"]
+        ]
+
+        others = [
+            row[
+                "persistent_elite_2"
+            ]
+            for row in rows
+            if not row["top6"]
+        ]
+
+        top6_avg = (
+            sum(top6)
+            / len(top6)
+        )
+
+        other_avg = (
+            sum(others)
+            / len(others)
+        )
+
+        direction = (
+            "TOP6_HIGHER"
+            if top6_avg > other_avg
+            else (
+                "EQUAL"
+                if top6_avg
+                == other_avg
+                else "TOP6_LOWER"
+            )
+        )
+
+        print(
+            f"{season} | "
+            f"top6_avg={top6_avg:.4f} | "
+            f"non_top6_avg={other_avg:.4f} | "
+            f"{direction}"
+        )
+
+    print()
+    print(
+        "PERSISTENT_ELITE_VALIDATION=PASS"
+    )
+
+
 def validate_foundation() -> tuple[
     list[dict[str, Any]],
     dict[tuple[int, str], int],
@@ -2646,6 +3223,19 @@ def main() -> None:
     print_quantity_quality_results(
         player_rows,
         franchise_rows,
+    )
+
+    (
+        persistence_rows,
+        retention,
+    ) = build_persistence_rows(
+        player_rows,
+        franchise_rows,
+    )
+
+    print_persistence_results(
+        persistence_rows,
+        retention,
     )
 
 
