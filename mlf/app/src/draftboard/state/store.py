@@ -74,6 +74,14 @@ def init_state(state: DraftState) -> None:
         st.session_state[SESSION_KEY] = state
 
 
+def replace_state(state: DraftState) -> None:
+    """
+    Replace only the DraftState object while preserving all other
+    Streamlit session values.
+    """
+    st.session_state[SESSION_KEY] = state
+
+
 def set_commissioner_mode(is_on: bool) -> None:
     s = get_state()
     s.commissioner_mode = is_on

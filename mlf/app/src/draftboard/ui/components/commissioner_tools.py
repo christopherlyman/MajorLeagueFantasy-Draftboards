@@ -19,9 +19,24 @@ from draftboard.state.runtime import (
     get_season_year,
 )
 
-from draftboard.domain.clock import compute_clock_status, start_pick_clock
-from draftboard.state.autosave import save_autosave
-from draftboard.state.store import DraftState, set_current_pick
+from draftboard.data.draft_projection import load_draft_state_projection
+from draftboard.data.draft_runtime import (
+    apply_trade_assets_atomic,
+    delete_contract_override_atomic,
+    delete_draft_selection_atomic,
+    delete_prospect_tag_atomic,
+    rebase_draft_order_atomic,
+    replace_prospect_tag_atomic,
+    reset_draft_atomic,
+    set_current_pick_atomic,
+    transfer_active_contract_atomic,
+    transfer_draft_pick_atomic,
+    update_draft_clock_atomic,
+    upsert_contract_override_atomic,
+    upsert_prospect_tag_atomic,
+)
+from draftboard.domain.clock import compute_clock_status
+from draftboard.state.store import DraftState, replace_state
 
 
 
@@ -44,6 +59,210 @@ def _get_league_key() -> str:
 
 def _get_season_year() -> int:
     return get_season_year()
+
+
+
+def _refresh_relational_state(
+    state: DraftState,
+) -> DraftState:
+    """
+    Reload canonical MLF draft facts after a relational mutation.
+
+    The caller's DraftState object is refreshed in place so code already
+    holding this reference cannot continue rendering stale draft facts.
+    """
+    refreshed = load_draft_state_projection(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+        base_state=state,
+    )
+
+    for field_name in DraftState.__dataclass_fields__:
+        setattr(
+            state,
+            field_name,
+            getattr(
+                refreshed,
+                field_name,
+            ),
+        )
+
+    replace_state(state)
+
+    return state
+
+
+def _refresh_relational_runtime_caches(
+    state: DraftState,
+) -> None:
+    """
+    Refresh transitional Streamlit contract caches from mlf.* truth.
+
+    These caches remain UI conveniences only. They are not persistence.
+    """
+    league_key = _get_league_key()
+    season_year = _get_season_year()
+
+    rows: list[dict] = []
+
+    with psycopg.connect(_get_dsn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    yahoo_player_key,
+                    team_key,
+                    years_remaining
+                FROM mlf.v_active_contract
+                WHERE league_key = %s
+                  AND season_year = %s
+                ORDER BY yahoo_player_key
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            for (
+                player_key,
+                team_key,
+                years_remaining,
+            ) in cur.fetchall():
+                player_key = str(player_key)
+                team_key = str(team_key or "")
+
+                team = state.teams.get(
+                    team_key
+                )
+
+                rows.append(
+                    {
+                        "yahoo_player_key": player_key,
+                        "years_remaining": int(
+                            years_remaining
+                        ),
+                        "yahoo_team_key": team_key,
+                        "yahoo_team_name": (
+                            team.name
+                            if team is not None
+                            else team_key
+                        ),
+                    }
+                )
+
+    contract_years_map = {
+        str(row["yahoo_player_key"]):
+            int(row["years_remaining"])
+        for row in rows
+    }
+
+    pt_map = dict(
+        getattr(
+            state,
+            "pt_player_team_map",
+            {},
+        )
+        or {}
+    )
+
+    contracted_keys = (
+        set(contract_years_map)
+        | set(pt_map)
+    )
+
+    st.session_state["contract_rows"] = rows
+    st.session_state["contract_years_map"] = (
+        contract_years_map
+    )
+    st.session_state["contracted_keys"] = (
+        contracted_keys
+    )
+    st.session_state["pt_player_team_map"] = (
+        pt_map
+    )
+
+    # Retain old aliases during this transition only.
+    st.session_state["contract_rows_2026"] = rows
+    st.session_state["contracted_keys_2026"] = (
+        contracted_keys
+    )
+
+
+def _load_relational_contract_overrides(
+    *,
+    state: DraftState,
+    dsn: str,
+    league_key: str,
+    season_year: int,
+) -> list[dict]:
+    rows: list[dict] = []
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    yahoo_player_key,
+                    team_key,
+                    years_remaining,
+                    note,
+                    updated_at_utc
+                FROM mlf.contract_override
+                WHERE league_key = %s
+                  AND season_year = %s
+                ORDER BY
+                    updated_at_utc DESC,
+                    yahoo_player_key
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            for (
+                player_key,
+                team_key,
+                years_remaining,
+                note,
+                updated_at,
+            ) in cur.fetchall():
+                team_key_text = str(
+                    team_key or ""
+                )
+
+                team = state.teams.get(
+                    team_key_text
+                )
+
+                rows.append(
+                    {
+                        "yahoo_player_key": str(
+                            player_key
+                        ),
+                        "years_remaining": int(
+                            years_remaining
+                        ),
+                        "yahoo_team_key":
+                            team_key_text,
+                        "yahoo_team_name": (
+                            team.name
+                            if team is not None
+                            else team_key_text
+                        ),
+                        "note": str(
+                            note or ""
+                        ),
+                        "updated_at": (
+                            updated_at.isoformat()
+                            if updated_at is not None
+                            else ""
+                        ),
+                    }
+                )
+
+    return rows
 
 def _generate_temp_password(length: int = 12) -> str:
     import secrets
@@ -616,88 +835,89 @@ def _parse_qo_lines(raw: str, state: DraftState) -> tuple[list[tuple[str, int, s
     return rows, errors
 
 
-def reset_draft_state(state: DraftState) -> None:
-    for pick in state.picks.values():
-        pick.selected_player_key = None
-        pick.selected_ts_iso = None
+def reset_draft_state(
+    state: DraftState,
+) -> None:
+    reset_draft_atomic(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+    )
 
-    state.pick_log.clear()
-
-    if state.pick_order:
-        state.clock.current_pick_id = state.pick_order[0]
-
-    # Reset clock metadata too
-    state.clock.is_running = False
-    state.clock.pick_started_ts_iso = None
-    state.clock.pick_paused_ts_iso = None
-    state.clock.elapsed_paused_seconds = 0
-
-    save_autosave(state)
+    _refresh_relational_state(state)
 
 
-def delete_pick(state: DraftState, pick_id: str, rewind_clock: bool) -> None:
+def delete_pick(
+    state: DraftState,
+    pick_id: str,
+    rewind_clock: bool,
+) -> None:
     if pick_id not in state.picks:
         return
 
-    pick = state.picks[pick_id]
-    pick.selected_player_key = None
-    pick.selected_ts_iso = None
+    delete_draft_selection_atomic(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+        pick_id=pick_id,
+        rewind_clock=bool(
+            rewind_clock
+        ),
+    )
 
-    for i in range(len(state.pick_log) - 1, -1, -1):
-        if state.pick_log[i].pick_id == pick_id:
-            state.pick_log.pop(i)
-            break
-
-    if rewind_clock:
-        state.clock.current_pick_id = pick_id
-
-    save_autosave(state)
+    _refresh_relational_state(state)
 
 
-def _pause_clock(state: DraftState) -> None:
+def _pause_clock(
+    state: DraftState,
+) -> None:
     if state.clock.pick_started_ts_iso is None:
         return
+
     if state.clock.pick_paused_ts_iso is not None:
         return
 
-    # Capture elapsed so pause truly freezes across refresh
-    status = compute_clock_status(
-        is_running=state.clock.is_running,
-        seconds_per_pick=state.clock.seconds_per_pick,
-        started_ts_iso=state.clock.pick_started_ts_iso,
-        paused_ts_iso=None,
-        elapsed_paused_seconds=state.clock.elapsed_paused_seconds,
+    update_draft_clock_atomic(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+        action="PAUSE",
     )
-    state.clock.elapsed_paused_seconds = int(status.elapsed_seconds)
 
-    state.clock.pick_paused_ts_iso = _utc_now_iso()
-    state.clock.is_running = False
-    save_autosave(state)
+    _refresh_relational_state(state)
 
 
-def _resume_clock(state: DraftState) -> None:
+def _resume_clock(
+    state: DraftState,
+) -> None:
     if state.clock.pick_started_ts_iso is None:
         return
+
     if state.clock.pick_paused_ts_iso is None:
         return
 
-    # Start a new running segment "now"; keep elapsed_paused_seconds accumulated.
-    state.clock.pick_started_ts_iso = _utc_now_iso()
-    state.clock.pick_paused_ts_iso = None
-    state.clock.is_running = True
-    save_autosave(state)
+    update_draft_clock_atomic(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+        action="RESUME",
+    )
+
+    _refresh_relational_state(state)
 
 
-def _start_clock_if_needed(state: DraftState) -> None:
-    # Start from fresh if never started
-    if state.clock.pick_started_ts_iso is None:
-        state.clock.elapsed_paused_seconds = 0
-        state.clock.pick_started_ts_iso = start_pick_clock()
+def _start_clock_if_needed(
+    state: DraftState,
+) -> None:
+    action = (
+        "RESUME"
+        if state.clock.pick_paused_ts_iso is not None
+        else "START"
+    )
 
-    # If it was paused, resume semantics
-    state.clock.pick_paused_ts_iso = None
-    state.clock.is_running = True
-    save_autosave(state)
+    update_draft_clock_atomic(
+        dsn=_get_dsn(),
+        draft_key=_get_draft_key(),
+        action=action,
+    )
+
+    _refresh_relational_state(state)
 
 
 def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
@@ -901,72 +1121,14 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     tk = slot_to_team.get(s, TEAM_UNASSIGNED)
                     order.append(str(tk) if tk else "")
 
-                # Save to state (canonical slot order)
-                state.draft_order_team_keys_by_slot = order
+                rebase_draft_order_atomic(
+                    dsn=_get_dsn(),
+                    draft_key=_get_draft_key(),
+                    team_keys=order,
+                )
 
-                # Rebase picks grid slot baselines so "TRADE" reflects real trades only.
-                # Deterministic rule:
-                # - We always rebase original_team_key to the new slot baseline (column identity).
-                # - We only move owner_team_key when the pick was NOT previously traded:
-                #     owner_team_key == original_team_key (pre-rebase).
-                picks_obj = (getattr(state, "picks", {}) or {})
-                new_slot_to_team = dict(slot_to_team)
-
-                # Apply rebasing for every pick (policy: reset STANDARD owners to new baseline)
-                for ps in picks_obj.values():
-
-                    # -------- dict path --------
-                    if isinstance(ps, dict):
-                        try:
-                            slot = int(ps.get("slot", 0) or 0)
-                            rnd = int(ps.get("round_number", 0) or 0)
-                        except Exception:
-                            continue
-                        if slot < 1 or slot > 16:
-                            continue
-
-                        new_tk = str(new_slot_to_team.get(slot, "") or "").strip()
-                        if not new_tk:
-                            continue
-
-                        prev_orig = str(ps.get("original_team_key", "") or "").strip()
-                        prev_owner = str(ps.get("owner_team_key", "") or "").strip()
-
-                        # Always rebase baseline to slot identity
-                        ps["original_team_key"] = new_tk
-
-                        # Preserve real traded picks.
-                        # If the pick was not traded before rebasing, move owner to the new baseline.
-                        if prev_owner == prev_orig:
-                            ps["owner_team_key"] = new_tk
-
-                        continue
-
-                    # -------- PickSlot object path --------
-                    try:
-                        slot = int(getattr(ps, "slot", 0) or 0)
-                        rnd = int(getattr(ps, "round_number", 0) or 0)
-                    except Exception:
-                        continue
-                    if slot < 1 or slot > 16:
-                        continue
-
-                    new_tk = str(new_slot_to_team.get(slot, "") or "").strip()
-                    if not new_tk:
-                        continue
-
-                    prev_orig = str(getattr(ps, "original_team_key", "") or "").strip()
-                    prev_owner = str(getattr(ps, "owner_team_key", "") or "").strip()
-
-                    # Always rebase baseline to slot identity
-                    setattr(ps, "original_team_key", new_tk)
-
-                    # Preserve real traded picks.
-                    # If the pick was not traded before rebasing, move owner to the new baseline.
-                    if prev_owner == prev_orig:
-                        setattr(ps, "owner_team_key", new_tk)
-
-                save_autosave(state)
+                _refresh_relational_state(state)
+                _refresh_relational_runtime_caches(state)
                 st.success("Draft order saved (slot order).")
                 st.rerun()
 
@@ -1121,7 +1283,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         "stderr": proc.stderr or "",
                     }
 
-                    save_autosave(state)
+                    _refresh_relational_runtime_caches(state)
 
                 # Show a short success toast before rerun (the receipt persists anyway)
                 st.success(f"Player universe refreshed and reloaded. Players: {before_n} → {after_n}")
@@ -1453,69 +1615,51 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                             }
                         )
 
-                trade_id = _insert_trade(
+                (
+                    n_contract_updates,
+                    n_pick_updates,
+                    keeper_assignments,
+                ) = apply_trade_assets_atomic(
                     dsn=dsn,
-                    league_key=league_key,
-                    season_year=season_year,
-                    created_by="commissioner",
-                    notes="",
+                    draft_key=_get_draft_key(),
+                    assets=asset_rows,
+                    note="commissioner_trade_builder",
                 )
-                n_assets = _insert_trade_assets(dsn=dsn, trade_id=trade_id, rows=asset_rows)
 
-                # Push ownership changes into existing canonical SSOT paths.
-                # - PLAYER with contract_years > 0 -> public.contract
-                # - PICK -> DraftBoard persisted state (owner_team_key only; columns remain fixed)
-                n_contract_updates = 0
-                n_pick_updates = 0
-                matched_pick_ids = []
-                missing_pick_ids = []
+                _refresh_relational_state(state)
+                _refresh_relational_runtime_caches(state)
 
-                for row in asset_rows:
-                    asset_type = str(row.get("asset_type") or "").strip().upper()
-                    asset_id = str(row.get("asset_id") or "").strip()
-                    to_team_key = str(row.get("to_team_key") or "").strip()
+                # Legacy receipt is audit/history only.
+                # Canonical MLF state has already committed successfully.
+                try:
+                    trade_id = _insert_trade(
+                        dsn=dsn,
+                        league_key=league_key,
+                        season_year=season_year,
+                        created_by="commissioner",
+                        notes="",
+                    )
 
-                    if not asset_id or not to_team_key:
-                        continue
+                    n_assets = _insert_trade_assets(
+                        dsn=dsn,
+                        trade_id=trade_id,
+                        rows=asset_rows,
+                    )
 
-                    if asset_type == "PLAYER":
-                        snapshot = row.get("snapshot") or {}
-                        years_remaining = int(snapshot.get("contract_years") or 0)
+                    st.success(
+                        f"Trade applied transactionally. trade_id={trade_id} "
+                        f"assets={n_assets} "
+                        f"contract_updates={n_contract_updates} "
+                        f"pick_updates={n_pick_updates} "
+                        f"keepers={keeper_assignments}"
+                    )
 
-                        if years_remaining > 0:
-                            n_contract_updates += _update_contract_team_key(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=asset_id,
-                                to_team_key=to_team_key,
-                                note=f"trade:{trade_id}",
-                            )
-                        continue
-
-                    if asset_type == "PICK":
-                        ps = (getattr(state, "picks", {}) or {}).get(asset_id)
-                        if not ps:
-                            missing_pick_ids.append(asset_id)
-                            continue
-
-                        matched_pick_ids.append(asset_id)
-
-                        if isinstance(ps, dict):
-                            ps["owner_team_key"] = to_team_key
-                            n_pick_updates += 1
-                        else:
-                            setattr(ps, "owner_team_key", to_team_key)
-                            n_pick_updates += 1
-
-                _refresh_contract_cache_into_session_state()
-                save_autosave(state)
-
-                st.success(
-                    f"Trade saved to DB. trade_id={trade_id} assets={n_assets} "
-                    f"contract_updates={n_contract_updates} pick_updates={n_pick_updates} "
-                    f"matched_picks={matched_pick_ids} missing_picks={missing_pick_ids}"
-                )
+                except Exception as receipt_exc:
+                    st.warning(
+                        "Canonical trade was applied successfully, "
+                        "but the legacy audit receipt failed: "
+                        f"{receipt_exc}"
+                    )
 
                 # Reset builder after successful write
                 st.session_state["trade_builder_v1"] = {
@@ -1802,22 +1946,34 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             c1, c2, c3 = st.columns([1, 1, 2])
             with c1:
                 if st.button("Add / Update PT", type="primary", key="pt_add_btn", disabled=(pt_player_key == "")):
-                    if dsn and current_pt_player_key:
-                        _delete_pt_player(dsn, league_key, season_year, current_pt_player_key)
-                    if dsn:
-                        _upsert_pt_player(dsn, league_key, season_year, pt_team_key, pt_player_key)
-                        state.pt_player_team_map = _load_pt_map(dsn, league_key, season_year)
+                    replace_prospect_tag_atomic(
+                        dsn=dsn,
+                        draft_key=_get_draft_key(),
+                        old_yahoo_player_key=current_pt_player_key or None,
+                        team_key=pt_team_key,
+                        new_yahoo_player_key=pt_player_key,
+                        note="commissioner",
+                    )
+
+                    _refresh_relational_state(state)
+                    _refresh_relational_runtime_caches(state)
+
                     st.success("PT saved.")
-                    save_autosave(state)
                     st.rerun()
 
             with c2:
                 if st.button("Remove PT", key="pt_remove_btn", disabled=(current_pt_player_key == "")):
-                    if dsn and current_pt_player_key:
-                        _delete_pt_player(dsn, league_key, season_year, current_pt_player_key)
-                        state.pt_player_team_map = _load_pt_map(dsn, league_key, season_year)
+                    if current_pt_player_key:
+                        delete_prospect_tag_atomic(
+                            dsn=dsn,
+                            draft_key=_get_draft_key(),
+                            yahoo_player_key=current_pt_player_key,
+                        )
+
+                        _refresh_relational_state(state)
+                        _refresh_relational_runtime_caches(state)
+
                     st.success("PT removed.")
-                    save_autosave(state)
                     st.rerun()
 
             with c3:
@@ -1994,42 +2150,57 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             with c1:
                 if st.button("Save Contract Action", type="primary", key="contract_override_save"):
                     if override_player_key:
+                        upsert_contract_override_atomic(
+                            dsn=dsn,
+                            draft_key=_get_draft_key(),
+                            yahoo_player_key=override_player_key,
+                            team_key=(
+                                None
+                                if mode == "Void contract (years=0)"
+                                else str(team_key)
+                            ),
+                            years_remaining=int(years),
+                            note=note,
+                        )
+
+                        _refresh_relational_state(state)
+                        _refresh_relational_runtime_caches(state)
+
                         if mode == "Void contract (years=0)":
-                            n = _void_contract_ssot(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=override_player_key,
-                                note=note or "voided",
+                            st.success(
+                                "Contract override void saved."
                             )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Contract voided in SSOT. rows_updated={n}. Contract cache refreshed.")
                         else:
-                            n = _upsert_contract_ssot(
-                                dsn=dsn,
-                                league_key=league_key,
-                                season_year=season_year,
-                                yahoo_player_key=override_player_key,
-                                years_remaining=int(years),
-                                team_key=yahoo_team_key,
-                                note=note,
+                            st.success(
+                                "Contract override saved."
                             )
-                            _refresh_contract_cache_into_session_state()
-                            st.success(f"Contract saved to SSOT. rows_written={n}. Contract cache refreshed.")
+
                         st.rerun()
                     else:
                         st.error("Select a player first.")
 
             with c2:
                 if st.button("Delete Override", key="contract_override_delete"):
-                    n = _delete_contract_override(dsn, league_key, season_year, override_player_key)
-                    _refresh_contract_cache_into_session_state()
-                    st.success(f"Deleted {n} override row(s). Contract cache refreshed.")
-                    st.rerun()
+                    if override_player_key:
+                        delete_contract_override_atomic(
+                            dsn=dsn,
+                            draft_key=_get_draft_key(),
+                            yahoo_player_key=override_player_key,
+                        )
+
+                        _refresh_relational_state(state)
+                        _refresh_relational_runtime_caches(state)
+
+                        st.success(
+                            "Contract override deleted."
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Select a player first.")
 
             with c3:
                 if st.button("Refresh contract cache only", key="contract_override_refresh_cache"):
-                    _refresh_contract_cache_into_session_state()
+                    _refresh_relational_runtime_caches(state)
                     st.success("Contract cache refreshed.")
                     st.rerun()
 
@@ -2037,7 +2208,12 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             st.subheader("Existing overrides")
 
             try:
-                rows = _load_contract_overrides(dsn, league_key, season_year)
+                rows = _load_relational_contract_overrides(
+                    state=state,
+                    dsn=dsn,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
             except Exception as e:
                 rows = []
                 st.error(f"Failed to load overrides: {e}")
@@ -2076,8 +2252,14 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             key="current_pick_select_commissioner_tools",
         )
         if new_pick != state.clock.current_pick_id:
-            set_current_pick(new_pick)
-            save_autosave(state)
+            set_current_pick_atomic(
+                dsn=_get_dsn(),
+                draft_key=_get_draft_key(),
+                pick_id=new_pick,
+            )
+
+            _refresh_relational_state(state)
+
             st.success(f"Current pick set to {new_pick}.")
             st.rerun()
 
@@ -2109,14 +2291,17 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             if st.button("Start Draft", type="primary", key="clock_start", disabled=not can_start):
                 _start_clock_if_needed(state)
                 st.success("Clock started.")
+                st.rerun()
         with c2:
             if st.button("Pause Clock", type="secondary", key="clock_pause", disabled=not can_pause):
                 _pause_clock(state)
                 st.success("Clock paused.")
+                st.rerun()
         with c3:
             if st.button("Resume Clock", type="secondary", key="clock_resume", disabled=not can_resume):
                 _resume_clock(state)
                 st.success("Clock resumed.")
+                st.rerun()
 
         st.write("")
 
@@ -2145,9 +2330,17 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             new_seconds = 24 * 3600
 
         if int(new_seconds) != int(state.clock.seconds_per_pick):
-            state.clock.seconds_per_pick = int(new_seconds)
-            save_autosave(state)
+            update_draft_clock_atomic(
+                dsn=_get_dsn(),
+                draft_key=_get_draft_key(),
+                action="SET_DURATION",
+                seconds_per_pick=int(new_seconds),
+            )
+
+            _refresh_relational_state(state)
+
             st.info("Pick duration updated.")
+            st.rerun()
 
         weekends = st.toggle(
             "Count weekends (Sat/Sun) toward the clock",
@@ -2155,9 +2348,17 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
             key="clock_weekends_count",
         )
         if bool(weekends) != bool(state.clock.weekends_count):
-            state.clock.weekends_count = bool(weekends)
-            save_autosave(state)
+            update_draft_clock_atomic(
+                dsn=_get_dsn(),
+                draft_key=_get_draft_key(),
+                action="SET_WEEKENDS",
+                weekends_count=bool(weekends),
+            )
+
+            _refresh_relational_state(state)
+
             st.info("Weekend rule updated.")
+            st.rerun()
 
         st.divider()
 
