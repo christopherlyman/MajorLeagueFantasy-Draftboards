@@ -92,7 +92,7 @@ def _refresh_relational_state(
     return state
 
 
-def _refresh_option_c_runtime_caches(
+def _refresh_relational_runtime_caches(
     state: DraftState,
 ) -> None:
     """
@@ -1128,7 +1128,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                 )
 
                 _refresh_relational_state(state)
-                _refresh_option_c_runtime_caches(state)
+                _refresh_relational_runtime_caches(state)
                 st.success("Draft order saved (slot order).")
                 st.rerun()
 
@@ -1283,7 +1283,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         "stderr": proc.stderr or "",
                     }
 
-                    _refresh_option_c_runtime_caches(state)
+                    _refresh_relational_runtime_caches(state)
 
                 # Show a short success toast before rerun (the receipt persists anyway)
                 st.success(f"Player universe refreshed and reloaded. Players: {before_n} → {after_n}")
@@ -1627,7 +1627,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                 )
 
                 _refresh_relational_state(state)
-                _refresh_option_c_runtime_caches(state)
+                _refresh_relational_runtime_caches(state)
 
                 # Legacy receipt is audit/history only.
                 # Canonical MLF state has already committed successfully.
@@ -1956,7 +1956,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                     )
 
                     _refresh_relational_state(state)
-                    _refresh_option_c_runtime_caches(state)
+                    _refresh_relational_runtime_caches(state)
 
                     st.success("PT saved.")
                     st.rerun()
@@ -1971,7 +1971,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                     st.success("PT removed.")
                     st.rerun()
@@ -2164,7 +2164,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                         if mode == "Void contract (years=0)":
                             st.success(
@@ -2189,7 +2189,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                         st.success(
                             "Contract override deleted."
@@ -2200,7 +2200,7 @@ def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] |
 
             with c3:
                 if st.button("Refresh contract cache only", key="contract_override_refresh_cache"):
-                    _refresh_option_c_runtime_caches(state)
+                    _refresh_relational_runtime_caches(state)
                     st.success("Contract cache refreshed.")
                     st.rerun()
 

@@ -1,8 +1,8 @@
--- MLF Option C - 001
+-- MLF Relational Migration - 001
 -- Dedicated MLF draft-domain foundation.
 --
 -- IMPORTANT:
---   * This file belongs to the isolated Option C rebuild.
+--   * This file belongs to the MLF relational rebuild.
 --   * Do not apply to production yet.
 --   * Existing public.* MLF data remains untouched.
 --   * Contracts, PT, QO, auth, clock, and atomic execution are

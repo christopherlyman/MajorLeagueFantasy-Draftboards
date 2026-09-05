@@ -1,4 +1,4 @@
--- MLF Option C - 002
+-- MLF Relational Migration - 002
 -- Canonical MLF player-control domain.
 --
 -- IMPORTANT:

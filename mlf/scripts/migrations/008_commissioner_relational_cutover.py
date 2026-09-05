@@ -11,7 +11,7 @@ ROOT = Path(sys.argv[1])
 
 MIGRATION = (
     ROOT
-    / "mlf/sql/option_c/008_mlf_atomic_trade_runtime.sql"
+    / "mlf/sql/migrations/008_mlf_atomic_trade_runtime.sql"
 )
 
 RUNTIME = (
@@ -982,7 +982,7 @@ def _refresh_relational_state(
     return state
 
 
-def _refresh_option_c_runtime_caches(
+def _refresh_relational_runtime_caches(
     state: DraftState,
 ) -> None:
     """
@@ -1279,7 +1279,7 @@ ui = regex_once(
                 )
 
                 _refresh_relational_state(state)
-                _refresh_option_c_runtime_caches(state)
+                _refresh_relational_runtime_caches(state)
 ''',
     "draft-order relational cutover",
 )
@@ -1295,7 +1295,7 @@ ui = replace_once(
 
                 # Show a short success toast before rerun (the receipt persists anyway)
 ''',
-    '''                    _refresh_option_c_runtime_caches(state)
+    '''                    _refresh_relational_runtime_caches(state)
 
                 # Show a short success toast before rerun (the receipt persists anyway)
 ''',
@@ -1331,7 +1331,7 @@ ui = regex_once(
                 )
 
                 _refresh_relational_state(state)
-                _refresh_option_c_runtime_caches(state)
+                _refresh_relational_runtime_caches(state)
 
                 # Legacy receipt is audit/history only.
                 # Canonical MLF state has already committed successfully.
@@ -1396,7 +1396,7 @@ ui = replace_once(
                     )
 
                     _refresh_relational_state(state)
-                    _refresh_option_c_runtime_caches(state)
+                    _refresh_relational_runtime_caches(state)
 
                     st.success("PT saved.")
                     st.rerun()
@@ -1423,7 +1423,7 @@ ui = replace_once(
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                     st.success("PT removed.")
                     st.rerun()
@@ -1459,7 +1459,7 @@ ui = regex_once(
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                         if mode == "Void contract (years=0)":
                             st.success(
@@ -1494,7 +1494,7 @@ ui = replace_once(
                         )
 
                         _refresh_relational_state(state)
-                        _refresh_option_c_runtime_caches(state)
+                        _refresh_relational_runtime_caches(state)
 
                         st.success(
                             "Contract override deleted."
@@ -1514,7 +1514,7 @@ ui = replace_once(
                     st.rerun()
 ''',
     '''                if st.button("Refresh contract cache only", key="contract_override_refresh_cache"):
-                    _refresh_option_c_runtime_caches(state)
+                    _refresh_relational_runtime_caches(state)
                     st.success("Contract cache refreshed.")
                     st.rerun()
 ''',
@@ -1784,4 +1784,4 @@ print(
     + COMMISSIONER.relative_to(ROOT).as_posix()
 )
 
-print("OPTION_C_008_PATCH_SOURCE=PASS")
+print("MLF_RELATIONAL_008_PATCH_SOURCE=PASS")
