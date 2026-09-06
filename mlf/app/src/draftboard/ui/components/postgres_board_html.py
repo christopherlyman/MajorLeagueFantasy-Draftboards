@@ -19,6 +19,33 @@ def _cell_label(row: dict[str, Any]) -> str:
     return f"{row['round_label']}.{int(row['slot_number'])}"
 
 
+def _baseball_position(raw: Any) -> tuple[str, str]:
+    """Return CSS position class and compact display label."""
+    value = str(raw or "").upper().strip()
+
+    # Be tolerant of future Yahoo variants such as SP/RP or LF/CF/RF.
+    token = value.replace("/", ",").split(",", 1)[0].strip()
+
+    if token in {"P", "SP", "RP"}:
+        return "p", token
+    if token in {"OF", "LF", "CF", "RF"}:
+        return "of", token
+    if token == "C":
+        return "c", "C"
+    if token == "1B":
+        return "1b", "1B"
+    if token == "2B":
+        return "2b", "2B"
+    if token == "3B":
+        return "3b", "3B"
+    if token == "SS":
+        return "ss", "SS"
+    if token in {"UTIL", "DH", "MI", "CI"}:
+        return "util", token
+
+    return "unknown", ""
+
+
 def _fetch_board_rows(dsn: str, draft_key: str) -> list[dict[str, Any]]:
     """Load the complete MLF board from canonical relational state."""
     sql = """
@@ -53,7 +80,7 @@ def _fetch_board_rows(dsn: str, draft_key: str) -> list[dict[str, Any]]:
             WHEN UPPER(COALESCE(dka.keeper_kind, '')) = 'CONTRACT'
                 THEN 'CONTRACT_PLACEHOLDER'
             WHEN UPPER(COALESCE(dka.keeper_kind, '')) = 'PT'
-                THEN 'KEEPER'
+                THEN 'PT_PLACEHOLDER'
             WHEN dka.keeper_kind IS NOT NULL
                 THEN UPPER(dka.keeper_kind)
             ELSE NULL
@@ -125,7 +152,7 @@ def _fetch_board_rows(dsn: str, draft_key: str) -> list[dict[str, Any]]:
 def render_postgres_board_html(
     dsn: str,
     draft_key: str,
-    min_col_px: int = 72,
+    min_col_px: int = 132,
     cell_h_px: int = 96,
 ) -> None:
     rows = _fetch_board_rows(dsn, draft_key)
@@ -142,6 +169,11 @@ def render_postgres_board_html(
             key=lambda x: int(x["slot_number"]),
         )
     ]
+
+    board_min_px = (
+        len(headers) * min_col_px
+        + max(0, len(headers) - 1) * 4
+    )
 
     by_round: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
@@ -162,11 +194,19 @@ def render_postgres_board_html(
     st.markdown(
         f"""
         <style>
-          .db-wrap {{ color: #111 !important; }}
+          .db-wrap {{
+            color: #111 !important;
+            width: 100%;
+            max-width: 100%;
+            overflow-x: auto;
+            overflow-y: visible;
+            padding-bottom: 8px;
+          }}
 
           .db-header {{
             display: grid;
             grid-template-columns: repeat({len(headers)}, minmax({min_col_px}px, 1fr));
+            min-width: {board_min_px}px;
             gap: 4px;
             position: sticky;
             top: 3.25rem;
@@ -184,16 +224,16 @@ def render_postgres_board_html(
             padding: 8px 10px;
             box-sizing: border-box;
             font-weight: 950;
-            font-size: clamp(0.95rem, 1.2vw, 1.12rem);
+            font-size: clamp(0.82rem, 0.95vw, 1.00rem);
             line-height: clamp(1.05rem, 1.4vw, 1.22rem);
-            height: 74px;
+            height: 84px;
             text-align: center;
             text-transform: uppercase;
             letter-spacing: -0.03em;
             text-shadow: 0 0 8px rgba(255, 121, 0, 0.24);
             box-shadow: inset 0 -4px 0 #D50A0A, 0 2px 8px rgba(0,0,0,0.24);
             display: -webkit-box;
-            -webkit-line-clamp: 2;
+            -webkit-line-clamp: 3;
             -webkit-box-orient: vertical;
             overflow: hidden;
           }}
@@ -201,6 +241,7 @@ def render_postgres_board_html(
           .db-grid {{
             display: grid;
             grid-template-columns: repeat({len(headers)}, minmax({min_col_px}px, 1fr));
+            min-width: {board_min_px}px;
             gap: 4px;
             align-items: stretch;
             padding: 8px 0 12px 0;
@@ -228,12 +269,14 @@ def render_postgres_board_html(
             border-color: #94A3B8;
           }}
 
-          .db-pos-qb {{ background: #FEF3C7; }}
-          .db-pos-rb {{ background: #DCFCE7; }}
-          .db-pos-wr {{ background: #DBEAFE; }}
-          .db-pos-te {{ background: #F3E8FF; }}
-          .db-pos-k  {{ background: #E0F2FE; }}
-          .db-pos-def {{ background: #FFE4E6; }}
+          .db-pos-p {{ background: #DBEAFE; }}
+          .db-pos-of {{ background: #DCFCE7; }}
+          .db-pos-c {{ background: #FEF3C7; }}
+          .db-pos-1b {{ background: #FEE2E2; }}
+          .db-pos-2b {{ background: #CCFBF1; }}
+          .db-pos-3b {{ background: #FFEDD5; }}
+          .db-pos-ss {{ background: #F3E8FF; }}
+          .db-pos-util {{ background: #E5E7EB; }}
           .db-pos-unknown {{ background: #E5E7EB; }}
 
           .db-tl {{
@@ -287,7 +330,7 @@ def render_postgres_board_html(
           }}
 
           .db-first {{
-            font-size: clamp(0.78rem, 1.05vw, 0.96rem);
+            font-size: clamp(0.74rem, 0.90vw, 0.90rem);
             font-weight: 800;
             line-height: 1.05em;
             max-width: 100%;
@@ -297,7 +340,7 @@ def render_postgres_board_html(
           }}
 
           .db-last {{
-            font-size: clamp(0.98rem, 1.35vw, 1.20rem);
+            font-size: clamp(0.90rem, 1.10vw, 1.10rem);
             font-weight: 950;
             line-height: 1.10em;
             max-width: 100%;
@@ -325,41 +368,53 @@ def render_postgres_board_html(
             text-shadow: 0 1px 2px rgba(0,0,0,0.58) !important;
           }}
 
-          /* Position palette: high contrast, readable, and distinct */
-          .db-pos-qb {{
-            background: #B91C1C !important;
-            color: #FFFFFF !important;
-            border-color: #450A0A !important;
-          }}
-
-          .db-pos-rb {{
-            background: #166534 !important;
-            color: #FFFFFF !important;
-            border-color: #052E16 !important;
-          }}
-
-          .db-pos-wr {{
+          /* Baseball position palette: high contrast and distinct */
+          .db-pos-p {{
             background: #1D4ED8 !important;
             color: #FFFFFF !important;
             border-color: #172554 !important;
           }}
 
-          .db-pos-te {{
-            background: #6D28D9 !important;
+          .db-pos-of {{
+            background: #166534 !important;
             color: #FFFFFF !important;
-            border-color: #2E1065 !important;
+            border-color: #052E16 !important;
           }}
 
-          .db-pos-k {{
+          .db-pos-c {{
             background: #B45309 !important;
             color: #FFFFFF !important;
             border-color: #451A03 !important;
           }}
 
-          .db-pos-def {{
-            background: #374151 !important;
+          .db-pos-1b {{
+            background: #B91C1C !important;
             color: #FFFFFF !important;
-            border-color: #030712 !important;
+            border-color: #450A0A !important;
+          }}
+
+          .db-pos-2b {{
+            background: #0F766E !important;
+            color: #FFFFFF !important;
+            border-color: #042F2E !important;
+          }}
+
+          .db-pos-3b {{
+            background: #C2410C !important;
+            color: #FFFFFF !important;
+            border-color: #431407 !important;
+          }}
+
+          .db-pos-ss {{
+            background: #6D28D9 !important;
+            color: #FFFFFF !important;
+            border-color: #2E1065 !important;
+          }}
+
+          .db-pos-util {{
+            background: #475569 !important;
+            color: #FFFFFF !important;
+            border-color: #0F172A !important;
           }}
 
           .db-pos-unknown {{
@@ -464,20 +519,9 @@ def render_postgres_board_html(
             if selected_name:
                 first, last = _split_name(selected_name)
 
-                raw_pos = str(row.get("selected_primary_position") or "").upper().strip()
-                if raw_pos in {"D/ST", "DST", "DEFENSE", "DEF"}:
-                    pos_key = "def"
-                elif raw_pos in {"QB", "RB", "WR", "TE", "K"}:
-                    pos_key = raw_pos.lower()
-                else:
-                    pos_key = "unknown"
-
-                if pos_key == "def":
-                    pos_label = "DEF"
-                elif pos_key in {"qb", "rb", "wr", "te", "k"}:
-                    pos_label = pos_key.upper()
-                else:
-                    pos_label = ""
+                pos_key, pos_label = _baseball_position(
+                    row.get("selected_primary_position")
+                )
 
                 if pos_label and traded:
                     cell_tl_html = f'<div class="db-tl">TRADE · {escape(pos_label)}</div>'
@@ -488,13 +532,17 @@ def render_postgres_board_html(
 
                 is_qo_placeholder = pick_kind == "QO_PLACEHOLDER"
                 is_ft_placeholder = pick_kind == "FT_PLACEHOLDER"
+                is_pt_placeholder = pick_kind == "PT_PLACEHOLDER"
                 is_contract_placeholder = pick_kind == "CONTRACT_PLACEHOLDER"
 
                 if is_qo_placeholder:
                     display_badge = "QO"
-                    cell_class = "db-cell db-cell-qo-placeholder"
+                    cell_class = f"db-cell db-cell-selected db-pos-{pos_key}"
                 elif is_ft_placeholder:
                     display_badge = "FT"
+                    cell_class = f"db-cell db-cell-selected db-pos-{pos_key}"
+                elif is_pt_placeholder:
+                    display_badge = "PT"
                     cell_class = f"db-cell db-cell-selected db-pos-{pos_key}"
                 elif is_contract_placeholder:
                     yrs = row.get("contract_years_remaining")
