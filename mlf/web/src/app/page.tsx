@@ -16,7 +16,7 @@ const DRAFT_KEY =
   "mlf_2026_preseason";
 
 const TEAM_COUNT = 16;
-const MIN_COLUMN_PX = 112;
+const MIN_COLUMN_PX = 128;
 const GRID_GAP_PX = 4;
 
 type PositionKey =
@@ -327,7 +327,7 @@ export default async function Home() {
             </h1>
 
             <p className={styles.subtitle}>
-              2026 MLF · 16 teams · 25 rounds
+              2026 MLF Â· 16 teams Â· 25 rounds
             </p>
           </div>
 
@@ -397,7 +397,7 @@ export default async function Home() {
                         const topLeft =
                           row.traded_flag
                             ? position.label
-                              ? `TRADE · ${position.label}`
+                              ? `TRADE Â· ${position.label}`
                               : "TRADE"
                             : position.label;
 

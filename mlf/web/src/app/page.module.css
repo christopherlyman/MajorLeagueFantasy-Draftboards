@@ -122,28 +122,28 @@
 }
 
 .content {
-  padding: 18px 0 32px;
+  padding: 12px 0 28px;
 }
 
 .titleRow {
-  min-height: 58px;
+  min-height: 48px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  padding: 0 16px 14px;
+  padding: 0 16px 10px;
 }
 
 .title {
   margin: 0;
-  font-size: 1.8rem;
+  font-size: 1.65rem;
   line-height: 1.1;
   font-weight: 900;
   letter-spacing: -0.025em;
 }
 
 .subtitle {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: #9098a5;
   font-size: 0.78rem;
 }
@@ -189,7 +189,7 @@
 }
 
 .teamHeader {
-  min-height: 76px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -204,8 +204,8 @@
       #252422 100%
     );
   color: #ffffff;
-  font-size: 0.78rem;
-  line-height: 1.02rem;
+  font-size: 0.76rem;
+  line-height: 1rem;
   font-weight: 950;
   text-align: center;
   text-transform: uppercase;
@@ -223,7 +223,7 @@
 }
 
 .card {
-  height: 96px;
+  height: 88px;
   position: relative;
   overflow: hidden;
   padding: 8px;
@@ -274,7 +274,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 13px 2px 15px;
+  padding: 11px 2px 13px;
   text-align: center;
 }
 
@@ -290,15 +290,15 @@
 }
 
 .firstName {
-  font-size: 0.73rem;
-  line-height: 0.92rem;
+  font-size: 0.76rem;
+  line-height: 0.94rem;
   font-weight: 750;
 }
 
 .lastName {
   margin-top: 1px;
-  font-size: 0.94rem;
-  line-height: 1.03rem;
+  font-size: 1rem;
+  line-height: 1.05rem;
   font-weight: 950;
   letter-spacing: -0.015em;
 }
@@ -435,10 +435,10 @@
   }
 
   .teamHeader {
-    min-height: 70px;
+    min-height: 64px;
   }
 
   .card {
-    height: 92px;
+    height: 88px;
   }
 }
