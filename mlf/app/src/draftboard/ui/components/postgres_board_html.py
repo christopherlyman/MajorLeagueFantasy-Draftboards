@@ -152,7 +152,7 @@ def _fetch_board_rows(dsn: str, draft_key: str) -> list[dict[str, Any]]:
 def render_postgres_board_html(
     dsn: str,
     draft_key: str,
-    min_col_px: int = 132,
+    min_col_px: int = 112,
     cell_h_px: int = 96,
 ) -> None:
     rows = _fetch_board_rows(dsn, draft_key)
@@ -185,13 +185,6 @@ def render_postgres_board_html(
     ]
 
     st.markdown(
-        """
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
         f"""
         <style>
           .db-wrap {{
@@ -208,10 +201,10 @@ def render_postgres_board_html(
             grid-template-columns: repeat({len(headers)}, minmax({min_col_px}px, 1fr));
             min-width: {board_min_px}px;
             gap: 4px;
-            position: sticky;
-            top: 3.25rem;
-            z-index: 20;
+            position: relative;
+            z-index: 1;
             background: linear-gradient(135deg, #0A0A08 0%, #34302B 62%, #5c1717 100%);
+            margin: 0;
             padding: 10px 0 12px 0;
             border-bottom: 3px solid #D50A0A;
           }}
