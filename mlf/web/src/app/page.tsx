@@ -16,8 +16,8 @@ const DRAFT_KEY =
   "mlf_2026_preseason";
 
 const TEAM_COUNT = 16;
-const MIN_COLUMN_PX = 128;
-const GRID_GAP_PX = 4;
+const SCROLL_COLUMN_PX = 106;
+const GRID_GAP_PX = 3;
 
 type PositionKey =
   | "p"
@@ -204,6 +204,144 @@ function groupByRound(
     );
 }
 
+function MobileBoard({
+  rounds,
+}: {
+  rounds: BoardRow[][];
+}) {
+  return (
+    <div className={styles.mobileBoard}>
+      {rounds.map((roundRows) => {
+        const roundNumber =
+          roundRows[0]?.round_number ?? 0;
+
+        const roundLabel =
+          roundRows[0]?.round_label ??
+          `R${roundNumber}`;
+
+        return (
+          <section
+            key={roundNumber}
+            className={styles.mobileRound}
+          >
+            <div className={styles.mobileRoundHeader}>
+              <span>{roundLabel}</span>
+
+              <span>
+                {roundRows.length} picks
+              </span>
+            </div>
+
+            <div className={styles.mobilePickList}>
+              {roundRows.map((row) => {
+                const name =
+                  row.selected_player_name ??
+                  "";
+
+                const position =
+                  baseballPosition(
+                    row.selected_primary_position,
+                  );
+
+                const badge =
+                  displayBadge(row);
+
+                const pickLabel =
+                  `${row.round_label}.${row.slot_number}`;
+
+                const owner =
+                  row.ownership_note ??
+                  row.current_owner_team_name ??
+                  "";
+
+                return (
+                  <article
+                    key={String(row.pick_id)}
+                    data-mobile-pick-id={String(
+                      row.pick_id,
+                    )}
+                    className={
+                      `${styles.mobilePick} ` +
+                      positionClass(
+                        position.key,
+                      )
+                    }
+                  >
+                    <div
+                      className={
+                        styles.mobilePickTop
+                      }
+                    >
+                      <span
+                        className={
+                          styles.mobilePickNumber
+                        }
+                      >
+                        {pickLabel}
+                      </span>
+
+                      <span
+                        className={
+                          styles.mobileTeam
+                        }
+                      >
+                        {row.column_team_name}
+                      </span>
+                    </div>
+
+                    <div
+                      className={
+                        styles.mobilePickMain
+                      }
+                    >
+                      <div
+                        className={
+                          styles.mobilePosition
+                        }
+                      >
+                        {position.label ||
+                          "—"}
+                      </div>
+
+                      <div
+                        className={
+                          styles.mobilePlayerName
+                        }
+                      >
+                        {name || "Open pick"}
+                      </div>
+
+                      {badge ? (
+                        <div
+                          className={
+                            styles.mobileAction
+                          }
+                        >
+                          {badge}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {row.traded_flag &&
+                    owner ? (
+                      <div
+                        className={
+                          styles.mobileOwner
+                        }
+                      >
+                        Traded · {owner}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
 export default async function Home() {
   const rows = await loadBoard(
     DRAFT_KEY,
@@ -247,18 +385,15 @@ export default async function Home() {
     }
   }
 
-  const boardMinWidth =
-    TEAM_COUNT * MIN_COLUMN_PX +
+  const scrollBoardMinWidth =
+    TEAM_COUNT * SCROLL_COLUMN_PX +
     (TEAM_COUNT - 1) * GRID_GAP_PX;
 
-  const gridStyle: CSSProperties = {
-    gridTemplateColumns:
-      `repeat(${TEAM_COUNT}, minmax(${MIN_COLUMN_PX}px, 1fr))`,
-  };
-
-  const canvasStyle: CSSProperties = {
-    minWidth: `${boardMinWidth}px`,
-  };
+  const boardStyle = {
+    "--team-count": TEAM_COUNT,
+    "--scroll-board-min-width":
+      `${scrollBoardMinWidth}px`,
+  } as CSSProperties;
 
   return (
     <main className={styles.appShell}>
@@ -327,7 +462,7 @@ export default async function Home() {
             </h1>
 
             <p className={styles.subtitle}>
-              2026 MLF Â· 16 teams Â· 25 rounds
+              2026 MLF Ã‚Â· 16 teams Ã‚Â· 25 rounds
             </p>
           </div>
 
@@ -336,14 +471,17 @@ export default async function Home() {
           </div>
         </div>
 
-        <div className={styles.boardScroller}>
+        <div
+          className={
+            `${styles.boardScroller} ${styles.desktopBoard}`
+          }
+        >
           <div
             className={styles.boardCanvas}
-            style={canvasStyle}
+            style={boardStyle}
           >
             <div
               className={styles.teamGrid}
-              style={gridStyle}
             >
               {headers.map((row) => (
                 <div
@@ -365,7 +503,6 @@ export default async function Home() {
                         .round_number
                     }
                     className={styles.roundGrid}
-                    style={gridStyle}
                   >
                     {roundRows.map(
                       (row) => {
@@ -397,7 +534,7 @@ export default async function Home() {
                         const topLeft =
                           row.traded_flag
                             ? position.label
-                              ? `TRADE Â· ${position.label}`
+                              ? `TRADE Ã‚Â· ${position.label}`
                               : "TRADE"
                             : position.label;
 
@@ -497,6 +634,8 @@ export default async function Home() {
             </div>
           </div>
         </div>
+
+        <MobileBoard rounds={rounds} />
       </section>
     </main>
   );
