@@ -31,7 +31,7 @@ from draftboard.state.init_restore import (
     _canon_team_key_from_mixed_key,
     ensure_initialized,
 )
-from draftboard.ui.components.board_html import render_board_html
+from draftboard.ui.components.postgres_board_html import render_postgres_board_html
 from draftboard.ui.components.commissioner_tools import render_commissioner_actions
 from draftboard.ui.components.draft_lottery import render_draft_lottery_tab
 from draftboard.ui.components.draft_statistics import (
@@ -2936,14 +2936,12 @@ def render_app() -> None:
             if debug_enabled:
                 st.sidebar.write("ORDER_HEALED:", False)
 
-        render_board_html(
-            state.picks,
-            state.teams,
-            state.players,
-            qo_placeholders=None,
-            draft_order_team_keys_by_slot=order,
-            pick_kind_by_pick_id=pick_kind_by_pick_id,
-            pt_player_keys=set((getattr(state, "pt_player_team_map", {}) or {}).keys()),
+        render_postgres_board_html(
+            dsn=dsn,
+            draft_key=os.environ.get(
+                "DRAFTBOARD_DRAFT_KEY",
+                "mlf_2026_preseason",
+            ),
         )
 
         with st.expander("Pick Log (details)", expanded=False):
