@@ -49,7 +49,7 @@ Potential differentiators are:
    - FT/QO behavior.
    - Asset recirculation and persistent competitive advantage.
 
-These differentiators remain subject to the Product Decision Gate below.
+These differentiators were retained through the resolved Product Decision Gate below.
 
 ## Commercialization Roadmap
 
@@ -101,8 +101,8 @@ Additional source archaeology or model refinement is justified only if a
 specific unresolved question could materially change the commercial product
 decision.
 
-The active workstream is now the Product Decision Gate and Commercial Product
-Decision Record.
+The Product Decision Gate is complete. The active workstream is now the Minimum
+Sellable Product specification.
 
 ### Stage 2 - Commercial Product Decision and Specification
 
@@ -110,21 +110,21 @@ Decision Record.
 
 Purpose:
 
-Convert the discovery evidence into one explicit build decision.
+Convert the discovery evidence into an explicit product decision and then an exact Minimum Sellable Product specification.
 
-The primary deliverable is a versioned **Commercial Product Decision Record**
-that freezes:
+The completed **Commercial Product Decision Record** freezes the following
+product-level decisions:
 
 - first target customer;
 - primary customer pain;
 - product positioning;
-- standardized contract-keeper rules;
+- sport-aware configuration philosophy and rule boundaries;
 - required versus configurable rules;
 - companion-platform strategy;
 - provider/API dependence;
 - Yahoo commercial-permission status;
 - import/manual fallback strategy;
-- minimum sellable feature set;
+- Minimum Sellable Product boundaries;
 - Trade Lab scope;
 - League Health scope;
 - onboarding model;
@@ -133,13 +133,13 @@ that freezes:
 - success criteria;
 - stop/pivot criteria.
 
-Current approximate completion: **50%**
+Current approximate completion: **75%**
 
 The supporting discovery research and MLF cross-validation are complete.
 
-The active Stage 2 task is now to convert that evidence into the versioned
-Commercial Product Decision Record. The stage remains at approximately 50%
-until that decision is explicitly frozen.
+The active Stage 2 task is now to convert the frozen product decision into the
+versioned Minimum Sellable Product specification. The stage remains at
+approximately 75% until that specification is explicitly frozen.
 
 ### Stage 3 - Build the Minimum Sellable Product
 
@@ -209,10 +209,10 @@ Current baseline:
 | Stage | Weight | Approx. Stage Completion | Approx. Earned Progress |
 | --- | ---: | ---: | ---: |
 | Evidence and Product Discovery | 25% | 100% | 25.0% |
-| Product Decision and Specification | 10% | 50% | 5.0% |
+| Product Decision and Specification | 10% | 75% | 7.5% |
 | Minimum Sellable Product | 35% | 8% | 2.8% |
 | Outsider Validation and Economics | 30% | 0% | 0.0% |
-| **Overall Commercialization** | **100%** |  | **~33%** |
+| **Overall Commercialization** | **100%** |  | **~35%** |
 
 This percentage is deliberately conservative.
 
@@ -309,17 +309,17 @@ alone cause competitive imbalance.
 
 The MLF League Health conclusion is complete and discovery is closed.
 
-A Commercial Product Decision Record must now be written.
+The Commercial Product Decision Record is complete and committed as `cfa4530`.
 
-The decision should answer whether the first commercial product is:
+The resolved first commercial product is:
 
-**Contract Keeper Commissioner Software with Trade Lab and League Health
+**Contract Keeper Commissioner with Trade Lab and League Health as launch
 differentiators**
 
-or whether evidence supports a narrower or different first product.
+The gate is closed; remaining open questions belong to the Minimum Sellable Product specification.
 
-No substantial commercial implementation should begin before this gate is
-resolved.
+No substantial commercial implementation should begin before the Minimum Sellable
+Product specification is frozen.
 
 ## Commercial Validation Thresholds
 
@@ -374,17 +374,16 @@ future evidence materially changes their commercial attractiveness.
 
 The next milestone is:
 
-**Commercial Product Decision Record**
+**Minimum Sellable Product specification**
 
-That decision will freeze the first commercial product, target customer,
-positioning, standardized rules, minimum sellable feature set, Trade Lab
-scope, League Health scope, onboarding model, pricing hypothesis, pilot
-scope, success criteria, and stop/pivot criteria.
+That specification will freeze the first implementation and pilot scope,
+sport-specific templates, bounded configuration, exact workflows, Trade Lab
+valuation, League Health methodology, onboarding/import behavior, UI surfaces,
+acceptance criteria, and implementation boundaries.
 
 After that milestone:
 
-**Minimum Sellable Product specification**
-→ **build**
+**build**
 → **outsider pilots**
 → **paid experiment**
 → **economics review**
