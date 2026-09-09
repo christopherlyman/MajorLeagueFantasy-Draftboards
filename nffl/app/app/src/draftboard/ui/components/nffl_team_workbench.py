@@ -4264,35 +4264,39 @@ def _publish_new_contracts(
                 ]
             )
 
-            cur.execute(
-                """
-                SELECT
-                    count(*) AS selection_count
-                FROM nffl.draft_selection
-                WHERE draft_key=%s
-                """,
-                (draft_key,),
-            )
-
-            selection_count = int(
-                cur.fetchone()[
-                    "selection_count"
-                ]
-            )
-
             if draft_pick_count <= 0:
                 raise ValueError(
                     "The active draft has no picks."
                 )
 
-            if selection_count != draft_pick_count:
+            cur.execute(
+                """
+                SELECT
+                    count(*) AS open_live_pick_count
+                FROM nffl.v_draft_board_current
+                WHERE draft_key=%s
+                  AND selected_at_utc IS NULL
+                  AND COALESCE(
+                      placeholder_source,
+                      ''
+                  ) NOT IN ('CONTRACT', 'FT')
+                """,
+                (draft_key,),
+            )
+
+            open_live_pick_count = int(
+                cur.fetchone()[
+                    "open_live_pick_count"
+                ]
+            )
+
+            if open_live_pick_count != 0:
                 raise ValueError(
                     "The draft must be complete "
                     "before new contracts can be "
                     "finalized. "
-                    f"{selection_count} of "
-                    f"{draft_pick_count} picks "
-                    "have selections."
+                    f"{open_live_pick_count} live "
+                    "draftable picks remain."
                 )
 
             cur.execute(
