@@ -175,6 +175,37 @@ function displayBadge(
   return kind;
 }
 
+function badgeToneClass(
+  row: BoardRow,
+): string {
+  const kind = String(
+    row.pick_kind ?? "",
+  )
+    .trim()
+    .toUpperCase();
+
+  switch (kind) {
+    case "POACH":
+      return styles.badgePoach;
+
+    case "QO":
+      return styles.badgeQo;
+
+    case "FA":
+      return styles.badgeFa;
+
+    case "PT":
+    case "PT_PLACEHOLDER":
+      return styles.badgePt;
+
+    case "CONTRACT":
+    case "CONTRACT_PLACEHOLDER":
+      return styles.badgeContract;
+
+    default:
+      return styles.badgeNeutral;
+  }
+}
 function groupByRound(
   rows: BoardRow[],
 ): BoardRow[][] {
@@ -314,7 +345,7 @@ function MobileBoard({
                       {badge ? (
                         <div
                           className={
-                            styles.mobileAction
+                            `${styles.mobileAction} ${badgeToneClass(row)}`
                           }
                         >
                           {badge}
@@ -462,7 +493,7 @@ export default async function Home() {
             </h1>
 
             <p className={styles.subtitle}>
-              2026 MLF Ã‚Â· 16 teams Ã‚Â· 25 rounds
+              {"2026 MLF \u00b7 16 teams \u00b7 25 rounds"}
             </p>
           </div>
 
@@ -534,7 +565,7 @@ export default async function Home() {
                         const topLeft =
                           row.traded_flag
                             ? position.label
-                              ? `TRADE Ã‚Â· ${position.label}`
+                              ? `TRADE \u00b7 ${position.label}`
                               : "TRADE"
                             : position.label;
 
@@ -606,7 +637,7 @@ export default async function Home() {
                             {badge ? (
                               <div
                                 className={
-                                  styles.actionBadge
+                                  `${styles.actionBadge} ${badgeToneClass(row)}`
                                 }
                               >
                                 {badge}

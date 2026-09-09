@@ -683,3 +683,119 @@
     white-space: nowrap;
   }
 }
+/* ============================================================
+   Draft-state badge hierarchy
+   ============================================================ */
+
+.actionBadge {
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 18%);
+}
+
+.badgePoach {
+  border-color: rgb(254 202 202 / 62%);
+  background: rgb(127 29 29 / 72%);
+  color: #fff7f7;
+}
+
+.badgeQo {
+  border-color: rgb(253 230 138 / 55%);
+  background: rgb(113 63 18 / 42%);
+  color: #fffbea;
+}
+
+.badgeFa {
+  border-color: rgb(226 232 240 / 32%);
+  background: rgb(15 23 42 / 38%);
+  color: #f8fafc;
+}
+
+.badgePt {
+  border-color: rgb(221 214 254 / 58%);
+  background: rgb(76 29 149 / 60%);
+  color: #faf5ff;
+}
+
+.badgeContract {
+  border-color: rgb(165 243 252 / 58%);
+  background: rgb(21 94 117 / 62%);
+  color: #ecfeff;
+}
+
+.badgeNeutral {
+  border-color: rgb(226 232 240 / 30%);
+  background: rgb(15 23 42 / 34%);
+  color: #f8fafc;
+}
+
+/* ============================================================
+   Horizontal navigation
+   ============================================================ */
+
+.tabs {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab,
+.tabMuted {
+  scroll-snap-align: start;
+}
+
+/* ============================================================
+   Phone chrome polish
+   ============================================================ */
+
+@media (max-width: 700px) {
+  .appHeader {
+    min-height: 50px;
+    padding: 6px 10px;
+  }
+
+  .brandMark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .tabs {
+    gap: 4px;
+    padding:
+      5px
+      8px
+      0;
+  }
+
+  .tab,
+  .tabMuted {
+    min-height: 32px;
+    padding: 6px 9px;
+  }
+
+  .content {
+    padding-top: 8px;
+  }
+
+  .titleRow {
+    min-height: 40px;
+    padding:
+      0
+      10px
+      8px;
+  }
+
+  .title {
+    font-size: 1.25rem;
+  }
+
+  .mobileAction {
+    border-width: 1px;
+  }
+}
