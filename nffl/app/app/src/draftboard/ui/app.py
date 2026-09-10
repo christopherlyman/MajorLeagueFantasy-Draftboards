@@ -5566,28 +5566,62 @@ def render_app() -> None:
 
     from draftboard.state.league_profile import get_active_qualifying_offers_enabled
 
-    tab_manager_links = None
-    tab_gateway_audit = None
+    tab_commissioner = None
 
     if get_active_qualifying_offers_enabled():
-        tab_names = ["Draft Board", "Available Players", "Teams", "QOs", "Draft Lottery", "Pick Tracker", "Draft Statistics"]
+        tab_names = [
+            "Draft Board",
+            "Available Players",
+            "Teams",
+            "QOs",
+            "Draft Lottery",
+            "Pick Tracker",
+            "Draft Statistics",
+        ]
         if state.commissioner_mode:
-            tab_names.extend(["Manager Links", "Gateway Audit"])
+            tab_names.append("Commissioner")
+
         tabs = st.tabs(tab_names)
-        tab_board, tab_players, tab_teams, tab_qos, tab_lottery, tab_tracker, tab_stats = tabs[:7]
+
+        (
+            tab_board,
+            tab_players,
+            tab_teams,
+            tab_qos,
+            tab_lottery,
+            tab_tracker,
+            tab_stats,
+        ) = tabs[:7]
+
         if state.commissioner_mode:
-            tab_manager_links = tabs[7]
-            tab_gateway_audit = tabs[8]
+            tab_commissioner = tabs[7]
     else:
-        tab_names = ["Draft Board", "Available Players", "Teams", "Draft Lottery", "Pick Tracker", "Draft Statistics"]
+        tab_names = [
+            "Draft Board",
+            "Available Players",
+            "Teams",
+            "Draft Lottery",
+            "Pick Tracker",
+            "Draft Statistics",
+        ]
         if state.commissioner_mode:
-            tab_names.extend(["Manager Links", "Gateway Audit"])
+            tab_names.append("Commissioner")
+
         tabs = st.tabs(tab_names)
-        tab_board, tab_players, tab_teams, tab_lottery, tab_tracker, tab_stats = tabs[:6]
+
+        (
+            tab_board,
+            tab_players,
+            tab_teams,
+            tab_lottery,
+            tab_tracker,
+            tab_stats,
+        ) = tabs[:6]
+
         tab_qos = None
+
         if state.commissioner_mode:
-            tab_manager_links = tabs[6]
-            tab_gateway_audit = tabs[7]
+            tab_commissioner = tabs[6]
 
     with tab_board:
         st.subheader("Draft Board")
@@ -5712,19 +5746,33 @@ def render_app() -> None:
             ),
         )
 
-    if tab_manager_links is not None:
-        with tab_manager_links:
-            _render_nffl_manager_links_tab(get_postgres_dsn())
+    if tab_commissioner is not None:
+        with tab_commissioner:
+            auth_ctx = (
+                st.session_state.get(
+                    "nffl_gateway_context"
+                )
+                or _nffl_gateway_auth_context(None)
+            )
 
-    if tab_gateway_audit is not None:
-        with tab_gateway_audit:
-            _render_nffl_gateway_audit_tab(get_postgres_dsn())
+            with st.expander(
+                "Manager Access",
+                expanded=False,
+            ):
+                _render_nffl_manager_links_tab(
+                    get_postgres_dsn()
+                )
+                st.divider()
+                _render_nffl_gateway_audit_tab(
+                    get_postgres_dsn()
+                )
+
+            render_commissioner_actions(
+                state,
+                auth_ctx=auth_ctx,
+            )
 
     st.divider()
-
-    if state.commissioner_mode:
-        auth_ctx = st.session_state.get("nffl_gateway_context") or _nffl_gateway_auth_context(None)
-        render_commissioner_actions(state, auth_ctx=auth_ctx)
 
     from pathlib import Path
     from draftboard.state.autosave import AUTOSAVE_PATH
