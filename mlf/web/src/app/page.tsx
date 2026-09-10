@@ -1,3 +1,4 @@
+import { AppShell } from "../components/AppShell";
 import type { CSSProperties } from "react";
 
 import styles from "./page.module.css";
@@ -427,81 +428,12 @@ export default async function Home() {
   } as CSSProperties;
 
   return (
-    <main className={styles.appShell}>
-      <header className={styles.appHeader}>
-        <div className={styles.brand}>
-          <div className={styles.brandMark}>
-            MLF
-          </div>
-
-          <div>
-            <div className={styles.brandTitle}>
-              Major League Fantasy
-            </div>
-
-            <div className={styles.brandSubtitle}>
-              Draft Board
-            </div>
-          </div>
-        </div>
-
-        <div className={styles.previewBadge}>
-          Next.js Preview
-        </div>
-      </header>
-
-      <nav
-        className={styles.tabs}
-        aria-label="MLF sections"
-      >
-        <div
-          className={`${styles.tab} ${styles.activeTab}`}
-        >
-          Draft Board
-        </div>
-
-        <div className={styles.tabMuted}>
-          Available Players
-        </div>
-
-        <div className={styles.tabMuted}>
-          Teams
-        </div>
-
-        <div className={styles.tabMuted}>
-          QOs
-        </div>
-
-        <div className={styles.tabMuted}>
-          Draft Lottery
-        </div>
-
-        <div className={styles.tabMuted}>
-          Pick Tracker
-        </div>
-
-        <div className={styles.tabMuted}>
-          Draft Statistics
-        </div>
-      </nav>
-
-      <section className={styles.content}>
-        <div className={styles.titleRow}>
-          <div>
-            <h1 className={styles.title}>
-              Draft Board
-            </h1>
-
-            <p className={styles.subtitle}>
-              {"2026 MLF \u00b7 16 teams \u00b7 25 rounds"}
-            </p>
-          </div>
-
-          <div className={styles.readOnly}>
-            Read-only preview
-          </div>
-        </div>
-
+    <AppShell
+      activePath="/"
+      title="Draft Board"
+      subtitle={"2026 MLF \u00b7 16 teams \u00b7 25 rounds"}
+      badge="Read-only preview"
+    >
         <div
           className={
             `${styles.boardScroller} ${styles.desktopBoard}`
@@ -667,7 +599,6 @@ export default async function Home() {
         </div>
 
         <MobileBoard rounds={rounds} />
-      </section>
-    </main>
+    </AppShell>
   );
 }

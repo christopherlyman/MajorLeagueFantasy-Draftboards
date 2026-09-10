@@ -1,0 +1,253 @@
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.summary > div {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  padding: 6px 9px;
+  border: 1px solid rgb(148 163 184 / 28%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 6%);
+  font-size: 0.78rem;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 1.4fr)
+    minmax(150px, 0.7fr)
+    minmax(180px, 0.8fr);
+  gap: 10px 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid rgb(148 163 184 / 25%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid rgb(148 163 184 / 45%);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-weight: 500;
+}
+
+.field select[multiple] {
+  min-height: 74px;
+}
+
+.toggles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.toggles label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.actions button,
+.actions a {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 13px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.actions button {
+  border: 1px solid rgb(255 255 255 / 22%);
+  background: #174ea6;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.actions a {
+  border: 1px solid rgb(148 163 184 / 35%);
+  color: inherit;
+}
+
+.tableScroller {
+  overflow-x: auto;
+  border: 1px solid rgb(148 163 184 / 26%);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  -webkit-overflow-scrolling: touch;
+}
+
+.playerTable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.73rem;
+}
+
+.playerTable th,
+.playerTable td {
+  height: 34px;
+  padding: 6px 8px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.playerTable th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eaf1fb;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.playerTable th:first-child,
+.playerTable td:first-child {
+  position: sticky;
+  left: 0;
+  text-align: left;
+}
+
+.playerTable th:first-child {
+  z-index: 3;
+}
+
+.playerTable td:first-child {
+  z-index: 1;
+  background: #ffffff;
+}
+
+.playerTable tr:hover td {
+  background: #f8fafc;
+}
+
+.playerTable tr:hover td:first-child {
+  background: #f8fafc;
+}
+
+.playerName {
+  min-width: 170px;
+  font-weight: 750;
+}
+
+.status {
+  display: inline-flex;
+  min-width: 38px;
+  justify-content: center;
+  padding: 2px 5px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.statusQo {
+  border-color: #d6a94d;
+  background: #fff7d6;
+  color: #6b4f00;
+}
+
+.statusPt {
+  border-color: #8b78c8;
+  background: #f1edff;
+  color: #49348c;
+}
+
+.statusContract {
+  border-color: #4ca3b8;
+  background: #e7f8fc;
+  color: #155e70;
+}
+
+.statusEmpty {
+  border-color: transparent;
+}
+
+@media (max-width: 900px) {
+  .filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .field:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .summary {
+    gap: 5px;
+  }
+
+  .summary > div {
+    padding: 5px 7px;
+    font-size: 0.7rem;
+  }
+
+  .filters {
+    grid-template-columns: 1fr;
+    padding: 9px;
+  }
+
+  .field,
+  .field:first-child,
+  .toggles,
+  .actions {
+    grid-column: 1;
+  }
+
+  .toggles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .playerTable {
+    font-size: 0.69rem;
+  }
+
+  .playerTable th,
+  .playerTable td {
+    height: 32px;
+    padding: 5px 7px;
+  }
+
+  .playerName {
+    min-width: 145px;
+  }
+}

@@ -799,3 +799,8 @@
     border-width: 1px;
   }
 }
+/* Shared routed application shell */
+.tab,
+.tabMuted {
+  text-decoration: none;
+}
