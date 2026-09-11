@@ -33,7 +33,10 @@ from draftboard.state.init_restore import (
 )
 from draftboard.ui.components.board_html import render_board_html
 from draftboard.ui.components.postgres_board_html import render_postgres_board_html
-from draftboard.ui.components.nffl_team_workbench import render_nffl_team_workbench
+from draftboard.ui.components.nffl_team_workbench import (
+    render_nffl_contract_administration,
+    render_nffl_team_workbench,
+)
 from draftboard.ui.components.commissioner_tools import render_commissioner_actions
 from draftboard.ui.components.draft_lottery import render_draft_lottery_tab
 from draftboard.ui.components.draft_statistics import (
@@ -5766,6 +5769,11 @@ def render_app() -> None:
                 _render_nffl_gateway_audit_tab(
                     get_postgres_dsn()
                 )
+
+            render_nffl_contract_administration(
+                get_postgres_dsn(),
+                gateway_context=auth_ctx,
+            )
 
             render_commissioner_actions(
                 state,

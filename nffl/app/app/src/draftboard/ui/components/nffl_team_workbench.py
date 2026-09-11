@@ -5238,6 +5238,115 @@ def _render_decision_controls(
             st.error(f"Could not reset selections: {exc}")
 
 
+
+def render_nffl_contract_administration(
+    dsn: str,
+    *,
+    gateway_context: dict[str, Any] | None = None,
+) -> None:
+    """Commissioner-only contract rollover and reveal workflow."""
+
+    gateway_context = gateway_context or {}
+
+    gateway_role = str(
+        gateway_context.get("role")
+        or "public"
+    ).strip().lower()
+
+    if gateway_role != "commissioner":
+        return
+
+    acting_as = str(
+        gateway_context.get("acting_as")
+        or "commissioner_ui"
+    )
+
+    qoft_revealed = _qoft_revealed(dsn)
+    contracts_revealed = (
+        _post_draft_contracts_revealed(dsn)
+    )
+
+    with st.expander(
+        "Contract Administration",
+        expanded=False,
+    ):
+        _render_season_end_contract_update(
+            dsn,
+            acting_as=acting_as,
+        )
+
+        st.divider()
+        st.markdown(
+            "### Post-Draft Contract Reveal"
+        )
+
+        if (
+            qoft_revealed
+            and not contracts_revealed
+        ):
+            st.warning(
+                "Finalize & Reveal New Contracts is "
+                "irreversible. Every team must first "
+                "save its plan, including teams making "
+                "no new contracts."
+            )
+
+            confirm_contract_publication = (
+                st.checkbox(
+                    "I confirm that the draft is complete "
+                    "and all team contract plans are ready.",
+                    key=(
+                        "nffl_finalize_new_contracts_"
+                        "confirmation"
+                    ),
+                )
+            )
+
+            if st.button(
+                "Finalize & Reveal New Contracts",
+                type="primary",
+                disabled=(
+                    not confirm_contract_publication
+                ),
+                key=(
+                    "nffl_finalize_new_contracts_"
+                    "button"
+                ),
+            ):
+                try:
+                    publication_result = (
+                        _publish_new_contracts(
+                            dsn,
+                            published_by=acting_as,
+                        )
+                    )
+                except Exception as exc:
+                    st.error(
+                        "New contracts were not "
+                        f"published: {exc}"
+                    )
+                else:
+                    st.success(
+                        "Finalized and revealed "
+                        f"{publication_result['contract_count']} "
+                        "new contracts across "
+                        f"{publication_result['team_count']} "
+                        "teams."
+                    )
+                    st.rerun()
+
+        elif contracts_revealed:
+            st.success(
+                "New contracts are finalized "
+                "and revealed."
+            )
+
+        else:
+            st.info(
+                "Post-draft contract reveal becomes "
+                "available after QO/FT is revealed."
+            )
+
 def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None = None) -> None:
     st.subheader("Teams")
 
@@ -5397,81 +5506,6 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     else:
         st.info("Choose your team in the Team Gateway.")
         return
-
-    if gateway_role == "commissioner":
-        _render_season_end_contract_update(
-            dsn,
-            acting_as=(
-                acting_as_base
-                or "commissioner_ui"
-            ),
-        )
-
-    if (
-        gateway_role == "commissioner"
-        and qoft_revealed
-        and not contracts_revealed
-    ):
-        st.warning(
-            "Finalize & Reveal New Contracts is "
-            "irreversible. Every team must first "
-            "save its plan, including teams making "
-            "no new contracts."
-        )
-
-        confirm_contract_publication = st.checkbox(
-            "I confirm that the draft is complete "
-            "and all team contract plans are ready.",
-            key=(
-                "nffl_finalize_new_contracts_"
-                "confirmation"
-            ),
-        )
-
-        if st.button(
-            "Finalize & Reveal New Contracts",
-            type="primary",
-            disabled=(
-                not confirm_contract_publication
-            ),
-            key=(
-                "nffl_finalize_new_contracts_"
-                "button"
-            ),
-        ):
-            try:
-                publication_result = (
-                    _publish_new_contracts(
-                        dsn,
-                        published_by=(
-                            acting_as_base
-                            or "commissioner_ui"
-                        ),
-                    )
-                )
-            except Exception as exc:
-                st.error(
-                    "New contracts were not "
-                    f"published: {exc}"
-                )
-            else:
-                st.success(
-                    "Finalized and revealed "
-                    f"{publication_result['contract_count']} "
-                    "new contracts across "
-                    f"{publication_result['team_count']} "
-                    "teams."
-                )
-                st.rerun()
-
-    elif (
-        gateway_role == "commissioner"
-        and contracts_revealed
-    ):
-        st.success(
-            "New contracts are finalized "
-            "and revealed."
-        )
 
     def _load_active_draft_team_order() -> list[str]:
         try:
