@@ -1,0 +1,24 @@
+.page { min-height: 100vh; padding: 40px 24px 80px; }
+.container { width: min(920px, 100%); margin: 0 auto; }
+.back { color: #526078; text-decoration: none; font-weight: 600; }
+.heading { margin: 44px 0 30px; }
+.heading h1 { margin: 8px 0 14px; font-size: clamp(2.3rem, 5vw, 4rem); }
+.heading p { max-width: 700px; line-height: 1.6; color: #526078; }
+.step { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.form { display: grid; gap: 24px; }
+.card { background: white; border: 1px solid #dfe4ea; border-radius: 16px; padding: 28px; }
+.card h2 { margin-top: 0; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.card label { display: grid; gap: 8px; margin-top: 18px; font-weight: 700; }
+.card input, .card select { width: 100%; padding: 12px 13px; border: 1px solid #cbd3df; border-radius: 8px; font: inherit; background: white; }
+.help { color: #667085; }
+.checkGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; margin-top: 10px; }
+.check { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 10px !important; }
+.check input { width: auto; }
+.actions { display: flex; align-items: center; gap: 18px; color: #667085; }
+.save { border: 0; border-radius: 10px; padding: 14px 22px; background: #172033; color: white; font: inherit; font-weight: 800; cursor: pointer; }
+@media (max-width: 700px) {
+  .grid, .checkGrid { grid-template-columns: 1fr; }
+  .card { padding: 22px; }
+  .actions { align-items: flex-start; flex-direction: column; }
+}
