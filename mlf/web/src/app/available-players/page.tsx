@@ -1,6 +1,5 @@
-import Link from "next/link";
-
 import { AppShell } from "../../components/AppShell";
+import { AvailablePlayersFilters } from "../../components/AvailablePlayersFilters";
 import {
   loadAvailablePlayers,
   type AvailablePlayerRow,
@@ -267,6 +266,61 @@ function statusClass(
   return styles.statusEmpty;
 }
 
+function isPitcherRow(
+  row: AvailablePlayerRow,
+): boolean {
+  const pitcherPositions =
+    new Set(["P", "SP", "RP"]);
+
+  const hitterPositions =
+    new Set([
+      "C",
+      "1B",
+      "2B",
+      "3B",
+      "SS",
+      "OF",
+      "UTIL",
+    ]);
+
+  const hasPitcher =
+    row.positions.some((position) =>
+      pitcherPositions.has(position),
+    );
+
+  const hasHitter =
+    row.positions.some((position) =>
+      hitterPositions.has(position),
+    );
+
+  return hasPitcher && !hasHitter;
+}
+
+function mobileStats(
+  row: AvailablePlayerRow,
+): Array<[string, string]> {
+  if (isPitcherRow(row)) {
+    return [
+      ["IP", formatOne(row.ip)],
+      ["W", formatInt(row.w)],
+      ["K", formatInt(row.kPit)],
+      ["ERA", formatTwo(row.era)],
+      ["WHIP", formatTwo(row.whip)],
+      ["QS", formatInt(row.qs)],
+      ["SV+H", formatInt(row.svH)],
+    ];
+  }
+
+  return [
+    ["H/AB", row.hAb],
+    ["R", formatInt(row.r)],
+    ["HR", formatInt(row.hr)],
+    ["RBI", formatInt(row.rbi)],
+    ["SB", formatInt(row.sb)],
+    ["BB", formatInt(row.bb)],
+    ["AVG", formatAverage(row.avg)],
+  ];
+}
 export default async function AvailablePlayersPage({
   searchParams,
 }: {
@@ -466,6 +520,7 @@ export default async function AvailablePlayersPage({
       (row) => row.isContract,
     ).length;
 
+
   return (
     <AppShell
       activePath="/available-players"
@@ -474,163 +529,63 @@ export default async function AvailablePlayersPage({
         "2026 MLF \u00b7 read-only player pool"
       }
     >
-      <div className={styles.summary}>
-        <div>
-          <strong>{filtered.length}</strong>
-          <span> shown</span>
-        </div>
-
-        <div>
-          <strong>{rows.length}</strong>
-          <span> pool</span>
-        </div>
-
-        <div>
-          <strong>{draftedCount}</strong>
-          <span> drafted</span>
-        </div>
-
-        <div>
-          <strong>{qoCount}</strong>
-          <span> QOs</span>
-        </div>
-
-        <div>
-          <strong>{ptCount}</strong>
-          <span> PT</span>
-        </div>
-
-        <div>
-          <strong>{contractCount}</strong>
-          <span> contracts</span>
-        </div>
-      </div>
-
-      <form
-        method="get"
-        className={styles.filters}
+      <section
+        className={styles.summary}
+        aria-label="Player pool summary"
       >
-        <label className={styles.field}>
-          <span>Search</span>
-          <input
-            type="search"
-            name="q"
-            defaultValue={first(params.q)}
-            placeholder="Type a player name..."
-          />
-        </label>
-
-        <label className={styles.field}>
-          <span>Position</span>
-          <select
-            name="pos"
-            multiple
-            defaultValue={Array.from(
-              selectedPositions,
-            )}
-          >
-            {positions.map((position) => (
-              <option
-                key={position}
-                value={position}
-              >
-                {position}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.field}>
-          <span>Sort by</span>
-          <select
-            name="sort"
-            defaultValue={sortKey}
-          >
-            {SORT_OPTIONS.map((option) => (
-              <option
-                key={option.key}
-                value={option.key}
-              >
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className={styles.toggles}>
-          <label>
-            <input
-              type="checkbox"
-              name="all"
-              value="1"
-              defaultChecked={showAll}
-            />
-            Show all players
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              name="qo"
-              value="1"
-              defaultChecked={showQo}
-            />
-            Only QOs
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              name="poach"
-              value="1"
-              defaultChecked={showPoach}
-            />
-            Only poach-eligible
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              name="pt"
-              value="1"
-              defaultChecked={showPt}
-            />
-            Only PT
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              name="contracts"
-              value="1"
-              defaultChecked={showContracts}
-            />
-            Only contracts
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              name="desc"
-              value="1"
-              defaultChecked={descending}
-            />
-            Descending
-          </label>
+        <div className={styles.summaryHeading}>
+          Player Pool
         </div>
 
-        <div className={styles.actions}>
-          <button type="submit">
-            Apply
-          </button>
+        <div className={styles.summaryGrid}>
+          <div className={styles.summaryMetric}>
+            <strong>{filtered.length}</strong>
+            <span>Shown</span>
+          </div>
 
-          <Link href="/available-players">
-            Reset
-          </Link>
+          <div className={styles.summaryMetric}>
+            <strong>{rows.length}</strong>
+            <span>Pool</span>
+          </div>
+
+          <div className={styles.summaryMetric}>
+            <strong>{draftedCount}</strong>
+            <span>Drafted</span>
+          </div>
+
+          <div className={styles.summaryMetric}>
+            <strong>{qoCount}</strong>
+            <span>QOs</span>
+          </div>
+
+          <div className={styles.summaryMetric}>
+            <strong>{ptCount}</strong>
+            <span>PT</span>
+          </div>
+
+          <div className={styles.summaryMetric}>
+            <strong>{contractCount}</strong>
+            <span>Contracts</span>
+          </div>
         </div>
-      </form>
+      </section>
 
-      <div className={styles.tableScroller}>
+      <AvailablePlayersFilters
+        query={first(params.q)}
+        positions={positions}
+        selectedPositions={
+          Array.from(selectedPositions)
+        }
+        sortKey={sortKey}
+        sortOptions={SORT_OPTIONS}
+        descending={descending}
+        showAll={showAll}
+        showQo={showQo}
+        showPoach={showPoach}
+        showPt={showPt}
+        showContracts={showContracts}
+      />
+      <div className={`${styles.tableScroller} ${styles.desktopTable}`}>
         <table className={styles.playerTable}>
           <thead>
             <tr>
@@ -720,6 +675,93 @@ export default async function AvailablePlayersPage({
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className={styles.mobilePlayerList}>
+        {filtered.map((row) => (
+          <article
+            key={row.playerKey}
+            className={styles.mobilePlayerCard}
+            data-mobile-player-key={row.playerKey}
+          >
+            <div className={styles.mobileCompactHeader}>
+              <div className={styles.mobileIdentity}>
+                <div className={styles.mobilePlayerName}>
+                  {row.name}
+                </div>
+
+                <div className={styles.mobileMeta}>
+                  <span>
+                    {row.mlbTeam || "\u2014"}
+                  </span>
+
+                  <span className={styles.metaDot}>
+                    {"\u00b7"}
+                  </span>
+
+                  <span>
+                    {row.positions.join("/") || "\u2014"}
+                  </span>
+
+                  {row.status ? (
+                    <span
+                      className={
+                        `${styles.status} ${statusClass(row)}`
+                      }
+                    >
+                      {row.status}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className={styles.mobileTopMetric}>
+                <span>Rank</span>
+                <strong>
+                  {formatInt(row.currentRank) || "\u2014"}
+                </strong>
+              </div>
+
+              <div className={styles.mobileTopMetric}>
+                <span>% Ros</span>
+                <strong>
+                  {formatInt(row.percentRostered) || "\u2014"}
+                </strong>
+              </div>
+            </div>
+
+            {row.teamName || row.draftPick ? (
+              <div className={styles.mobileOwnershipStrip}>
+                {row.teamName ? (
+                  <span>
+                    <small>MLF Team</small>
+                    <strong>{row.teamName}</strong>
+                  </span>
+                ) : null}
+
+                {row.draftPick ? (
+                  <span>
+                    <small>Draft Pick</small>
+                    <strong>{row.draftPick}</strong>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className={styles.mobileStatGrid}>
+              {mobileStats(row).map(
+                ([label, value]) => (
+                  <div key={label}>
+                    <span>{label}</span>
+                    <strong>
+                      {value || "\u2014"}
+                    </strong>
+                  </div>
+                ),
+              )}
+            </div>
+          </article>
+        ))}
       </div>
     </AppShell>
   );
