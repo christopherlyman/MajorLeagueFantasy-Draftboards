@@ -5751,6 +5751,13 @@ def render_app() -> None:
 
     if tab_commissioner is not None:
         with tab_commissioner:
+            st.subheader("Commissioner Tools")
+
+            st.caption(
+                "All Commissioner tools are collapsed by default. "
+                "Open only the section you need."
+            )
+
             auth_ctx = (
                 st.session_state.get(
                     "nffl_gateway_context"
@@ -5778,6 +5785,7 @@ def render_app() -> None:
             render_commissioner_actions(
                 state,
                 auth_ctx=auth_ctx,
+                show_header=False,
             )
 
     st.divider()

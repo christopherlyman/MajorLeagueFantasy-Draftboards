@@ -3126,13 +3126,19 @@ def _render_nffl_draft_schedule_controls() -> None:
         st.rerun()
 
 
-def render_commissioner_actions(state: DraftState, auth_ctx: dict[str, object] | None = None) -> None:
-    st.subheader("Commissioner Tools")
+def render_commissioner_actions(
+    state: DraftState,
+    auth_ctx: dict[str, object] | None = None,
+    *,
+    show_header: bool = True,
+) -> None:
+    if show_header:
+        st.subheader("Commissioner Tools")
 
-    st.caption(
-        "All Commissioner tools are collapsed by default. "
-        "Open only the section you need."
-    )
+        st.caption(
+            "All Commissioner tools are collapsed by default. "
+            "Open only the section you need."
+        )
 
     _render_nffl_draft_schedule_controls()
     _render_nffl_contract_readiness_panel()
