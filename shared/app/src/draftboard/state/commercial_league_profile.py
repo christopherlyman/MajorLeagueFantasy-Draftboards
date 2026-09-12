@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from draftboard.state.commercial_league_profile_v2 import (
+    summarize_v2_profile,
+    validate_v2_profile,
+)
+
 
 class CommercialLeagueProfileError(ValueError):
     """Raised when a commercial league profile violates the supported schema."""
@@ -81,6 +86,17 @@ def validate_commercial_league_profile(profile: Mapping[str, Any]) -> None:
         raise CommercialLeagueProfileError(
             "Commercial league profile must be a top-level mapping."
         )
+
+    league_probe = profile.get("league")
+    if (
+        isinstance(league_probe, Mapping)
+        and "league_model" in league_probe
+    ):
+        try:
+            validate_v2_profile(profile)
+        except ValueError as exc:
+            raise CommercialLeagueProfileError(str(exc)) from exc
+        return
 
     required_sections = (
         "league",
@@ -238,6 +254,16 @@ def summarize_commercial_league_profile(
     profile: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Return the small profile summary needed by setup and diagnostics."""
+
+    league_probe = profile.get("league")
+    if (
+        isinstance(league_probe, Mapping)
+        and "league_model" in league_probe
+    ):
+        try:
+            return summarize_v2_profile(profile)
+        except ValueError as exc:
+            raise CommercialLeagueProfileError(str(exc)) from exc
 
     validate_commercial_league_profile(profile)
 
