@@ -33,6 +33,11 @@ from draftboard.state.league_schedule import (
 )
 
 from draftboard.domain.clock import compute_clock_status, start_pick_clock
+from draftboard.domain.nffl_new_season import (
+    build_nffl_franchise_match_preview,
+    build_nffl_new_season_spec,
+    suggested_nffl_draft_key,
+)
 from draftboard.state.autosave import save_autosave
 from draftboard.state.store import DraftState
 
@@ -3126,6 +3131,285 @@ def _render_nffl_draft_schedule_controls() -> None:
         st.rerun()
 
 
+
+def _load_nffl_new_season_preview_rows(
+    dsn: str,
+    *,
+    prior_league_key: str,
+    prior_season_year: int,
+    target_league_key: str,
+    target_season_year: int,
+) -> tuple[list[dict], list[dict]]:
+    """Load rollover evidence without modifying the database."""
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    franchise_id,
+                    team_key,
+                    team_name,
+                    owner_name,
+                    owner_guid
+                FROM public.franchise_season_team
+                WHERE league_key = %s
+                  AND season_year = %s
+                ORDER BY team_key
+                """,
+                (
+                    prior_league_key,
+                    int(prior_season_year),
+                ),
+            )
+
+            prior_rows = [
+                {
+                    "franchise_id": row[0],
+                    "team_key": row[1],
+                    "team_name": row[2],
+                    "owner_name": row[3],
+                    "owner_guid": row[4],
+                }
+                for row in cur.fetchall()
+            ]
+
+            cur.execute(
+                """
+                SELECT
+                    team_key,
+                    team_name,
+                    owner_name,
+                    owner_guid
+                FROM public.yahoo_team_map
+                WHERE league_key = %s
+                  AND season_year = %s
+                ORDER BY team_key
+                """,
+                (
+                    target_league_key,
+                    int(target_season_year),
+                ),
+            )
+
+            target_rows = [
+                {
+                    "team_key": row[0],
+                    "team_name": row[1],
+                    "owner_name": row[2],
+                    "owner_guid": row[3],
+                }
+                for row in cur.fetchall()
+            ]
+
+    return prior_rows, target_rows
+
+
+def _render_nffl_initialize_new_season_preview() -> None:
+    """Render a read-only preview of the next NFFL season rollover."""
+    try:
+        from draftboard.state.league_profile import (
+            get_active_league_profile,
+        )
+
+        current_profile = get_active_league_profile()
+    except Exception as exc:
+        st.error(
+            f"Could not load the active league profile: {exc}"
+        )
+        return
+
+    profile = dict(current_profile or {})
+    league = dict(profile.get("league") or {})
+
+    # This workflow is NFFL-specific even though commissioner_tools.py
+    # contains some shared Commissioner functionality.
+    if str(league.get("name") or "").strip().upper() != "NFFL":
+        return
+
+    try:
+        prior_year = int(league["season_year"])
+        prior_league_key = str(
+            league["league_key"]
+        ).strip()
+        manager_count = int(league["manager_count"])
+    except (KeyError, TypeError, ValueError) as exc:
+        st.error(
+            "Active NFFL profile is missing required season identity: "
+            f"{exc}"
+        )
+        return
+
+    target_year = prior_year + 1
+    suggested_draft_key = suggested_nffl_draft_key(
+        target_year
+    )
+
+    with st.expander(
+        "Initialize New Season",
+        expanded=False,
+    ):
+        st.caption(
+            "Preview only. This section does not modify the database. "
+            "Review the proposed rollover before any apply action is enabled."
+        )
+
+        col_current, col_target, col_managers = st.columns(3)
+
+        col_current.metric(
+            "Current Season",
+            str(prior_year),
+        )
+        col_target.metric(
+            "Target Season",
+            str(target_year),
+        )
+        col_managers.metric(
+            "Expected Managers",
+            str(manager_count),
+        )
+
+        st.caption(
+            f"Current Yahoo league: {prior_league_key}"
+        )
+
+        target_league_key = st.text_input(
+            "New Yahoo league key",
+            value="",
+            placeholder="Example: 999.l.12345",
+            key=f"nffl_new_season_league_key_{target_year}",
+        ).strip()
+
+        target_draft_key = st.text_input(
+            "Draft key",
+            value=suggested_draft_key,
+            key=f"nffl_new_season_draft_key_{target_year}",
+        ).strip()
+
+        if not target_league_key:
+            st.info(
+                "After Yahoo renews the league, enter the new Yahoo "
+                "league key here. The rollover preview will remain "
+                "read-only until the new season is explicitly applied."
+            )
+            return
+
+        try:
+            spec = build_nffl_new_season_spec(
+                profile,
+                target_league_key=target_league_key,
+                target_season_year=target_year,
+                target_draft_key=target_draft_key,
+            )
+        except (TypeError, ValueError) as exc:
+            st.error(f"Invalid rollover proposal: {exc}")
+            return
+
+        st.markdown("**Proposed season configuration**")
+        st.json(spec.profile)
+
+        try:
+            prior_rows, target_rows = (
+                _load_nffl_new_season_preview_rows(
+                    _get_dsn(),
+                    prior_league_key=spec.prior_league_key,
+                    prior_season_year=spec.prior_season_year,
+                    target_league_key=spec.current_league_key,
+                    target_season_year=spec.current_season_year,
+                )
+            )
+        except Exception as exc:
+            st.error(
+                f"Could not load rollover evidence: {exc}"
+            )
+            return
+
+        col_prior, col_yahoo = st.columns(2)
+        col_prior.metric(
+            "Prior Franchise Mappings",
+            str(len(prior_rows)),
+        )
+        col_yahoo.metric(
+            "Target Yahoo Teams Loaded",
+            str(len(target_rows)),
+        )
+
+        if len(prior_rows) != spec.manager_count:
+            st.error(
+                "Rollover blocked: expected "
+                f"{spec.manager_count} prior franchise mappings but found "
+                f"{len(prior_rows)}."
+            )
+            return
+
+        if len(target_rows) != spec.manager_count:
+            st.warning(
+                "Franchise matching cannot run yet. Expected "
+                f"{spec.manager_count} teams for {target_year}, but "
+                f"{len(target_rows)} are currently loaded in "
+                "public.yahoo_team_map for the new Yahoo league key."
+            )
+            st.info(
+                "No database changes have been made. Once the renewed "
+                "Yahoo teams are loaded, return here to preview the "
+                "franchise rollover."
+            )
+            return
+
+        try:
+            preview = build_nffl_franchise_match_preview(
+                prior_rows,
+                target_rows,
+                expected_manager_count=spec.manager_count,
+            )
+        except (TypeError, ValueError) as exc:
+            st.error(f"Could not build franchise preview: {exc}")
+            return
+
+        col_auto, col_review = st.columns(2)
+        col_auto.metric(
+            "Automatic Matches",
+            str(preview.auto_match_count),
+        )
+        col_review.metric(
+            "Commissioner Review",
+            str(preview.review_count),
+        )
+
+        display_rows = []
+        for row in preview.rows:
+            display_rows.append(
+                {
+                    "Target Team": row.target_team_name,
+                    "Owner": row.target_owner_name or "",
+                    "Status": row.status,
+                    "Franchise ID": row.franchise_id,
+                    "Prior Team": row.prior_team_name or "",
+                    "Reason": row.reason,
+                }
+            )
+
+        st.dataframe(
+            display_rows,
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        if preview.ready_for_apply:
+            st.success(
+                "All teams have unique owner-guid evidence and can be "
+                "carried forward automatically. Apply is intentionally "
+                "disabled during this preview phase."
+            )
+        else:
+            st.warning(
+                f"{preview.review_count} team(s) require Commissioner "
+                "review before the new season can be initialized."
+            )
+
+        st.caption(
+            "Database writes performed by this preview: 0"
+        )
+
 def render_commissioner_actions(
     state: DraftState,
     auth_ctx: dict[str, object] | None = None,
@@ -3163,7 +3447,6 @@ def render_commissioner_actions(
     prospect_tags_enabled = bool(_features.get("prospect_tags", False))
 
     # NFFL commissioner page cleanup: hide stale/risky legacy tools without deleting shared code.
-    show_disabled_season_team_assignments = False
     show_trade_builder = False
     show_contract_overrides = False
 
@@ -3228,17 +3511,7 @@ def render_commissioner_actions(
                         st.success("Password reset successful.")
                         st.code(temp_pw, language=None)
                         st.warning("Copy this temporary password now. It is only shown after reset.")
-    # -----------------------
-    # Season Team Assignments (Commissioner)
-    # -----------------------
-    if show_disabled_season_team_assignments:
-        with st.expander("Season Team Assignments (Commissioner)", expanded=False):
-            st.warning(
-                "Temporarily disabled while multi-league scoping is repaired."
-            )
-            st.info(
-                "This tool currently assumes one league per season and can hide the rest of Commissioner Tools."
-            )
+    _render_nffl_initialize_new_season_preview()
 
     # -----------------------
     # Set Draft Order
