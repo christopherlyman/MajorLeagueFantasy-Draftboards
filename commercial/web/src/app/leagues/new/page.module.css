@@ -1,23 +1,175 @@
-.page { min-height: 100vh; padding: 40px 24px 80px; }
-.container { width: min(920px, 100%); margin: 0 auto; }
-.back { color: #526078; text-decoration: none; font-weight: 600; }
-.heading { margin: 44px 0 30px; }
-.heading h1 { margin: 8px 0 14px; font-size: clamp(2.3rem, 5vw, 4rem); }
-.heading p { max-width: 700px; line-height: 1.6; color: #526078; }
-.step { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
-.form { display: grid; gap: 24px; }
-.card { background: white; border: 1px solid #dfe4ea; border-radius: 16px; padding: 28px; }
-.card h2 { margin-top: 0; }
-.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.card label { display: grid; gap: 8px; margin-top: 18px; font-weight: 700; }
-.card input, .card select { width: 100%; padding: 12px 13px; border: 1px solid #cbd3df; border-radius: 8px; font: inherit; background: white; }
-.help { color: #667085; }
-.checkGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; margin-top: 10px; }
-.check { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 10px !important; }
-.check input { width: auto; }
-.actions { display: flex; align-items: center; gap: 18px; color: #667085; }
-.save { border: 0; border-radius: 10px; padding: 14px 22px; background: #172033; color: white; font: inherit; font-weight: 800; cursor: pointer; }
+.page {
+  min-height: 100vh;
+  padding: 34px 24px 80px;
+  background:
+    radial-gradient(circle at 88% 5%, rgba(51, 71, 200, .08), transparent 24rem),
+    var(--canvas);
+}
+
+.container {
+  width: min(940px, 100%);
+  margin: 0 auto;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+  color: #475467;
+  text-decoration: none;
+  font-size: .85rem;
+  font-weight: 800;
+}
+
+.heading {
+  margin: 52px 0 32px;
+}
+
+.heading h1 {
+  margin: 8px 0 14px;
+  font-size: clamp(2.8rem, 6vw, 4.8rem);
+  line-height: .98;
+  letter-spacing: -.05em;
+}
+
+.heading p:not(.step) {
+  max-width: 690px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.step {
+  margin: 0;
+  color: var(--brand);
+  font-size: .75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .11em;
+}
+
+.form {
+  display: grid;
+  gap: 20px;
+}
+
+.card {
+  padding: 30px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: white;
+  box-shadow: 0 8px 26px rgba(16, 24, 40, .04);
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  letter-spacing: -.02em;
+}
+
+.help {
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+}
+
+.card label {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  color: #344054;
+  font-size: .88rem;
+  font-weight: 800;
+}
+
+.card input,
+.card select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 9px;
+  outline: none;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.card input:focus,
+.card select:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(51, 71, 200, .11);
+}
+
+.checkGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 22px;
+  margin-top: 12px;
+}
+
+.check {
+  display: flex !important;
+  align-items: center;
+  gap: 10px !important;
+  min-height: 42px;
+  margin-top: 8px !important;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.check input {
+  width: 17px;
+  min-height: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 4px 0;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+}
+
+.save {
+  min-height: 48px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(51, 71, 200, .18);
+}
+
+.save:hover {
+  background: var(--brand-deep);
+}
+
 @media (max-width: 700px) {
+  .page { padding: 24px 14px 60px; }
+  .heading { margin-top: 38px; }
   .grid, .checkGrid { grid-template-columns: 1fr; }
   .card { padding: 22px; }
   .actions { align-items: flex-start; flex-direction: column; }
