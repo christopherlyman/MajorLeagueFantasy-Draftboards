@@ -144,3 +144,264 @@ def build_nffl_new_season_spec(
         expected_draft_rows=manager_count * rounds_total,
         profile=profile,
     )
+
+
+@dataclass(frozen=True)
+class NfflFranchiseMatch:
+    """One proposed new-season team-to-franchise assignment."""
+
+    target_team_key: str
+    target_team_name: str
+    target_owner_name: str | None
+    target_owner_guid: str | None
+    status: str
+    franchise_id: int | None
+    prior_team_key: str | None
+    prior_team_name: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class NfflFranchiseMatchPreview:
+    """Side-effect-free franchise rollover readiness result."""
+
+    rows: tuple[NfflFranchiseMatch, ...]
+    expected_manager_count: int
+    auto_match_count: int
+    review_count: int
+    ready_for_apply: bool
+
+
+def _clean_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def build_nffl_franchise_match_preview(
+    prior_mappings: list[Mapping[str, Any]],
+    target_teams: list[Mapping[str, Any]],
+    *,
+    expected_manager_count: int,
+) -> NfflFranchiseMatchPreview:
+    """
+    Preview new-season franchise continuity without writing anything.
+
+    Safe automatic matching is intentionally conservative:
+    - only a unique, nonblank owner_guid match may auto-link;
+    - missing owner_guid requires Commissioner review;
+    - changed/unmatched owner_guid requires Commissioner review;
+    - duplicate prior owner_guid requires Commissioner review;
+    - duplicate target owner_guid requires Commissioner review.
+
+    owner_guid is only rollover evidence. franchise_id remains the stable
+    cross-season identity.
+    """
+    expected = int(expected_manager_count)
+
+    if expected <= 0:
+        raise ValueError(
+            "expected_manager_count must be positive."
+        )
+
+    prior_rows = list(prior_mappings or [])
+    target_rows = list(target_teams or [])
+
+    if len(prior_rows) != expected:
+        raise ValueError(
+            "prior_mappings count must equal expected_manager_count."
+        )
+
+    if len(target_rows) != expected:
+        raise ValueError(
+            "target_teams count must equal expected_manager_count."
+        )
+
+    prior_team_keys: set[str] = set()
+    prior_franchise_ids: set[int] = set()
+    prior_by_owner_guid: dict[
+        str,
+        list[Mapping[str, Any]],
+    ] = {}
+
+    for row in prior_rows:
+        team_key = str(
+            row.get("team_key") or ""
+        ).strip()
+
+        if not team_key:
+            raise ValueError(
+                "Every prior mapping must have a non-empty team_key."
+            )
+
+        if team_key in prior_team_keys:
+            raise ValueError(
+                f"Duplicate prior team_key: {team_key}"
+            )
+
+        prior_team_keys.add(team_key)
+
+        raw_franchise_id = row.get("franchise_id")
+
+        try:
+            franchise_id = int(raw_franchise_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Every prior mapping must have an integer franchise_id."
+            ) from exc
+
+        if franchise_id <= 0:
+            raise ValueError(
+                "Every prior franchise_id must be positive."
+            )
+
+        if franchise_id in prior_franchise_ids:
+            raise ValueError(
+                f"Duplicate prior franchise_id: {franchise_id}"
+            )
+
+        prior_franchise_ids.add(franchise_id)
+
+        owner_guid = _clean_optional_text(
+            row.get("owner_guid")
+        )
+
+        if owner_guid:
+            prior_by_owner_guid.setdefault(
+                owner_guid,
+                [],
+            ).append(row)
+
+    target_team_keys: set[str] = set()
+    target_owner_guid_counts: dict[str, int] = {}
+
+    for row in target_rows:
+        team_key = str(
+            row.get("team_key") or ""
+        ).strip()
+
+        if not team_key:
+            raise ValueError(
+                "Every target team must have a non-empty team_key."
+            )
+
+        if team_key in target_team_keys:
+            raise ValueError(
+                f"Duplicate target team_key: {team_key}"
+            )
+
+        target_team_keys.add(team_key)
+
+        team_name = str(
+            row.get("team_name") or ""
+        ).strip()
+
+        if not team_name:
+            raise ValueError(
+                f"Target team {team_key} has a blank team_name."
+            )
+
+        owner_guid = _clean_optional_text(
+            row.get("owner_guid")
+        )
+
+        if owner_guid:
+            target_owner_guid_counts[owner_guid] = (
+                target_owner_guid_counts.get(
+                    owner_guid,
+                    0,
+                )
+                + 1
+            )
+
+    result_rows: list[NfflFranchiseMatch] = []
+
+    for target in sorted(
+        target_rows,
+        key=lambda row: str(
+            row.get("team_key") or ""
+        ),
+    ):
+        team_key = str(
+            target.get("team_key") or ""
+        ).strip()
+        team_name = str(
+            target.get("team_name") or ""
+        ).strip()
+        owner_name = _clean_optional_text(
+            target.get("owner_name")
+        )
+        owner_guid = _clean_optional_text(
+            target.get("owner_guid")
+        )
+
+        status = "REVIEW_REQUIRED"
+        franchise_id: int | None = None
+        prior_team_key: str | None = None
+        prior_team_name: str | None = None
+
+        if not owner_guid:
+            reason = "TARGET_OWNER_GUID_MISSING"
+
+        elif target_owner_guid_counts.get(
+            owner_guid,
+            0,
+        ) > 1:
+            reason = "TARGET_OWNER_GUID_DUPLICATE"
+
+        else:
+            candidates = prior_by_owner_guid.get(
+                owner_guid,
+                [],
+            )
+
+            if not candidates:
+                reason = "NO_OWNER_GUID_MATCH"
+
+            elif len(candidates) > 1:
+                reason = "PRIOR_OWNER_GUID_AMBIGUOUS"
+
+            else:
+                prior = candidates[0]
+
+                franchise_id = int(
+                    prior["franchise_id"]
+                )
+                prior_team_key = str(
+                    prior.get("team_key") or ""
+                ).strip()
+                prior_team_name = _clean_optional_text(
+                    prior.get("team_name")
+                )
+
+                status = "AUTO_MATCH"
+                reason = "UNIQUE_OWNER_GUID_MATCH"
+
+        result_rows.append(
+            NfflFranchiseMatch(
+                target_team_key=team_key,
+                target_team_name=team_name,
+                target_owner_name=owner_name,
+                target_owner_guid=owner_guid,
+                status=status,
+                franchise_id=franchise_id,
+                prior_team_key=prior_team_key,
+                prior_team_name=prior_team_name,
+                reason=reason,
+            )
+        )
+
+    auto_match_count = sum(
+        1
+        for row in result_rows
+        if row.status == "AUTO_MATCH"
+    )
+
+    review_count = len(result_rows) - auto_match_count
+
+    return NfflFranchiseMatchPreview(
+        rows=tuple(result_rows),
+        expected_manager_count=expected,
+        auto_match_count=auto_match_count,
+        review_count=review_count,
+        ready_for_apply=(review_count == 0),
+    )
