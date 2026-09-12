@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
+import {
+  NEW_LEAGUE_STORAGE_KEY,
+  type LeagueSetupDraft,
+} from "../../../lib/leagueSetup";
 import styles from "./page.module.css";
 
 const sports = ["Baseball", "Football", "Hockey"];
@@ -10,6 +15,8 @@ const models = ["Redraft", "Keeper", "Dynasty", "Contract Keeper"];
 const drafts = ["Snake", "Straight / Linear", "Auction", "Custom / Commissioner-defined"];
 
 export default function NewLeaguePage() {
+  const router = useRouter();
+
   const [sport, setSport] = useState("Baseball");
   const [platform, setPlatform] = useState("Yahoo");
   const [model, setModel] = useState("Contract Keeper");
@@ -34,6 +41,65 @@ export default function NewLeaguePage() {
     );
   }
 
+  function handleContinue(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const form = new FormData(event.currentTarget);
+    const isKeeper = model === "Keeper";
+    const isDynasty = model === "Dynasty";
+    const isContractKeeper = model === "Contract Keeper";
+    const isAuction = draft === "Auction";
+
+    const setup: LeagueSetupDraft = {
+      leagueName: String(form.get("leagueName") ?? "").trim(),
+      sport,
+      platform,
+      seasonYear: Number(form.get("seasonYear")),
+      managerCount: Number(form.get("managerCount")),
+
+      leagueModel: model,
+
+      keeperCount: isKeeper
+        ? Number(form.get("keeperCount") ?? 0)
+        : 0,
+      keeperCostMode: isKeeper
+        ? String(form.get("keeperCostMode") ?? "none")
+        : "none",
+
+      contractDurations: isContractKeeper
+        ? durations.slice(0, contractCount)
+        : [],
+      restrictedRights: isContractKeeper && restricted,
+      restrictedRightsLabel:
+        isContractKeeper && restricted ? rightsName.trim() : "",
+      prospectDesignation:
+        isContractKeeper && form.has("prospectDesignation"),
+      franchiseDesignation:
+        isContractKeeper && form.has("franchiseDesignation"),
+      futurePickTrading:
+        (isDynasty || isContractKeeper) &&
+        form.has("futurePickTrading"),
+      annualDraft:
+        isDynasty && form.has("annualDraft"),
+
+      draftMethod: draft,
+      executionMode: "offline",
+      startingBudget: isAuction
+        ? Number(form.get("startingBudget") ?? 260)
+        : 0,
+      minimumBid: isAuction
+        ? Number(form.get("minimumBid") ?? 1)
+        : 0,
+    };
+
+    sessionStorage.setItem(
+      NEW_LEAGUE_STORAGE_KEY,
+      JSON.stringify(setup),
+    );
+
+    router.push("/leagues/new/review");
+  }
+
   return (
     <main className={styles.page}>
       <div className={styles.container}>
@@ -48,12 +114,16 @@ export default function NewLeaguePage() {
           </p>
         </div>
 
-        <form className={styles.form}>
+        <form className={styles.form} onSubmit={handleContinue}>
           <section className={styles.card}>
             <h2>League identity</h2>
             <label>
               League name
-              <input placeholder="e.g. Sunday Night Baseball" />
+              <input
+                name="leagueName"
+                placeholder="e.g. Sunday Night Baseball"
+                required
+              />
             </label>
 
             <div className={styles.grid}>
@@ -73,12 +143,24 @@ export default function NewLeaguePage() {
 
               <label>
                 Season
-                <input type="number" defaultValue="2027" />
+                <input
+                  name="seasonYear"
+                  type="number"
+                  min="2000"
+                  defaultValue="2027"
+                  required
+                />
               </label>
 
               <label>
                 Number of teams
-                <input type="number" min="4" defaultValue="12" />
+                <input
+                  name="managerCount"
+                  type="number"
+                  min="4"
+                  defaultValue="12"
+                  required
+                />
               </label>
             </div>
           </section>
@@ -96,10 +178,19 @@ export default function NewLeaguePage() {
 
             {model === "Keeper" && (
               <div className={styles.grid}>
-                <label>Keeper count<input type="number" min="1" defaultValue="4" /></label>
+                <label>
+                  Keeper count
+                  <input
+                    name="keeperCount"
+                    type="number"
+                    min="1"
+                    defaultValue="4"
+                    required
+                  />
+                </label>
                 <label>
                   Keeper cost
-                  <select defaultValue="none">
+                  <select name="keeperCostMode" defaultValue="none">
                     <option value="none">No draft cost</option>
                     <option value="round">Draft-round cost</option>
                     <option value="custom">Custom rule</option>
@@ -110,8 +201,22 @@ export default function NewLeaguePage() {
 
             {model === "Dynasty" && (
               <div className={styles.checkGrid}>
-                <label className={styles.check}><input type="checkbox" defaultChecked /> Future-pick trading</label>
-                <label className={styles.check}><input type="checkbox" defaultChecked /> Annual rookie/player draft</label>
+                <label className={styles.check}>
+                  <input
+                    name="futurePickTrading"
+                    type="checkbox"
+                    defaultChecked
+                  />
+                  Future-pick trading
+                </label>
+                <label className={styles.check}>
+                  <input
+                    name="annualDraft"
+                    type="checkbox"
+                    defaultChecked
+                  />
+                  Annual rookie/player draft
+                </label>
               </div>
             )}
 
@@ -152,9 +257,28 @@ export default function NewLeaguePage() {
                     />
                     Restricted rights on expiring players
                   </label>
-                  <label className={styles.check}><input type="checkbox" /> Prospect designation</label>
-                  <label className={styles.check}><input type="checkbox" /> Franchise designation</label>
-                  <label className={styles.check}><input type="checkbox" defaultChecked /> Future-pick trading</label>
+                  <label className={styles.check}>
+                    <input
+                      name="prospectDesignation"
+                      type="checkbox"
+                    />
+                    Prospect designation
+                  </label>
+                  <label className={styles.check}>
+                    <input
+                      name="franchiseDesignation"
+                      type="checkbox"
+                    />
+                    Franchise designation
+                  </label>
+                  <label className={styles.check}>
+                    <input
+                      name="futurePickTrading"
+                      type="checkbox"
+                      defaultChecked
+                    />
+                    Future-pick trading
+                  </label>
                 </div>
 
                 {restricted && (
@@ -184,14 +308,34 @@ export default function NewLeaguePage() {
 
             {draft === "Auction" && (
               <div className={styles.grid}>
-                <label>Starting budget<input type="number" defaultValue="260" /></label>
-                <label>Minimum bid<input type="number" defaultValue="1" /></label>
+                <label>
+                  Starting budget
+                  <input
+                    name="startingBudget"
+                    type="number"
+                    min="1"
+                    defaultValue="260"
+                    required
+                  />
+                </label>
+                <label>
+                  Minimum bid
+                  <input
+                    name="minimumBid"
+                    type="number"
+                    min="1"
+                    defaultValue="1"
+                    required
+                  />
+                </label>
               </div>
             )}
           </section>
 
           <div className={styles.actions}>
-            <button className={styles.save} type="button">Continue to review</button>
+            <button className={styles.save} type="submit">
+              Continue to review
+            </button>
             <span>{sport} · {platform} · {model} · {draft}</span>
           </div>
         </form>

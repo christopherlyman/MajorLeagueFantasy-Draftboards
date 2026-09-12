@@ -174,3 +174,74 @@
   .card { padding: 22px; }
   .actions { align-items: flex-start; flex-direction: column; }
 }
+
+.reviewList {
+  display: grid;
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.reviewRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.reviewRow span {
+  color: var(--muted);
+}
+
+.reviewRow strong {
+  text-align: right;
+  color: var(--ink);
+}
+
+.notice {
+  display: grid;
+  gap: 4px;
+  padding: 18px 20px;
+  border: 1px solid #c7d7fe;
+  border-radius: 12px;
+  background: #f5f8ff;
+}
+
+.notice span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.secondary {
+  min-height: 48px;
+  padding: 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 850;
+}
+
+.secondary:hover {
+  background: #f9fafb;
+}
+
+.save:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+@media (max-width: 600px) {
+  .reviewRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .reviewRow strong {
+    text-align: left;
+  }
+}
