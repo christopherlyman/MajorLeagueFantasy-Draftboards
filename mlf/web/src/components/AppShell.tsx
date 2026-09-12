@@ -25,7 +25,7 @@ const NAV_ITEMS = [
   {
     label: "Teams",
     href: "/teams",
-    enabled: false,
+    enabled: true,
   },
   {
     label: "QOs",
