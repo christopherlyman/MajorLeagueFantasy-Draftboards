@@ -30,7 +30,7 @@ const NAV_ITEMS = [
   {
     label: "QOs",
     href: "/qos",
-    enabled: false,
+    enabled: true,
   },
   {
     label: "Draft Lottery",

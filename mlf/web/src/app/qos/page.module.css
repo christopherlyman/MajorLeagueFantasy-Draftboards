@@ -1,0 +1,308 @@
+.summaryBand {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px;
+  border: 1px solid #26374d;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111b27;
+}
+
+.summaryBand > div {
+  padding: 10px 14px;
+  text-align: center;
+  border-right: 1px solid #26374d;
+}
+
+.summaryBand > div:last-child {
+  border-right: 0;
+}
+
+.summaryBand strong {
+  display: block;
+  color: #ffffff;
+  font-size: 1.12rem;
+  line-height: 1.15;
+}
+
+.summaryBand span {
+  display: block;
+  margin-top: 3px;
+  color: #90a1b6;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.qoSection {
+  margin-top: 22px;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 9px;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  color: #f5f8fc;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.sectionHeading p {
+  margin: 4px 0 0;
+  color: #8192a7;
+  font-size: 0.72rem;
+}
+
+.sectionCount {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.sectionCount strong {
+  display: block;
+  color: #ffffff;
+  font-size: 0.95rem;
+}
+
+.sectionCount span {
+  display: block;
+  color: #71849b;
+  font-size: 0.63rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tableScroller {
+  overflow-x: auto;
+  border: 1px solid #28384d;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.qoTable {
+  width: 100%;
+  min-width: 1180px;
+  border-collapse: collapse;
+  color: #192433;
+  font-size: 0.72rem;
+}
+
+.qoTable th {
+  padding: 8px 9px;
+  border-bottom: 1px solid #c9d1dc;
+  background: #e8edf3;
+  color: #3c4d60;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+  white-space: nowrap;
+}
+
+.qoTable td {
+  padding: 8px 9px;
+  border-bottom: 1px solid #dce2e9;
+  vertical-align: top;
+}
+
+.qoTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.qoTable tbody tr:hover td {
+  background: #f1f5f9;
+}
+
+.slotNumber {
+  width: 34px;
+  color: #6d7c8d;
+  font-variant-numeric: tabular-nums;
+}
+
+.teamName {
+  width: 150px;
+  color: #182434;
+  font-weight: 700;
+}
+
+.ownerName {
+  width: 130px;
+  color: #607085;
+}
+
+.qoCell {
+  min-width: 155px;
+}
+
+.playerIdentity {
+  min-width: 0;
+}
+
+.playerIdentity strong {
+  display: block;
+  overflow: hidden;
+  color: #172435;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playerIdentity span {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #748397;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyQo {
+  color: #a2adba;
+}
+
+.mobileCards {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .summaryBand {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 15px;
+  }
+
+  .summaryBand > div {
+    border-right: 1px solid #26374d;
+    border-bottom: 1px solid #26374d;
+  }
+
+  .summaryBand > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .summaryBand > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .sectionHeading {
+    align-items: flex-start;
+  }
+
+  .sectionHeading p {
+    max-width: 250px;
+  }
+
+  .tableScroller {
+    display: none;
+  }
+
+  .mobileCards {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobileCard {
+    overflow: hidden;
+    border: 1px solid #2a3a50;
+    border-radius: 8px;
+    background: #131e2b;
+  }
+
+  .mobileCardHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 11px;
+    border-bottom: 1px solid #27384c;
+    background: #172332;
+  }
+
+  .mobileCardHeader > div:first-child {
+    min-width: 0;
+  }
+
+  .mobileCardHeader span {
+    display: block;
+    color: #71849b;
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.055em;
+  }
+
+  .mobileCardHeader strong {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: #ffffff;
+    font-size: 0.82rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobileOwner {
+    flex: 0 1 auto;
+    overflow: hidden;
+    color: #a9b7c7;
+    font-size: 0.65rem;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobileSlots {
+    display: grid;
+  }
+
+  .mobileSlot {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 47px;
+    padding: 7px 10px;
+    border-bottom: 1px solid #223247;
+  }
+
+  .mobileSlot:last-child {
+    border-bottom: 0;
+  }
+
+  .mobileLevel {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    border: 1px solid #5d2830;
+    border-radius: 5px;
+    background: #30161c;
+    color: #f0a5ae;
+    font-size: 0.61rem;
+    font-weight: 800;
+  }
+
+  .mobileSlot .playerIdentity strong {
+    color: #f5f8fc;
+    font-size: 0.72rem;
+  }
+
+  .mobileSlot .playerIdentity span {
+    color: #8193a8;
+    font-size: 0.61rem;
+  }
+
+  .mobileEmpty {
+    color: #61758d;
+    font-size: 0.66rem;
+    font-style: italic;
+  }
+}
