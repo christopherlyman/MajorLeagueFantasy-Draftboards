@@ -4,6 +4,7 @@ import os
 from collections import Counter
 from uuid import uuid4
 
+import psycopg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -12,6 +13,11 @@ from draftboard.state.commercial_league_profile import (
     CommercialLeagueProfileError,
     summarize_commercial_league_profile,
     validate_commercial_league_profile,
+)
+from draftboard.state.commercial_league_profile_repository import (
+    CommercialLeagueProfileRepositoryError,
+    load_commercial_league_profile,
+    save_commercial_league_profile,
 )
 
 
@@ -111,7 +117,11 @@ def _contract_slots(durations: list[int]) -> list[dict[str, int]]:
     ]
 
 
-def normalize_setup(setup: LeagueSetupDraft) -> dict:
+def normalize_setup(
+    setup: LeagueSetupDraft,
+    *,
+    league_key: str | None = None,
+) -> dict:
     sport = _mapped(SPORTS, setup.sport, "sport")
     platform = _mapped(PLATFORMS, setup.platform, "platform")
     model = _mapped(
@@ -146,7 +156,7 @@ def normalize_setup(setup: LeagueSetupDraft) -> dict:
 
     profile = {
         "league": {
-            "league_key": f"commercial.{uuid4().hex}",
+            "league_key": league_key or f"validation.{uuid4().hex}",
             "name": setup.leagueName.strip(),
             "platform": platform,
             "sport": sport,
@@ -224,6 +234,37 @@ def normalize_setup(setup: LeagueSetupDraft) -> dict:
     return profile
 
 
+
+def database_connection():
+    required = (
+        "PGHOST",
+        "PGPORT",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGDATABASE",
+    )
+
+    missing = [
+        key
+        for key in required
+        if not os.getenv(key)
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "Database configuration is incomplete: "
+            + ", ".join(missing)
+        )
+
+    return psycopg.connect(
+        host=os.environ["PGHOST"],
+        port=int(os.environ["PGPORT"]),
+        user=os.environ["PGUSER"],
+        password=os.environ["PGPASSWORD"],
+        dbname=os.environ["PGDATABASE"],
+    )
+
+
 app = FastAPI(
     title="Commissioner Tools API",
     version="0.1.0",
@@ -274,3 +315,118 @@ def validate_league(
         "profile": profile,
         "summary": summary,
     }
+
+
+@app.post("/api/leagues")
+def create_league(
+    setup: LeagueSetupDraft,
+) -> dict:
+    league_key = f"commercial.{uuid4().hex}"
+
+    try:
+        profile = normalize_setup(
+            setup,
+            league_key=league_key,
+        )
+        validate_commercial_league_profile(profile)
+
+        with database_connection() as connection:
+            result = save_commercial_league_profile(
+                connection,
+                profile,
+                changed_by="commissioner-tools-api",
+                notes="Initial league creation.",
+                expected_profile_version=0,
+            )
+
+            stored = load_commercial_league_profile(
+                connection,
+                result.league_key,
+                result.season_year,
+            )
+
+        if not result.created:
+            raise CommercialLeagueProfileRepositoryError(
+                "Generated league key unexpectedly already existed."
+            )
+
+        if result.profile_version != 1:
+            raise CommercialLeagueProfileRepositoryError(
+                "Initial league profile did not start at version 1."
+            )
+
+        if stored.profile_version != 1:
+            raise CommercialLeagueProfileRepositoryError(
+                "Reloaded league profile was not version 1."
+            )
+
+        if stored.profile != profile:
+            raise CommercialLeagueProfileRepositoryError(
+                "Reloaded profile did not match the saved profile."
+            )
+
+        return {
+            "created": True,
+            "league_key": stored.league_key,
+            "season_year": stored.season_year,
+            "profile_version": stored.profile_version,
+            "profile": stored.profile,
+            "summary": summarize_commercial_league_profile(
+                stored.profile
+            ),
+        }
+
+    except CommercialLeagueProfileError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
+    except CommercialLeagueProfileRepositoryError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="League persistence is unavailable.",
+        ) from exc
+
+
+@app.get("/api/leagues/{league_key}/{season_year}")
+def get_league(
+    league_key: str,
+    season_year: int,
+) -> dict:
+    try:
+        with database_connection() as connection:
+            stored = load_commercial_league_profile(
+                connection,
+                league_key,
+                season_year,
+            )
+
+        return {
+            "league_key": stored.league_key,
+            "season_year": stored.season_year,
+            "profile_version": stored.profile_version,
+            "is_active": stored.is_active,
+            "profile": stored.profile,
+            "summary": summarize_commercial_league_profile(
+                stored.profile
+            ),
+        }
+
+    except CommercialLeagueProfileRepositoryError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="League persistence is unavailable.",
+        ) from exc
