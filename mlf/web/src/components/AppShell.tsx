@@ -35,7 +35,7 @@ const NAV_ITEMS = [
   {
     label: "Draft Lottery",
     href: "/draft-lottery",
-    enabled: false,
+    enabled: true,
   },
   {
     label: "Pick Tracker",
