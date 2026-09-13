@@ -20,6 +20,10 @@ export default function ReviewLeaguePage() {
     "idle" | "validating" | "valid" | "error"
   >("idle");
   const [validationMessage, setValidationMessage] = useState("");
+  const [createState, setCreateState] = useState<
+    "idle" | "creating" | "error"
+  >("idle");
+  const [createMessage, setCreateMessage] = useState("");
 
   useEffect(() => {
     const raw = sessionStorage.getItem(NEW_LEAGUE_STORAGE_KEY);
@@ -96,6 +100,57 @@ export default function ReviewLeaguePage() {
       cancelled = true;
     };
   }, [setup]);
+
+  async function createLeague() {
+    if (!setup || validationState !== "valid") {
+      return;
+    }
+
+    setCreateState("creating");
+    setCreateMessage("");
+
+    try {
+      const response = await fetch("/api/leagues", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(setup),
+      });
+
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          result?.detail ?? "Commissioner Tools could not create this league.",
+        );
+      }
+
+      if (
+        result?.created !== true ||
+        !result?.league_key ||
+        !result?.season_year
+      ) {
+        throw new Error(
+          "The league service did not return a complete created league.",
+        );
+      }
+
+      sessionStorage.removeItem(NEW_LEAGUE_STORAGE_KEY);
+
+      router.push(
+        `/leagues/${encodeURIComponent(result.league_key)}/` +
+          `${result.season_year}`,
+      );
+    } catch (error) {
+      setCreateState("error");
+      setCreateMessage(
+        error instanceof Error
+          ? error.message
+          : "League creation failed.",
+      );
+    }
+  }
 
   if (!loaded) {
     return null;
@@ -303,11 +358,19 @@ export default function ReviewLeaguePage() {
             <span>{validationMessage}</span>
           </div>
 
+          {createState === "error" && (
+            <div className={styles.notice} aria-live="polite">
+              <strong>League creation failed.</strong>
+              <span>{createMessage}</span>
+            </div>
+          )}
+
           <div className={styles.actions}>
             <button
               className={styles.secondary}
               type="button"
               onClick={() => router.back()}
+              disabled={createState === "creating"}
             >
               Back to edit
             </button>
@@ -315,14 +378,15 @@ export default function ReviewLeaguePage() {
             <button
               className={styles.save}
               type="button"
-              disabled
-              title={
-                validationState === "valid"
-                  ? "League persistence is the next implementation step."
-                  : "The setup must validate before it can be created."
+              disabled={
+                validationState !== "valid" ||
+                createState === "creating"
               }
+              onClick={createLeague}
             >
-              Create League
+              {createState === "creating"
+                ? "Creating league…"
+                : "Create League"}
             </button>
           </div>
         </div>
