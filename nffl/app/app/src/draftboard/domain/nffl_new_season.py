@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -404,4 +404,165 @@ def build_nffl_franchise_match_preview(
         auto_match_count=auto_match_count,
         review_count=review_count,
         ready_for_apply=(review_count == 0),
+    )
+
+@dataclass(frozen=True)
+class NfflResolvedFranchiseAssignment:
+    """One final target-team-to-franchise assignment."""
+
+    target_team_key: str
+    franchise_id: int
+    resolution_method: str
+
+
+def resolve_nffl_franchise_assignments(
+    preview: NfflFranchiseMatchPreview,
+    prior_mappings: list[Mapping[str, Any]],
+    manual_assignments: Mapping[str, int] | None = None,
+) -> tuple[NfflResolvedFranchiseAssignment, ...]:
+    """
+    Resolve all target teams to exactly one prior-season franchise.
+
+    Automatic matches are preserved. Commissioner assignments are accepted
+    only for REVIEW_REQUIRED teams. The final result must be a one-to-one
+    mapping across the complete prior franchise set.
+    """
+    manual = dict(manual_assignments or {})
+
+    prior_franchise_ids: set[int] = set()
+
+    for row in prior_mappings:
+        try:
+            franchise_id = int(row["franchise_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "Every prior mapping must contain an integer franchise_id."
+            ) from exc
+
+        if franchise_id <= 0:
+            raise ValueError(
+                "Every prior franchise_id must be positive."
+            )
+
+        if franchise_id in prior_franchise_ids:
+            raise ValueError(
+                f"Duplicate prior franchise_id: {franchise_id}"
+            )
+
+        prior_franchise_ids.add(franchise_id)
+
+    if len(prior_franchise_ids) != preview.expected_manager_count:
+        raise ValueError(
+            "Prior franchise count must equal expected_manager_count."
+        )
+
+    preview_by_team = {
+        row.target_team_key: row
+        for row in preview.rows
+    }
+
+    unknown_manual_teams = (
+        set(manual) - set(preview_by_team)
+    )
+
+    if unknown_manual_teams:
+        raise ValueError(
+            "Manual assignment contains unknown target team(s): "
+            + ", ".join(sorted(unknown_manual_teams))
+        )
+
+    resolved: list[NfflResolvedFranchiseAssignment] = []
+
+    for row in preview.rows:
+        if row.status == "AUTO_MATCH":
+            if row.franchise_id is None:
+                raise ValueError(
+                    f"AUTO_MATCH team {row.target_team_key} "
+                    "is missing franchise_id."
+                )
+
+            if row.target_team_key in manual:
+                raise ValueError(
+                    f"Manual assignment is not allowed for automatic match "
+                    f"{row.target_team_key}."
+                )
+
+            franchise_id = int(row.franchise_id)
+            method = "AUTO_OWNER_GUID"
+
+        elif row.status == "REVIEW_REQUIRED":
+            if row.target_team_key not in manual:
+                raise ValueError(
+                    f"Manual assignment required for "
+                    f"{row.target_team_key}."
+                )
+
+            try:
+                franchise_id = int(
+                    manual[row.target_team_key]
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Manual franchise_id for {row.target_team_key} "
+                    "must be an integer."
+                ) from exc
+
+            method = "COMMISSIONER_MANUAL"
+
+        else:
+            raise ValueError(
+                f"Unknown preview status for "
+                f"{row.target_team_key}: {row.status}"
+            )
+
+        if franchise_id not in prior_franchise_ids:
+            raise ValueError(
+                f"Franchise {franchise_id} is not part of the "
+                "prior-season franchise set."
+            )
+
+        resolved.append(
+            NfflResolvedFranchiseAssignment(
+                target_team_key=row.target_team_key,
+                franchise_id=franchise_id,
+                resolution_method=method,
+            )
+        )
+
+    if len(resolved) != preview.expected_manager_count:
+        raise ValueError(
+            "Resolved assignment count must equal expected_manager_count."
+        )
+
+    resolved_team_keys = {
+        row.target_team_key
+        for row in resolved
+    }
+
+    if len(resolved_team_keys) != len(resolved):
+        raise ValueError(
+            "Target teams must resolve exactly once."
+        )
+
+    resolved_franchise_ids = [
+        row.franchise_id
+        for row in resolved
+    ]
+
+    if len(set(resolved_franchise_ids)) != len(resolved_franchise_ids):
+        raise ValueError(
+            "Each franchise may be assigned to only one target team."
+        )
+
+    if set(resolved_franchise_ids) != prior_franchise_ids:
+        raise ValueError(
+            "Resolved assignments must use every prior franchise "
+            "exactly once."
+        )
+
+    return tuple(
+        sorted(
+            resolved,
+            key=lambda row: row.target_team_key,
+        )
     )

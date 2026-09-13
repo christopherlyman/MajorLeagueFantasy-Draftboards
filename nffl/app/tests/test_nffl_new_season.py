@@ -366,5 +366,200 @@ class NfflFranchiseMatchPreviewTests(unittest.TestCase):
                 expected_manager_count=2,
             )
 
+
+
+from draftboard.domain.nffl_new_season import (
+    resolve_nffl_franchise_assignments,
+)
+
+
+class NfflResolvedFranchiseAssignmentTests(unittest.TestCase):
+
+    def _prior(self) -> list[dict]:
+        return [
+            {
+                "franchise_id": 33,
+                "team_key": "old.t.1",
+                "team_name": "Alpha",
+                "owner_guid": "GUID-A",
+            },
+            {
+                "franchise_id": 34,
+                "team_key": "old.t.2",
+                "team_name": "Beta",
+                "owner_guid": "GUID-B",
+            },
+        ]
+
+    def test_all_auto_matches_resolve_one_to_one(self) -> None:
+        preview = build_nffl_franchise_match_preview(
+            self._prior(),
+            [
+                {
+                    "team_key": "new.t.1",
+                    "team_name": "Alpha",
+                    "owner_guid": "GUID-A",
+                },
+                {
+                    "team_key": "new.t.2",
+                    "team_name": "Beta",
+                    "owner_guid": "GUID-B",
+                },
+            ],
+            expected_manager_count=2,
+        )
+
+        resolved = resolve_nffl_franchise_assignments(
+            preview,
+            self._prior(),
+        )
+
+        self.assertEqual(
+            {
+                row.target_team_key: row.franchise_id
+                for row in resolved
+            },
+            {
+                "new.t.1": 33,
+                "new.t.2": 34,
+            },
+        )
+
+        self.assertTrue(
+            all(
+                row.resolution_method == "AUTO_OWNER_GUID"
+                for row in resolved
+            )
+        )
+
+    def test_review_team_accepts_manual_assignment(self) -> None:
+        preview = build_nffl_franchise_match_preview(
+            self._prior(),
+            [
+                {
+                    "team_key": "new.t.1",
+                    "team_name": "Alpha",
+                    "owner_guid": None,
+                },
+                {
+                    "team_key": "new.t.2",
+                    "team_name": "Beta",
+                    "owner_guid": "GUID-B",
+                },
+            ],
+            expected_manager_count=2,
+        )
+
+        resolved = resolve_nffl_franchise_assignments(
+            preview,
+            self._prior(),
+            manual_assignments={
+                "new.t.1": 33,
+            },
+        )
+
+        by_team = {
+            row.target_team_key: row
+            for row in resolved
+        }
+
+        self.assertEqual(
+            by_team["new.t.1"].franchise_id,
+            33,
+        )
+        self.assertEqual(
+            by_team["new.t.1"].resolution_method,
+            "COMMISSIONER_MANUAL",
+        )
+
+    def test_missing_manual_assignment_is_blocked(self) -> None:
+        preview = build_nffl_franchise_match_preview(
+            self._prior(),
+            [
+                {
+                    "team_key": "new.t.1",
+                    "team_name": "Alpha",
+                    "owner_guid": None,
+                },
+                {
+                    "team_key": "new.t.2",
+                    "team_name": "Beta",
+                    "owner_guid": "GUID-B",
+                },
+            ],
+            expected_manager_count=2,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Manual assignment required",
+        ):
+            resolve_nffl_franchise_assignments(
+                preview,
+                self._prior(),
+            )
+
+    def test_duplicate_franchise_assignment_is_blocked(self) -> None:
+        preview = build_nffl_franchise_match_preview(
+            self._prior(),
+            [
+                {
+                    "team_key": "new.t.1",
+                    "team_name": "Alpha",
+                    "owner_guid": None,
+                },
+                {
+                    "team_key": "new.t.2",
+                    "team_name": "Beta",
+                    "owner_guid": None,
+                },
+            ],
+            expected_manager_count=2,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "only one target team",
+        ):
+            resolve_nffl_franchise_assignments(
+                preview,
+                self._prior(),
+                manual_assignments={
+                    "new.t.1": 33,
+                    "new.t.2": 33,
+                },
+            )
+
+    def test_manual_override_of_auto_match_is_blocked(self) -> None:
+        preview = build_nffl_franchise_match_preview(
+            self._prior(),
+            [
+                {
+                    "team_key": "new.t.1",
+                    "team_name": "Alpha",
+                    "owner_guid": "GUID-A",
+                },
+                {
+                    "team_key": "new.t.2",
+                    "team_name": "Beta",
+                    "owner_guid": "GUID-B",
+                },
+            ],
+            expected_manager_count=2,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "not allowed for automatic match",
+        ):
+            resolve_nffl_franchise_assignments(
+                preview,
+                self._prior(),
+                manual_assignments={
+                    "new.t.1": 34,
+                },
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
