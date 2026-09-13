@@ -16,6 +16,10 @@ export default function ReviewLeaguePage() {
   const router = useRouter();
   const [setup, setSetup] = useState<LeagueSetupDraft | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [validationState, setValidationState] = useState<
+    "idle" | "validating" | "valid" | "error"
+  >("idle");
+  const [validationMessage, setValidationMessage] = useState("");
 
   useEffect(() => {
     const raw = sessionStorage.getItem(NEW_LEAGUE_STORAGE_KEY);
@@ -30,6 +34,68 @@ export default function ReviewLeaguePage() {
 
     setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    if (!setup) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function validateSetup() {
+      setValidationState("validating");
+      setValidationMessage(
+        "Checking this setup against the Commissioner Tools league rules.",
+      );
+
+      try {
+        const response = await fetch("/api/leagues/validate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(setup),
+        });
+
+        const result = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(
+            result?.detail ??
+              "The league setup did not pass validation.",
+          );
+        }
+
+        if (result?.valid !== true) {
+          throw new Error(
+            "The validation service did not confirm this setup.",
+          );
+        }
+
+        if (!cancelled) {
+          setValidationState("valid");
+          setValidationMessage(
+            "This league setup passed Profile v2 validation.",
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setValidationState("error");
+          setValidationMessage(
+            error instanceof Error
+              ? error.message
+              : "League setup validation failed.",
+          );
+        }
+      }
+    }
+
+    void validateSetup();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setup]);
 
   if (!loaded) {
     return null;
@@ -220,12 +286,21 @@ export default function ReviewLeaguePage() {
             </div>
           </section>
 
-          <div className={styles.notice}>
-            <strong>Ready for validation.</strong>
-            <span>
-              Saving to the league database is the next implementation
-              step. Nothing has been persisted yet.
-            </span>
+          <div
+            className={styles.notice}
+            aria-live="polite"
+          >
+            <strong>
+              {validationState === "validating" &&
+                "Validating league setup…"}
+              {validationState === "valid" &&
+                "League setup validated."}
+              {validationState === "error" &&
+                "Validation needs attention."}
+              {validationState === "idle" &&
+                "Ready for validation."}
+            </strong>
+            <span>{validationMessage}</span>
           </div>
 
           <div className={styles.actions}>
@@ -241,6 +316,11 @@ export default function ReviewLeaguePage() {
               className={styles.save}
               type="button"
               disabled
+              title={
+                validationState === "valid"
+                  ? "League persistence is the next implementation step."
+                  : "The setup must validate before it can be created."
+              }
             >
               Create League
             </button>
