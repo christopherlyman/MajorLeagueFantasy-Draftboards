@@ -36,6 +36,7 @@ from draftboard.domain.clock import compute_clock_status, start_pick_clock
 from draftboard.domain.nffl_new_season import (
     build_nffl_franchise_match_preview,
     build_nffl_new_season_spec,
+    resolve_nffl_franchise_assignments,
     suggested_nffl_draft_key,
 )
 from draftboard.state.autosave import save_autosave
@@ -3394,17 +3395,160 @@ def _render_nffl_initialize_new_season_preview() -> None:
             use_container_width=True,
         )
 
-        if preview.ready_for_apply:
-            st.success(
-                "All teams have unique owner-guid evidence and can be "
-                "carried forward automatically. Apply is intentionally "
-                "disabled during this preview phase."
-            )
-        else:
+        manual_assignments: dict[str, int] = {}
+
+        auto_franchise_ids = {
+            int(row.franchise_id)
+            for row in preview.rows
+            if row.status == "AUTO_MATCH"
+            and row.franchise_id is not None
+        }
+
+        review_rows = [
+            row
+            for row in preview.rows
+            if row.status == "REVIEW_REQUIRED"
+        ]
+
+        if review_rows:
             st.warning(
-                f"{preview.review_count} team(s) require Commissioner "
-                "review before the new season can be initialized."
+                f"{len(review_rows)} team(s) require Commissioner "
+                "franchise assignment."
             )
+
+            prior_candidates = sorted(
+                (
+                    row
+                    for row in prior_rows
+                    if int(row["franchise_id"])
+                    not in auto_franchise_ids
+                ),
+                key=lambda row: (
+                    str(row.get("team_name") or ""),
+                    int(row["franchise_id"]),
+                ),
+            )
+
+            candidate_labels = {
+                (
+                    f"{row.get('team_name') or row.get('team_key')} "
+                    f"[FID {int(row['franchise_id'])}]"
+                ): int(row["franchise_id"])
+                for row in prior_candidates
+            }
+
+            placeholder = "? Select prior franchise ?"
+
+            for row in review_rows:
+                st.markdown(
+                    f"**{row.target_team_name}**"
+                    + (
+                        f" ? {row.target_owner_name}"
+                        if row.target_owner_name
+                        else ""
+                    )
+                )
+
+                st.caption(
+                    f"Reason: {row.reason}"
+                )
+
+                selected = st.selectbox(
+                    "Carry forward franchise",
+                    options=[
+                        placeholder,
+                        *candidate_labels.keys(),
+                    ],
+                    key=(
+                        "nffl_new_season_manual_franchise_"
+                        f"{target_year}_{row.target_team_key}"
+                    ),
+                )
+
+                if selected != placeholder:
+                    manual_assignments[
+                        row.target_team_key
+                    ] = candidate_labels[selected]
+
+        resolved_assignments = ()
+        resolution_error: str | None = None
+
+        if len(manual_assignments) == len(review_rows):
+            try:
+                resolved_assignments = (
+                    resolve_nffl_franchise_assignments(
+                        preview,
+                        prior_rows,
+                        manual_assignments=manual_assignments,
+                    )
+                )
+            except ValueError as exc:
+                resolution_error = str(exc)
+
+        if resolution_error:
+            st.error(
+                f"Franchise assignments are not valid: "
+                f"{resolution_error}"
+            )
+
+        elif resolved_assignments:
+            st.success(
+                "Franchise rollover is fully resolved and one-to-one."
+            )
+
+            prior_name_by_franchise = {
+                int(row["franchise_id"]): (
+                    row.get("team_name")
+                    or row.get("team_key")
+                    or ""
+                )
+                for row in prior_rows
+            }
+
+            target_name_by_key = {
+                str(row["team_key"]): (
+                    row.get("team_name")
+                    or row["team_key"]
+                )
+                for row in target_rows
+            }
+
+            st.dataframe(
+                [
+                    {
+                        "Target Team": target_name_by_key[
+                            row.target_team_key
+                        ],
+                        "Franchise ID": row.franchise_id,
+                        "Prior Franchise": (
+                            prior_name_by_franchise[
+                                row.franchise_id
+                            ]
+                        ),
+                        "Resolution": row.resolution_method,
+                    }
+                    for row in resolved_assignments
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            st.info(
+                "All franchise assignments are ready. "
+                "The database staging action will be added next."
+            )
+
+        else:
+            remaining = (
+                len(review_rows)
+                - len(manual_assignments)
+            )
+
+            if remaining > 0:
+                st.info(
+                    f"Resolve {remaining} remaining team(s) "
+                    "before the season can be staged."
+                )
 
         st.caption(
             "Database writes performed by this preview: 0"
