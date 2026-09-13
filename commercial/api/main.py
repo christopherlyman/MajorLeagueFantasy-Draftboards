@@ -14,6 +14,11 @@ from draftboard.state.commercial_league_profile import (
     summarize_commercial_league_profile,
     validate_commercial_league_profile,
 )
+from draftboard.state.commercial_franchise_repository import (
+    CommercialFranchiseRepositoryError,
+    initialize_commercial_league_franchises,
+    load_commercial_league_franchises,
+)
 from draftboard.state.commercial_league_profile_repository import (
     CommercialLeagueProfileRepositoryError,
     load_commercial_league_profile,
@@ -429,4 +434,136 @@ def get_league(
         raise HTTPException(
             status_code=503,
             detail="League persistence is unavailable.",
+        ) from exc
+
+
+class FranchiseDraft(BaseModel):
+    team_name: str
+    owner_name: str | None = None
+
+
+class FranchiseSetupRequest(BaseModel):
+    franchises: list[FranchiseDraft]
+
+
+def _franchise_response(item) -> dict:
+    return {
+        "franchise_id": item.franchise_id,
+        "franchise_name": item.franchise_name,
+        "league_key": item.league_key,
+        "season_year": item.season_year,
+        "team_key": item.team_key,
+        "team_name": item.team_name,
+        "owner_name": item.owner_name,
+        "source": item.source,
+    }
+
+
+@app.get(
+    "/api/leagues/{league_key}/{season_year}/franchises"
+)
+def get_league_franchises(
+    league_key: str,
+    season_year: int,
+) -> dict:
+    try:
+        with database_connection() as connection:
+            load_commercial_league_profile(
+                connection,
+                league_key,
+                season_year,
+            )
+
+            franchises = load_commercial_league_franchises(
+                connection,
+                league_key,
+                season_year,
+            )
+
+        return {
+            "league_key": league_key,
+            "season_year": season_year,
+            "count": len(franchises),
+            "franchises": [
+                _franchise_response(item)
+                for item in franchises
+            ],
+        }
+
+    except CommercialLeagueProfileRepositoryError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except CommercialFranchiseRepositoryError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Franchise persistence is unavailable.",
+        ) from exc
+
+
+@app.post(
+    "/api/leagues/{league_key}/{season_year}/franchises"
+)
+def initialize_league_franchises(
+    league_key: str,
+    season_year: int,
+    request: FranchiseSetupRequest,
+) -> dict:
+    try:
+        with database_connection() as connection:
+            load_commercial_league_profile(
+                connection,
+                league_key,
+                season_year,
+            )
+
+            franchises = initialize_commercial_league_franchises(
+                connection,
+                league_key,
+                season_year,
+                [
+                    {
+                        "team_name": item.team_name,
+                        "owner_name": item.owner_name,
+                    }
+                    for item in request.franchises
+                ],
+                source="manual",
+            )
+
+        return {
+            "initialized": True,
+            "league_key": league_key,
+            "season_year": season_year,
+            "count": len(franchises),
+            "franchises": [
+                _franchise_response(item)
+                for item in franchises
+            ],
+        }
+
+    except CommercialLeagueProfileRepositoryError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except CommercialFranchiseRepositoryError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Franchise persistence is unavailable.",
         ) from exc
