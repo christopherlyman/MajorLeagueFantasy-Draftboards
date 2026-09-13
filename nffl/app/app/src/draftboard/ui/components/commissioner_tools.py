@@ -39,6 +39,9 @@ from draftboard.domain.nffl_new_season import (
     resolve_nffl_franchise_assignments,
     suggested_nffl_draft_key,
 )
+from draftboard.domain.nffl_new_season_apply import (
+    stage_nffl_new_season,
+)
 from draftboard.state.autosave import save_autosave
 from draftboard.state.store import DraftState
 
@@ -3533,10 +3536,99 @@ def _render_nffl_initialize_new_season_preview() -> None:
                 use_container_width=True,
             )
 
-            st.info(
-                "All franchise assignments are ready. "
-                "The database staging action will be added next."
+            st.warning(
+                f"Staging {target_year} will create the new season's "
+                "profile, teams, franchise mappings, season bridge, "
+                "manager gateway links, and an INACTIVE season context. "
+                f"{prior_year} will remain the active NFFL season."
             )
+
+            confirmation_phrase = (
+                f"STAGE NFFL {target_year}"
+            )
+
+            confirmation = st.text_input(
+                "Type the confirmation phrase",
+                value="",
+                placeholder=confirmation_phrase,
+                key=(
+                    "nffl_new_season_stage_confirmation_"
+                    f"{target_year}"
+                ),
+            ).strip()
+
+            confirmed = (
+                confirmation == confirmation_phrase
+            )
+
+            if confirmation and not confirmed:
+                st.error(
+                    f"Confirmation must exactly match: "
+                    f"{confirmation_phrase}"
+                )
+
+            stage_clicked = st.button(
+                f"Stage NFFL {target_year}",
+                key=(
+                    "nffl_new_season_stage_button_"
+                    f"{target_year}"
+                ),
+                type="primary",
+                disabled=not confirmed,
+            )
+
+            if stage_clicked:
+                try:
+                    dsn = _get_dsn()
+
+                    with psycopg.connect(dsn) as conn:
+                        with conn.transaction():
+                            stage_result = stage_nffl_new_season(
+                                conn,
+                                spec=spec,
+                                target_teams=target_rows,
+                                assignments=resolved_assignments,
+                                actor="commissioner",
+                            )
+
+                    st.success(
+                        f"NFFL {stage_result.season_year} staged "
+                        "successfully."
+                    )
+
+                    st.write(
+                        {
+                            "Season": stage_result.season_year,
+                            "League Key": stage_result.league_key,
+                            "Teams": stage_result.teams_created,
+                            "Franchise Mappings": (
+                                stage_result.franchise_mappings_created
+                            ),
+                            "Season Bridges": (
+                                stage_result.bridges_created
+                            ),
+                            "Gateway Links": (
+                                stage_result.gateway_links_created
+                            ),
+                            "Season Context Rows": (
+                                stage_result.season_context_created
+                            ),
+                            "Activated": stage_result.activated,
+                        }
+                    )
+
+                    st.info(
+                        f"{target_year} is staged but NOT active. "
+                        "Next, update the annual NFFL runtime "
+                        "configuration and verify it before activation."
+                    )
+
+                except Exception as exc:
+                    st.error(
+                        "New-season staging failed. "
+                        "The transaction was rolled back."
+                    )
+                    st.exception(exc)
 
         else:
             remaining = (
