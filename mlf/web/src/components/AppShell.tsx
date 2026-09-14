@@ -45,7 +45,7 @@ const NAV_ITEMS = [
   {
     label: "Draft Statistics",
     href: "/draft-statistics",
-    enabled: false,
+    enabled: true,
   },
 ] as const;
 
