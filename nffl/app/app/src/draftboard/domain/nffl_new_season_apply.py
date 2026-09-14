@@ -641,3 +641,377 @@ def stage_nffl_new_season(
         season_context_created=1,
         activated=False,
     )
+
+@dataclass(frozen=True)
+class NfflSeasonActivationResult:
+    season_year: int
+    league_key: str
+    draft_key: str
+    prior_season_year: int
+    prior_league_key: str
+    activated: bool
+
+
+def validate_nffl_activation_runtime(
+    *,
+    staged_season_year: int,
+    staged_league_key: str,
+    staged_draft_key: str,
+    runtime_season_year: int,
+    runtime_league_key: str,
+    runtime_draft_key: str,
+) -> None:
+    """Require runtime configuration to exactly match the staged season."""
+    if int(runtime_season_year) != int(staged_season_year):
+        raise ValueError(
+            "Runtime SEASON_YEAR does not match the staged season."
+        )
+
+    if str(runtime_league_key).strip() != str(staged_league_key).strip():
+        raise ValueError(
+            "Runtime LEAGUE_KEY does not match the staged season."
+        )
+
+    if str(runtime_draft_key).strip() != str(staged_draft_key).strip():
+        raise ValueError(
+            "Runtime DRAFTBOARD_DRAFT_KEY does not match the staged season."
+        )
+
+
+def activate_nffl_staged_season(
+    conn: Any,
+    *,
+    runtime_season_year: int,
+    runtime_league_key: str,
+    runtime_draft_key: str,
+    expected_manager_count: int,
+    actor: str = "commissioner",
+) -> NfflSeasonActivationResult:
+    """
+    Activate one fully staged NFFL season after runtime configuration changes.
+
+    The caller owns the transaction. This function deliberately does not
+    commit. Any failed invariant raises and allows the surrounding transaction
+    to roll back.
+
+    Activation is permitted only when:
+    - an inactive staged context exists for runtime_season_year;
+    - runtime league/year/draft identity exactly matches that context;
+    - its prior season is the one and only currently active NFFL context;
+    - all staged identity surfaces are complete;
+    - no target-season surface is partial.
+    """
+    runtime_year = int(runtime_season_year)
+    runtime_league = str(runtime_league_key or "").strip()
+    runtime_draft = str(runtime_draft_key or "").strip()
+    expected = int(expected_manager_count)
+    actor = str(actor or "").strip() or "commissioner"
+
+    if runtime_year <= 0:
+        raise ValueError(
+            "runtime_season_year must be positive."
+        )
+
+    if not runtime_league:
+        raise ValueError(
+            "runtime_league_key must be non-empty."
+        )
+
+    if not runtime_draft:
+        raise ValueError(
+            "runtime_draft_key must be non-empty."
+        )
+
+    if expected <= 0:
+        raise ValueError(
+            "expected_manager_count must be positive."
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            LOCK TABLE nffl.season_context
+            IN SHARE ROW EXCLUSIVE MODE
+            """
+        )
+
+        cur.execute(
+            """
+            SELECT
+                current_season_year,
+                current_league_key,
+                prior_season_year,
+                prior_league_key,
+                draft_key,
+                is_active
+            FROM nffl.season_context
+            WHERE league_code='NFFL'
+              AND current_season_year=%s
+            """,
+            (runtime_year,),
+        )
+
+        staged_rows = cur.fetchall()
+
+        if len(staged_rows) != 1:
+            raise RuntimeError(
+                "Expected exactly one NFFL season_context row "
+                "for the runtime season."
+            )
+
+        (
+            staged_year,
+            staged_league,
+            prior_year,
+            prior_league,
+            staged_draft,
+            staged_is_active,
+        ) = staged_rows[0]
+
+        if bool(staged_is_active):
+            raise RuntimeError(
+                "Runtime season is already active."
+            )
+
+        validate_nffl_activation_runtime(
+            staged_season_year=int(staged_year),
+            staged_league_key=str(staged_league),
+            staged_draft_key=str(staged_draft),
+            runtime_season_year=runtime_year,
+            runtime_league_key=runtime_league,
+            runtime_draft_key=runtime_draft,
+        )
+
+        cur.execute(
+            """
+            SELECT
+                current_season_year,
+                current_league_key
+            FROM nffl.season_context
+            WHERE league_code='NFFL'
+              AND is_active=true
+            """
+        )
+
+        active_rows = cur.fetchall()
+
+        if len(active_rows) != 1:
+            raise RuntimeError(
+                "Expected exactly one active NFFL season context "
+                "before activation."
+            )
+
+        active_year, active_league = active_rows[0]
+
+        if (
+            int(active_year) != int(prior_year)
+            or str(active_league) != str(prior_league)
+        ):
+            raise RuntimeError(
+                "Currently active NFFL season does not match the "
+                "staged context's prior season."
+            )
+
+        cur.execute(
+            """
+            SELECT
+                (SELECT count(*)
+                   FROM public.league_profile
+                  WHERE league_key=%s
+                    AND season_year=%s),
+
+                (SELECT count(*)
+                   FROM nffl.team
+                  WHERE league_key=%s
+                    AND season_year=%s),
+
+                (SELECT count(*)
+                   FROM public.franchise_season_team
+                  WHERE league_key=%s
+                    AND season_year=%s),
+
+                (SELECT count(DISTINCT franchise_id)
+                   FROM public.franchise_season_team
+                  WHERE league_key=%s
+                    AND season_year=%s),
+
+                (SELECT count(DISTINCT team_key)
+                   FROM public.franchise_season_team
+                  WHERE league_key=%s
+                    AND season_year=%s),
+
+                (SELECT count(*)
+                   FROM nffl.team_season_bridge
+                  WHERE league_code='NFFL'
+                    AND current_league_key=%s
+                    AND current_season_year=%s),
+
+                (SELECT count(*)
+                   FROM nffl.team_gateway_link
+                  WHERE league_key=%s
+                    AND season_year=%s
+                    AND is_active=true)
+            """,
+            (
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+                runtime_league,
+                runtime_year,
+            ),
+        )
+
+        (
+            profile_count,
+            team_count,
+            mapping_count,
+            franchise_count,
+            mapped_team_count,
+            bridge_count,
+            gateway_count,
+        ) = [
+            int(value or 0)
+            for value in cur.fetchone()
+        ]
+
+        if profile_count != 1:
+            raise RuntimeError(
+                "Target league profile is missing or duplicated."
+            )
+
+        expected_counts = {
+            "teams": team_count,
+            "franchise mappings": mapping_count,
+            "distinct franchises": franchise_count,
+            "mapped teams": mapped_team_count,
+            "season bridges": bridge_count,
+            "active gateway links": gateway_count,
+        }
+
+        incomplete = {
+            label: count
+            for label, count in expected_counts.items()
+            if count != expected
+        }
+
+        if incomplete:
+            detail = ", ".join(
+                f"{label}={count}"
+                for label, count in incomplete.items()
+            )
+            raise RuntimeError(
+                "Staged season is incomplete: "
+                + detail
+            )
+
+        cur.execute(
+            """
+            UPDATE nffl.season_context
+            SET
+                is_active=false,
+                updated_at_utc=now(),
+                note=concat_ws(
+                    ' | ',
+                    nullif(note, ''),
+                    %s
+                )
+            WHERE league_code='NFFL'
+              AND current_season_year=%s
+              AND current_league_key=%s
+              AND is_active=true
+            """,
+            (
+                (
+                    f"Deactivated during activation of "
+                    f"NFFL {runtime_year} by {actor}."
+                ),
+                int(prior_year),
+                str(prior_league),
+            ),
+        )
+
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                "Prior active season was not deactivated exactly once."
+            )
+
+        cur.execute(
+            """
+            UPDATE nffl.season_context
+            SET
+                is_active=true,
+                updated_at_utc=now(),
+                note=concat_ws(
+                    ' | ',
+                    nullif(note, ''),
+                    %s
+                )
+            WHERE league_code='NFFL'
+              AND current_season_year=%s
+              AND current_league_key=%s
+              AND draft_key=%s
+              AND is_active=false
+            """,
+            (
+                (
+                    f"Activated after runtime verification "
+                    f"by {actor}."
+                ),
+                runtime_year,
+                runtime_league,
+                runtime_draft,
+            ),
+        )
+
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                "Staged season was not activated exactly once."
+            )
+
+        cur.execute(
+            """
+            SELECT
+                count(*),
+                count(*) FILTER (
+                    WHERE current_season_year=%s
+                      AND current_league_key=%s
+                      AND draft_key=%s
+                )
+            FROM nffl.season_context
+            WHERE league_code='NFFL'
+              AND is_active=true
+            """,
+            (
+                runtime_year,
+                runtime_league,
+                runtime_draft,
+            ),
+        )
+
+        active_count, target_active_count = [
+            int(value or 0)
+            for value in cur.fetchone()
+        ]
+
+        if active_count != 1 or target_active_count != 1:
+            raise RuntimeError(
+                "Post-activation active-season reconciliation failed."
+            )
+
+    return NfflSeasonActivationResult(
+        season_year=runtime_year,
+        league_key=runtime_league,
+        draft_key=runtime_draft,
+        prior_season_year=int(prior_year),
+        prior_league_key=str(prior_league),
+        activated=True,
+    )

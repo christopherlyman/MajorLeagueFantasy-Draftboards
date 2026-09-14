@@ -77,5 +77,67 @@ class NfflNewSeasonApplyPureTests(unittest.TestCase):
         )
 
 
+
+
+from draftboard.domain.nffl_new_season_apply import (
+    validate_nffl_activation_runtime,
+)
+
+
+class NfflActivationRuntimeTests(unittest.TestCase):
+
+    def test_exact_runtime_identity_passes(self) -> None:
+        validate_nffl_activation_runtime(
+            staged_season_year=2027,
+            staged_league_key="477.l.12345",
+            staged_draft_key="nffl_2027_preseason",
+            runtime_season_year=2027,
+            runtime_league_key="477.l.12345",
+            runtime_draft_key="nffl_2027_preseason",
+        )
+
+    def test_runtime_year_mismatch_is_blocked(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "SEASON_YEAR",
+        ):
+            validate_nffl_activation_runtime(
+                staged_season_year=2027,
+                staged_league_key="477.l.12345",
+                staged_draft_key="nffl_2027_preseason",
+                runtime_season_year=2026,
+                runtime_league_key="477.l.12345",
+                runtime_draft_key="nffl_2027_preseason",
+            )
+
+    def test_runtime_league_mismatch_is_blocked(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "LEAGUE_KEY",
+        ):
+            validate_nffl_activation_runtime(
+                staged_season_year=2027,
+                staged_league_key="477.l.12345",
+                staged_draft_key="nffl_2027_preseason",
+                runtime_season_year=2027,
+                runtime_league_key="wrong.league",
+                runtime_draft_key="nffl_2027_preseason",
+            )
+
+    def test_runtime_draft_key_mismatch_is_blocked(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "DRAFTBOARD_DRAFT_KEY",
+        ):
+            validate_nffl_activation_runtime(
+                staged_season_year=2027,
+                staged_league_key="477.l.12345",
+                staged_draft_key="nffl_2027_preseason",
+                runtime_season_year=2027,
+                runtime_league_key="477.l.12345",
+                runtime_draft_key="wrong_draft_key",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
