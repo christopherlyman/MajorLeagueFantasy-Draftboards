@@ -414,7 +414,15 @@ def _restore_mlf_state_from_autosave(restored: DraftState) -> DraftState:
 
         # Preserve prior saved draft order if present; normalize legacy->canonical deterministically.
         legacy_to_canon = dict(st.session_state.get("legacy_to_canonical_team_key_map", {}) or {})
-        if isinstance(prior_order, list) and len(prior_order) == 16:
+        expected_team_count = len(
+            getattr(restored, "teams", {}) or {}
+        )
+
+        if (
+            isinstance(prior_order, list)
+            and expected_team_count > 0
+            and len(prior_order) == expected_team_count
+        ):
             norm = []
             for tk in prior_order:
                 tks = str(tk or "").strip()

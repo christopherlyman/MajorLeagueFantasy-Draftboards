@@ -2086,12 +2086,23 @@ def reset_draft_lottery_to_backup_order(
                 (draft_key,),
             )
             b_rows, b_rounds, b_slots, wrong_draft_key_rows, b_traded_rows = cur.fetchone()
-            if int(b_rows or 0) != 192:
-                raise RuntimeError(f"Backup table must contain 192 rows. Found={b_rows}.")
-            if int(b_rounds or 0) != 16:
-                raise RuntimeError(f"Backup table must contain 16 rounds. Found={b_rounds}.")
-            if int(b_slots or 0) != 12:
-                raise RuntimeError(f"Backup table must contain 12 slots. Found={b_slots}.")
+
+            b_rows = int(b_rows or 0)
+            b_rounds = int(b_rounds or 0)
+            b_slots = int(b_slots or 0)
+
+            if b_rows <= 0 or b_rounds <= 0 or b_slots <= 0:
+                raise RuntimeError(
+                    "Backup table must contain a non-empty draft grid. "
+                    f"rows={b_rows}, rounds={b_rounds}, slots={b_slots}."
+                )
+
+            if b_rows != b_rounds * b_slots:
+                raise RuntimeError(
+                    "Backup table is not a complete rectangular draft grid. "
+                    f"rows={b_rows}, rounds={b_rounds}, slots={b_slots}."
+                )
+
             if int(wrong_draft_key_rows or 0) != 0:
                 raise RuntimeError(f"Backup table contains rows for another draft_key. Rows={wrong_draft_key_rows}.")
             if int(b_traded_rows or 0) != 0:
@@ -2111,8 +2122,24 @@ def reset_draft_lottery_to_backup_order(
                 (draft_key,),
             )
             matched_rows = int(cur.fetchone()[0] or 0)
-            if matched_rows != 192:
-                raise RuntimeError(f"Current draft_pick rows do not fully match backup by pick_id. Matched={matched_rows}.")
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM nffl.draft_pick
+                WHERE draft_key=%s
+                """,
+                (draft_key,),
+            )
+            current_rows = int(cur.fetchone()[0] or 0)
+
+            if current_rows != b_rows or matched_rows != b_rows:
+                raise RuntimeError(
+                    "Current draft_pick rows do not fully match the "
+                    "backup by pick_id. "
+                    f"backup={b_rows}, current={current_rows}, "
+                    f"matched={matched_rows}."
+                )
 
             cur.execute(
                 pg_sql.SQL(
@@ -3962,7 +3989,20 @@ def render_commissioner_actions(
         TEAM_UNASSIGNED = ""
         manager_count = len(getattr(state, "teams", {}) or {})
         if manager_count <= 0:
-            manager_count = len(getattr(state, "draft_order_team_keys_by_slot", []) or []) or 16
+            manager_count = len(
+                getattr(
+                    state,
+                    "draft_order_team_keys_by_slot",
+                    [],
+                )
+                or []
+            )
+
+        if manager_count <= 0:
+            st.error(
+                "Cannot set draft order because no teams are loaded."
+            )
+            return
 
         def _init_slot_map() -> dict[int, str]:
             """

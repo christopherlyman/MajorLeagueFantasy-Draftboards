@@ -5557,8 +5557,10 @@ def render_nffl_team_workbench(dsn: str, gateway_context: dict[str, Any] | None 
     default_team_key = ""
     if gateway_role == "manager" and gateway_team_key:
         default_team_key = gateway_team_key
-    elif gateway_role == "commissioner":
-        default_team_key = "470.l.84346.t.1"  # Buccaneer Blitzkrieg
+    elif gateway_role == "commissioner" and visible_math_rows:
+        default_team_key = str(
+            visible_math_rows[0].get("team_key") or ""
+        )
 
     if default_team_key:
         visible_math_rows = sorted(

@@ -84,7 +84,17 @@ def _upsert_yahoo_team_map(payload: dict, league_key: str, season_year: int, dsn
 
         rows.append((league_key, season_year, team_key, team_id, team_name, owner_name, owner_guid))
 
-    expected_raw = os.environ.get("EXPECTED_MANAGER_COUNT") or os.environ.get("MANAGER_COUNT") or "16"
+    expected_raw = (
+        os.environ.get("EXPECTED_MANAGER_COUNT")
+        or os.environ.get("MANAGER_COUNT")
+    )
+
+    if not expected_raw:
+        raise SystemExit(
+            "Missing required EXPECTED_MANAGER_COUNT or "
+            "MANAGER_COUNT. Refusing to infer league size."
+        )
+
     try:
         expected_count = int(expected_raw)
     except ValueError:
