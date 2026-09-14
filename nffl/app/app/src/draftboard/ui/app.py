@@ -20,7 +20,7 @@ from draftboard.domain.clock import compute_clock_status
 from draftboard.domain.live_pick_kind import classify_live_pick_kind
 from draftboard.domain.models import Position, PickLogEntry, PickSlot, Team
 from draftboard.state.autosave import try_load_autosave, save_autosave
-from draftboard.state.runtime import get_league_key, get_postgres_dsn, get_season_year
+from draftboard.state.runtime import get_draft_key, get_league_key, get_postgres_dsn, get_season_year
 from draftboard.state.store import DraftClock, DraftState, has_state, init_state, get_state, set_current_pick
 from draftboard.state.league_profile import get_active_first_standard_round, get_active_manager_count, get_active_qo_rounds
 from draftboard.state.init_restore import (
@@ -495,10 +495,7 @@ def _submit_draft_pick_atomic(
             "POSTGRES_DSN / MLF_POSTGRES_DSN is not configured."
         )
 
-    draft_key = (
-        os.environ.get("DRAFTBOARD_DRAFT_KEY")
-        or "nffl_2026_preseason"
-    )
+    draft_key = get_draft_key()
 
     pk = str(pick_id or "").strip()
     ypk = str(yahoo_player_key or "").strip()
@@ -820,10 +817,7 @@ def _render_draft_autopick_panel(
     import os
     import psycopg
 
-    draft_key = (
-        os.environ.get("DRAFTBOARD_DRAFT_KEY")
-        or "nffl_2026_preseason"
-    )
+    draft_key = get_draft_key()
 
     try:
         with psycopg.connect(dsn) as conn:
@@ -1427,17 +1421,9 @@ def render_pick_controls(state: DraftState) -> None:
     # render_pick_controls is called independently from render_app's main QO load.
     # Keep the QO replay engine deterministic by loading predraft QOs in local scope.
     dsn_for_qo_replay = get_postgres_dsn()
-    league_key_for_qo_replay = (
-        os.environ.get("LEAGUE_KEY")
-        or os.environ.get("MLF_LEAGUE_KEY")
-        or "470.l.84346"
-    )
+    league_key_for_qo_replay = get_league_key()
     try:
-        season_year_for_qo_replay = int(
-            os.environ.get("SEASON_YEAR")
-            or os.environ.get("MLF_SEASON_YEAR")
-            or 2026
-        )
+        season_year_for_qo_replay = get_season_year()
     except Exception:
         season_year_for_qo_replay = 2026
 
@@ -2477,10 +2463,7 @@ def render_available_players(state: DraftState) -> None:
     import os as _nffl_available_os
 
     all_available_tab_player_keys = [str(p.player_key) for p in state.players.values()]
-    draft_key_for_available_players = _nffl_available_os.environ.get(
-        "DRAFTBOARD_DRAFT_KEY",
-        "nffl_2026_preseason",
-    )
+    draft_key_for_available_players = get_draft_key()
     db_draft_status_by_player_key = _fetch_available_players_draft_selection_status(
         get_postgres_dsn(),
         draft_key_for_available_players,
@@ -3045,7 +3028,7 @@ def render_teams(state: DraftState, contract_years_2026: dict[str, int]) -> None
             import psycopg
 
             dsn = get_postgres_dsn()
-            draft_key = os.environ.get("DRAFTBOARD_DRAFT_KEY", "nffl_2026_preseason")
+            draft_key = get_draft_key()
             if not dsn or not draft_key:
                 return []
 
@@ -4055,7 +4038,7 @@ def _render_nffl_manager_links_tab(dsn: str) -> None:
     )
 
     base_url = os.environ.get("NFFL_PUBLIC_URL", "https://nffl.majorleaguefantasy.app").rstrip("/")
-    draft_key = os.environ.get("DRAFTBOARD_DRAFT_KEY", "nffl_2026_preseason")
+    draft_key = get_draft_key()
 
     sql = """
         WITH draft_slots AS (
@@ -5701,7 +5684,7 @@ def render_app() -> None:
 
         render_postgres_board_html(
             dsn=get_postgres_dsn(),
-            draft_key=os.environ.get("DRAFTBOARD_DRAFT_KEY", "nffl_2026_preseason"),
+            draft_key=get_draft_key(),
         )
 
         with st.expander("Pick Log (details)", expanded=False):
@@ -5743,10 +5726,7 @@ def render_app() -> None:
         render_draft_statistics_tab(
             state,
             dsn=get_postgres_dsn(),
-            draft_key=os.environ.get(
-                "DRAFTBOARD_DRAFT_KEY",
-                "nffl_2026_preseason",
-            ),
+            draft_key=get_draft_key(),
         )
 
     if tab_commissioner is not None:
