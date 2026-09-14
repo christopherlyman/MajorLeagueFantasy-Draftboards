@@ -40,7 +40,9 @@ from draftboard.domain.nffl_new_season import (
     suggested_nffl_draft_key,
 )
 from draftboard.domain.nffl_new_season_apply import (
+    activate_nffl_staged_season,
     stage_nffl_new_season,
+    validate_nffl_activation_runtime,
 )
 from draftboard.state.autosave import save_autosave
 from draftboard.state.store import DraftState
@@ -3208,6 +3210,203 @@ def _load_nffl_new_season_preview_rows(
     return prior_rows, target_rows
 
 
+
+def _render_nffl_staged_season_activation(
+    *,
+    expected_manager_count: int,
+) -> bool:
+    """
+    Render activation controls when runtime points at an inactive staged season.
+
+    Returns True when a staged runtime season was detected, so the caller does
+    not also offer to stage the following season.
+    """
+    try:
+        runtime_year = _get_season_year()
+        runtime_league = _get_league_key()
+        runtime_draft = _get_draft_key()
+        dsn = _get_dsn()
+    except Exception as exc:
+        st.error(
+            f"Could not evaluate NFFL runtime identity: {exc}"
+        )
+        return True
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        current_season_year,
+                        current_league_key,
+                        prior_season_year,
+                        prior_league_key,
+                        draft_key,
+                        is_active
+                    FROM nffl.season_context
+                    WHERE league_code='NFFL'
+                      AND current_season_year=%s
+                    """,
+                    (runtime_year,),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:
+        st.error(
+            f"Could not inspect staged season context: {exc}"
+        )
+        return True
+
+    if not rows:
+        return False
+
+    if len(rows) != 1:
+        st.error(
+            "Expected exactly one NFFL season context for the "
+            "runtime season."
+        )
+        return True
+
+    (
+        staged_year,
+        staged_league,
+        prior_year,
+        prior_league,
+        staged_draft,
+        is_active,
+    ) = rows[0]
+
+    if bool(is_active):
+        return False
+
+    with st.expander(
+        "Activate Staged Season",
+        expanded=True,
+    ):
+        st.warning(
+            f"NFFL {staged_year} is staged but not active. "
+            f"NFFL {prior_year} remains the active season."
+        )
+
+        col_runtime, col_staged = st.columns(2)
+
+        with col_runtime:
+            st.markdown("**Runtime configuration**")
+            st.write(
+                {
+                    "Season": runtime_year,
+                    "League Key": runtime_league,
+                    "Draft Key": runtime_draft,
+                }
+            )
+
+        with col_staged:
+            st.markdown("**Staged season**")
+            st.write(
+                {
+                    "Season": staged_year,
+                    "League Key": staged_league,
+                    "Draft Key": staged_draft,
+                    "Prior Season": prior_year,
+                    "Prior League": prior_league,
+                }
+            )
+
+        runtime_ready = True
+
+        try:
+            validate_nffl_activation_runtime(
+                staged_season_year=int(staged_year),
+                staged_league_key=str(staged_league),
+                staged_draft_key=str(staged_draft),
+                runtime_season_year=runtime_year,
+                runtime_league_key=runtime_league,
+                runtime_draft_key=runtime_draft,
+            )
+        except ValueError as exc:
+            runtime_ready = False
+            st.error(
+                f"Runtime configuration is not ready for activation: {exc}"
+            )
+
+        if runtime_ready:
+            st.success(
+                "Runtime configuration exactly matches the staged season."
+            )
+
+        confirmation_phrase = (
+            f"ACTIVATE NFFL {int(staged_year)}"
+        )
+
+        confirmation = st.text_input(
+            "Type the activation confirmation phrase",
+            value="",
+            placeholder=confirmation_phrase,
+            key=(
+                "nffl_activate_staged_season_confirmation_"
+                f"{staged_year}"
+            ),
+        ).strip()
+
+        confirmed = (
+            runtime_ready
+            and confirmation == confirmation_phrase
+        )
+
+        if confirmation and confirmation != confirmation_phrase:
+            st.error(
+                f"Confirmation must exactly match: "
+                f"{confirmation_phrase}"
+            )
+
+        activate_clicked = st.button(
+            f"Activate NFFL {staged_year}",
+            key=(
+                "nffl_activate_staged_season_button_"
+                f"{staged_year}"
+            ),
+            type="primary",
+            disabled=not confirmed,
+        )
+
+        if activate_clicked:
+            try:
+                with psycopg.connect(dsn) as conn:
+                    with conn.transaction():
+                        result = activate_nffl_staged_season(
+                            conn,
+                            runtime_season_year=runtime_year,
+                            runtime_league_key=runtime_league,
+                            runtime_draft_key=runtime_draft,
+                            expected_manager_count=(
+                                expected_manager_count
+                            ),
+                            actor="commissioner",
+                        )
+
+                st.success(
+                    f"NFFL {result.season_year} is now the active season."
+                )
+                st.info(
+                    f"NFFL {result.prior_season_year} was deactivated. "
+                    "Reload the page to continue with the new season."
+                )
+
+            except Exception as exc:
+                st.error(
+                    "Season activation failed. "
+                    "The transaction was rolled back."
+                )
+                st.exception(exc)
+
+        st.caption(
+            "Activation changes only nffl.season_context after all "
+            "runtime and staged-season invariants pass."
+        )
+
+    return True
+
+
 def _render_nffl_initialize_new_season_preview() -> None:
     """Render a read-only preview of the next NFFL season rollover."""
     try:
@@ -3241,6 +3440,11 @@ def _render_nffl_initialize_new_season_preview() -> None:
             "Active NFFL profile is missing required season identity: "
             f"{exc}"
         )
+        return
+
+    if _render_nffl_staged_season_activation(
+        expected_manager_count=manager_count,
+    ):
         return
 
     target_year = prior_year + 1
