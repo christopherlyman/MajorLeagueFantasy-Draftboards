@@ -40,7 +40,7 @@ const NAV_ITEMS = [
   {
     label: "Pick Tracker",
     href: "/pick-tracker",
-    enabled: false,
+    enabled: true,
   },
   {
     label: "Draft Statistics",

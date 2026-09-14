@@ -1,0 +1,350 @@
+.summaryBand {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 22px;
+  overflow: hidden;
+  border: 1px solid #293b52;
+  border-radius: 8px;
+  background: #111d2b;
+}
+
+.summaryBand > div {
+  padding: 10px 14px;
+  text-align: center;
+  border-right: 1px solid #293b52;
+}
+
+.summaryBand > div:last-child {
+  border-right: 0;
+}
+
+.summaryBand strong {
+  display: block;
+  color: #ffffff;
+  font-size: 1.06rem;
+  line-height: 1.15;
+}
+
+.summaryBand span {
+  display: block;
+  margin-top: 3px;
+  color: #91a5bc;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.065em;
+}
+
+.historySection {
+  width: 100%;
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 9px;
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  color: #f5f8fc;
+  font-size: 1rem;
+}
+
+.sectionHeading p {
+  margin: 4px 0 0;
+  color: #8396ad;
+  font-size: 0.7rem;
+}
+
+.totalLabel {
+  flex: 0 0 auto;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 850;
+  text-align: right;
+}
+
+.totalLabel span {
+  display: block;
+  color: #8196af;
+  font-size: 0.56rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.desktopTableWrap {
+  max-height: calc(100vh - 300px);
+  overflow: auto;
+  border: 1px solid #28384c;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.trackerTable {
+  width: 100%;
+  border-collapse: collapse;
+  color: #1a2635;
+  font-size: 0.72rem;
+}
+
+.trackerTable thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.trackerTable th {
+  padding: 8px 10px;
+  border-bottom: 1px solid #c8d0db;
+  background: #e7edf3;
+  color: #3e5064;
+  font-size: 0.59rem;
+  font-weight: 800;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.trackerTable td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #dde3ea;
+  vertical-align: middle;
+}
+
+.trackerTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.trackerTable tbody tr:hover td {
+  background: #f1f5f9;
+}
+
+.overallCell {
+  width: 66px;
+  color: #7a8999;
+  font-variant-numeric: tabular-nums;
+}
+
+.pickCell {
+  width: 52px;
+  color: #526477;
+  font-variant-numeric: tabular-nums;
+}
+
+.teamCell {
+  min-width: 150px;
+  color: #152234;
+  font-weight: 760;
+}
+
+.ownerCell {
+  min-width: 105px;
+  color: #66778b;
+}
+
+
+.roundBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 35px;
+  padding: 3px 6px;
+  border: 1px solid #334b66;
+  border-radius: 4px;
+  background: #162538;
+  color: #b7cee6;
+  font-size: 0.59rem;
+  font-weight: 800;
+}
+
+.playerIdentity {
+  min-width: 170px;
+}
+
+.playerIdentity strong {
+  display: block;
+  color: #132033;
+  font-size: 0.72rem;
+}
+
+.playerIdentity span {
+  display: block;
+  margin-top: 1px;
+  color: #75869a;
+  font-size: 0.61rem;
+}
+
+.kindBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 0.56rem;
+  font-weight: 850;
+  letter-spacing: 0.035em;
+}
+
+.kindFa {
+  border: 1px solid #aab5c1;
+  background: #eef2f6;
+  color: #536273;
+}
+
+.kindQo {
+  border: 1px solid #af6a2a;
+  background: #fff1dd;
+  color: #91500f;
+}
+
+.kindPoach {
+  border: 1px solid #b72c39;
+  background: #ffe8eb;
+  color: #a31f2c;
+}
+
+.mobileCards {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .summaryBand {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 18px;
+  }
+
+  .summaryBand > div {
+    border-right: 1px solid #293b52;
+    border-bottom: 1px solid #293b52;
+  }
+
+  .summaryBand > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .summaryBand > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .sectionHeading {
+    align-items: flex-start;
+  }
+
+  .sectionHeading p {
+    max-width: 270px;
+  }
+
+  .desktopTableWrap {
+    display: none;
+  }
+
+  .mobileCards {
+    display: grid;
+    gap: 8px;
+  }
+
+  .pickCard {
+    display: grid;
+    grid-template-columns: 70px minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid #2a3b51;
+    border-radius: 8px;
+    background: #131e2b;
+  }
+
+  .cardIndex {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid #65303a;
+    background: #30171d;
+  }
+
+  .cardIndex span {
+    color: #d2828b;
+    font-size: 0.52rem;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.055em;
+  }
+
+  .cardIndex strong {
+    margin-top: 2px;
+    color: #ffadb6;
+    font-size: 1.15rem;
+    line-height: 1;
+  }
+
+  .cardMain {
+    min-width: 0;
+    padding: 10px 12px;
+  }
+
+  .cardTop {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .cardTop > div {
+    min-width: 0;
+  }
+
+  .cardRound {
+    display: block;
+    margin-bottom: 3px;
+    color: #7e94ad;
+    font-size: 0.57rem;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .cardPlayer {
+    display: block;
+    overflow: hidden;
+    color: #f5f8fc;
+    font-size: 0.79rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cardPlayerMeta {
+    display: block;
+    margin-top: 2px;
+    color: #8b9db1;
+    font-size: 0.63rem;
+  }
+
+  .cardTeam {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-top: 7px;
+    padding-top: 6px;
+    border-top: 1px solid #25364a;
+  }
+
+  .cardTeam strong {
+    color: #c5d3e2;
+    font-size: 0.64rem;
+  }
+
+  .cardTeam span {
+    color: #73879e;
+    font-size: 0.61rem;
+  }
+
+
+  .kindBadge {
+    min-width: 39px;
+    padding: 3px 5px;
+    font-size: 0.51rem;
+  }
+}
