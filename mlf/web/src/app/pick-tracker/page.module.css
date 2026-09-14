@@ -348,3 +348,29 @@
     font-size: 0.51rem;
   }
 }
+.timeCell {
+  min-width: 196px;
+  color: #65768a;
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cardTime {
+  display: block;
+  margin-top: 5px;
+  color: #6f849c;
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.timestampNote {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #76592f;
+  border-radius: 6px;
+  background: #2b2319;
+  color: #c7aa7c;
+  font-size: 0.61rem;
+  line-height: 1.45;
+}

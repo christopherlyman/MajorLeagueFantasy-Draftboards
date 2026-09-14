@@ -68,6 +68,7 @@ function DesktopTracker({
             <th>Team</th>
             <th>Owner</th>
             <th>Player</th>
+            <th>Date / Time (ET)</th>
             <th>Type</th>
           </tr>
         </thead>
@@ -79,6 +80,7 @@ function DesktopTracker({
               data-tracker-row={row.pickId}
               data-tracker-player-key={row.playerKey}
               data-tracker-pick-kind={row.pickKind}
+              data-tracker-selected-at={row.selectedAtUtc}
             >
               <td className={styles.overallCell}>
                 {row.overallNumber}
@@ -106,6 +108,10 @@ function DesktopTracker({
                 <PlayerIdentity row={row} />
               </td>
 
+              <td className={styles.timeCell}>
+                {formatPickTime(row.selectedAtUtc)}
+              </td>
+
               <td>
                 <KindBadge kind={row.pickKind} />
               </td>
@@ -131,6 +137,7 @@ function MobileTracker({
           data-tracker-mobile-row={row.pickId}
           data-tracker-mobile-player-key={row.playerKey}
           data-tracker-mobile-pick-kind={row.pickKind}
+          data-tracker-mobile-selected-at={row.selectedAtUtc}
         >
           <div className={styles.cardIndex}>
             <span>Overall</span>
@@ -168,6 +175,10 @@ function MobileTracker({
                   : "Owner unavailable"}
               </span>
             </div>
+
+            <span className={styles.cardTime}>
+              {formatPickTime(row.selectedAtUtc)}
+            </span>
           </div>
         </article>
       ))}
@@ -175,6 +186,31 @@ function MobileTracker({
   );
 }
 
+const PICK_TIME_FORMATTER =
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+
+function formatPickTime(
+  value: string,
+): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(
+      `Invalid Pick Tracker timestamp ${value}.`,
+    );
+  }
+
+  return PICK_TIME_FORMATTER.format(date);
+}
 export default async function PickTrackerPage() {
   const snapshot =
     await loadPickTracker(DRAFT_KEY);
@@ -231,6 +267,12 @@ export default async function PickTrackerPage() {
           rows={snapshot.rows}
         />
       </section>
+      <div className={styles.timestampNote}>
+        Pick times use the canonical selection timestamp.
+        Live drafts record this when the selection is committed;
+        migrated historical seasons may reflect legacy-import
+        timing rather than original draft-clock activity.
+      </div>
     </AppShell>
   );
 }
