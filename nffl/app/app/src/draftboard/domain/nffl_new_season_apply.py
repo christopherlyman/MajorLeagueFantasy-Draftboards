@@ -922,7 +922,7 @@ def activate_nffl_staged_season(
                 note=concat_ws(
                     ' | ',
                     nullif(note, ''),
-                    %s
+                    %s::text
                 )
             WHERE league_code='NFFL'
               AND current_season_year=%s
@@ -953,7 +953,7 @@ def activate_nffl_staged_season(
                 note=concat_ws(
                     ' | ',
                     nullif(note, ''),
-                    %s
+                    %s::text
                 )
             WHERE league_code='NFFL'
               AND current_season_year=%s
