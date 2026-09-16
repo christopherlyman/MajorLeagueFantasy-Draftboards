@@ -56,26 +56,54 @@ Successful response fields are:
 
 Required dependency failure returns HTTP 503 with a generic application error.
 
-## Authentication
+## Authentication: MLF Team Gateway
 
-Authentication continues to use the existing HttpOnly mlf_auth cookie.
+The rebuilt MLF DraftBoard uses the low-friction Team Gateway model already
+proven by the NFFL and NFHL DraftBoards. The legacy username/password plus
+public.auth_session flow is not the authentication contract for the rebuilt
+MLF application.
 
-The cookie contains an opaque session token. FastAPI never trusts cookie
-contents as identity claims.
+Manager flow:
 
-Principal resolution is:
+1. The commissioner distributes a private manager link containing an opaque
+   team gateway token.
+2. GET /gateway/claim validates that token for the active MLF league and season
+   and resolves the canonical franchise/team from PostgreSQL.
+3. A successful claim records claim metadata and an audit event.
+4. FastAPI sets a signed browser cookie named mlf_team_gateway.
+5. The cookie is Secure, HttpOnly, SameSite=Strict, Path=/, and valid for
+   180 days.
+6. The private team-link token is not stored in the identity cookie or audit
+   text.
+7. Future visits restore manager identity without a username/password prompt.
 
-1. read the mlf_auth cookie;
-2. match public.auth_session.session_token;
-3. require revoked_at_utc IS NULL;
-4. require expires_at_utc > now();
-5. join public.auth_user;
-6. require the user to be active;
-7. load active league role information;
-8. resolve franchise/team mapping when applicable.
+The signed cookie contains version, role=manager, league_key, season_year,
+franchise_id, team_key, and issued_at_utc.
 
-FastAPI does not use Streamlit session state.
+The cookie uses HMAC-SHA256 with MLF_GATEWAY_COOKIE_SECRET. There is no
+development fallback secret. Missing signing configuration fails closed.
 
+A manager cookie is accepted only when its signature, version, role, league,
+and season are valid and PostgreSQL confirms that franchise_id, league_key,
+season_year, and team_key still identify the same canonical team.
+
+GET /auth/me is public and read-only. It returns either a canonical manager
+principal or a public principal.
+
+Commissioner authority is separate. The commissioner=1 query parameter is
+presentation state only and must never authorize a FastAPI mutation.
+
+Manager write authorization remains defense in depth:
+
+1. FastAPI validates the signed gateway cookie and canonical team identity.
+2. FastAPI requires that identity to match the expected owner/team.
+3. Existing PostgreSQL/Python atomic mutation logic remains authoritative for
+   draft ownership, active-pick state, concurrency, QO/POACH behavior,
+   contracts, and all other draft invariants.
+
+Initial gateway endpoints are GET /health, GET /auth/me, GET /gateway/claim,
+and GET /gateway/clear. The gateway endpoints establish browser identity only;
+they do not perform draft mutations.
 ## GET /auth/me
 
 Missing, expired, revoked, unknown, or inactive sessions return HTTP 401.

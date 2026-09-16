@@ -1,0 +1,1 @@
+"""MLF FastAPI application boundary."""
