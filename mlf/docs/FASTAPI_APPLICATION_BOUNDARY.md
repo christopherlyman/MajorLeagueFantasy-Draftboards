@@ -315,3 +315,6 @@ When replacing an execution path:
 5. remove or archive the obsolete path when rollback requirements allow.
 
 Parallel implementations are not retained just in case.
+## Gateway Request Logging
+
+The FastAPI runtime disables Uvicorn access logging because the private manager gateway token is carried on the /gateway/claim query string. The gateway token and signed browser cookie must never be emitted to request or application logs. Operational logging may record non-secret outcomes and canonical identity metadata only.
