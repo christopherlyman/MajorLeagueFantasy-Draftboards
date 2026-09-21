@@ -55,6 +55,17 @@ services:
     networks:
       - mlf_net
 
+  api:
+    image: mlf-fastapi:d6cfd08
+    container_name: mlf_api
+    env_file:
+      - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
   caddy:
     image: caddy:2
     container_name: mlf_caddy
