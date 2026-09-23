@@ -131,13 +131,15 @@ It must never expose:
 
 Future pick submission requires authentication.
 
-The API authorization layer permits:
+The initial manager pick endpoint permits:
 
-- an authenticated site administrator; or
 - an authenticated active manager whose resolved team_key equals the
   request expected_owner_team_key.
 
-Commissioner role alone does not authorize an ordinary manager pick.
+The browser cannot assert a different acting franchise. The resolved Team
+Gateway principal is the authoritative API identity. Site-administrator and
+commissioner mutation authority will be added only with the separate signed
+commissioner mechanism before commissioner endpoints are exposed.
 
 This API authorization check is defense-in-depth.
 
@@ -184,9 +186,12 @@ Inputs supplied by the API are:
 - optional expected_pick_kind
 - deterministic selected_by actor/source
 
-The selected_by value identifies the authenticated API actor, for example:
+The selected_by value identifies the authenticated API actor. The initial
+Team Gateway manager form is:
 
-api:user:<user_id>
+api:manager:<franchise_id>
+
+The browser does not supply selected_by.
 
 FastAPI does not recreate the PostgreSQL transaction or draft rules.
 

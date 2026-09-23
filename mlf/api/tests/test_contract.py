@@ -89,21 +89,21 @@ class GatewayContractTests(unittest.TestCase):
             if isinstance(route, APIRoute)
         ]
 
+        route_methods = {
+            route.path: route.methods
+            for route in routes
+        }
+
         self.assertEqual(
-            {route.path for route in routes},
+            route_methods,
             {
-                "/health",
-                "/auth/me",
-                "/gateway/claim",
-                "/gateway/clear",
+                "/health": {"GET"},
+                "/auth/me": {"GET"},
+                "/gateway/claim": {"GET"},
+                "/gateway/clear": {"GET"},
+                "/drafts/{draft_key}/picks": {"POST"},
             },
         )
-
-        for route in routes:
-            self.assertEqual(
-                route.methods,
-                {"GET"},
-            )
 
     def test_schema_endpoints_disabled(self) -> None:
         self.assertIsNone(main.app.docs_url)
