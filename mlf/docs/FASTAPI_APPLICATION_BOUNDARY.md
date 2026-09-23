@@ -169,7 +169,7 @@ must never participate in API authorization.
 
 ## Submit-pick mapping
 
-Future endpoint:
+Implemented endpoint:
 
 POST /drafts/{draft_key}/picks
 
@@ -194,6 +194,44 @@ api:manager:<franchise_id>
 The browser does not supply selected_by.
 
 FastAPI does not recreate the PostgreSQL transaction or draft rules.
+
+## Next.js browser transport
+
+The browser does not connect directly to PostgreSQL and does not reimplement
+draft rules in TypeScript.
+
+The Next.js application exposes same-origin transport-only route handlers:
+
+- GET /api/mlf/auth/me
+- POST /api/mlf/drafts/{draft_key}/picks
+
+Those handlers proxy to the internal FastAPI service at MLF_API_INTERNAL_URL,
+which defaults inside the MLF Docker network to:
+
+http://mlf_api:8000
+
+The proxy may forward only transport/security context needed by FastAPI,
+including the browser Cookie, Content-Type, Origin, and Referer headers.
+Origin and Referer are forwarded unchanged so FastAPI remains authoritative
+for the same-origin/CSRF decision.
+
+The Next.js transport layer does not:
+
+- decide manager authorization;
+- classify FA/QO/POACH;
+- decide whether a player is available;
+- decide current-pick ownership;
+- timestamp a pick;
+- write PostgreSQL;
+- duplicate the atomic draft transaction.
+
+A successful browser pick still follows:
+
+browser -> Next.js transport -> FastAPI -> existing Python wrapper ->
+mlf.submit_draft_pick_atomic(...) -> PostgreSQL.
+
+The private Team Gateway claim route remains a FastAPI route. Production
+routing for /gateway/* is handled during the explicit Caddy cutover step.
 
 ## Timestamp semantics
 

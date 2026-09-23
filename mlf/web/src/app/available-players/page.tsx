@@ -1,5 +1,7 @@
 import { AppShell } from "../../components/AppShell";
 import { AvailablePlayersFilters } from "../../components/AvailablePlayersFilters";
+import { DraftActionController } from "../../components/DraftActionController";
+import { loadDraftRuntimeContext } from "../../lib/draftRuntime";
 import {
   loadAvailablePlayers,
   type AvailablePlayerRow,
@@ -336,6 +338,9 @@ export default async function AvailablePlayersPage({
   const rows =
     await loadAvailablePlayers(draftKey);
 
+  const draftRuntime =
+    await loadDraftRuntimeContext(draftKey);
+
   const query =
     first(params.q)
       .trim()
@@ -585,6 +590,19 @@ export default async function AvailablePlayersPage({
         showPt={showPt}
         showContracts={showContracts}
       />
+
+      {draftRuntime.currentPickId
+      && draftRuntime.currentOwnerTeamKey ? (
+        <DraftActionController
+          draftKey={draftKey}
+          currentPickId={
+            draftRuntime.currentPickId
+          }
+          currentOwnerTeamKey={
+            draftRuntime.currentOwnerTeamKey
+          }
+        />
+      ) : null}
       <div className={`${styles.tableScroller} ${styles.desktopTable}`}>
         <table className={styles.playerTable}>
           <thead>
@@ -595,6 +613,9 @@ export default async function AvailablePlayersPage({
               <th>Contract/PT/QO</th>
               <th>Team Name</th>
               <th>Draft Pick</th>
+              {draftRuntime.currentPickId ? (
+                <th>Action</th>
+              ) : null}
               <th>Current Rank</th>
               <th>% Ros</th>
               <th>H/AB</th>
@@ -646,6 +667,23 @@ export default async function AvailablePlayersPage({
 
                 <td>{row.teamName}</td>
                 <td>{row.draftPick}</td>
+                {draftRuntime.currentPickId ? (
+                  <td>
+                    {!row.draftPick
+                    && !row.isPt
+                    && row.contractYears === null ? (
+                      <button
+                        type="button"
+                        className={styles.draftActionButton}
+                        data-mlf-draft-player={row.playerKey}
+                        data-mlf-draft-player-name={row.name}
+                        disabled
+                      >
+                        Draft
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
 
                 <td>
                   {formatInt(row.currentRank)}
@@ -729,6 +767,23 @@ export default async function AvailablePlayersPage({
                 </strong>
               </div>
             </div>
+
+            {draftRuntime.currentPickId
+            && !row.draftPick
+            && !row.isPt
+            && row.contractYears === null ? (
+              <button
+                type="button"
+                className={
+                  `${styles.draftActionButton} ${styles.mobileDraftAction}`
+                }
+                data-mlf-draft-player={row.playerKey}
+                data-mlf-draft-player-name={row.name}
+                disabled
+              >
+                Draft {row.name}
+              </button>
+            ) : null}
 
             {row.teamName || row.draftPick ? (
               <div className={styles.mobileOwnershipStrip}>

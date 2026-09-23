@@ -776,3 +776,25 @@
     font-size: 0.5rem;
   }
 }
+
+/* MLF_DRAFT_WRITE_ACTIONS */
+.draftActionButton {
+  min-width: 4.4rem;
+  padding: 0.38rem 0.65rem;
+  border: 1px solid currentColor;
+  border-radius: 0.45rem;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.draftActionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.mobileDraftAction {
+  width: 100%;
+  margin-top: 0.65rem;
+}
