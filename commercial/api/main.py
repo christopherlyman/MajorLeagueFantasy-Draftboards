@@ -16,6 +16,10 @@ from draftboard.state.commercial_league_profile import (
     summarize_commercial_league_profile,
     validate_commercial_league_profile,
 )
+from draftboard.state.commercial_authorization_repository import (
+    CommercialAuthorizationRepositoryError,
+    grant_commercial_commissioner,
+)
 from draftboard.state.commercial_franchise_repository import (
     CommercialFranchiseRepositoryError,
     initialize_commercial_league_franchises,
@@ -350,6 +354,7 @@ def validate_league(
 @app.post("/api/leagues")
 def create_league(
     setup: LeagueSetupDraft,
+    request: Request,
 ) -> dict:
     league_key = f"commercial.{uuid4().hex}"
 
@@ -361,13 +366,29 @@ def create_league(
         validate_commercial_league_profile(profile)
 
         with database_connection() as connection:
+            principal = require_commercial_principal(
+                connection,
+                request=request,
+            )
+
             result = save_commercial_league_profile(
                 connection,
                 profile,
-                changed_by="commissioner-tools-api",
+                changed_by=f"auth_user:{principal.user_id}",
                 notes="Initial league creation.",
                 expected_profile_version=0,
+                manage_transaction=False,
             )
+
+            if not result.created:
+                raise CommercialLeagueProfileRepositoryError(
+                    "Generated league key unexpectedly already existed."
+                )
+
+            if result.profile_version != 1:
+                raise CommercialLeagueProfileRepositoryError(
+                    "Initial league profile did not start at version 1."
+                )
 
             stored = load_commercial_league_profile(
                 connection,
@@ -375,25 +396,34 @@ def create_league(
                 result.season_year,
             )
 
-        if not result.created:
-            raise CommercialLeagueProfileRepositoryError(
-                "Generated league key unexpectedly already existed."
+            if stored.profile_version != 1:
+                raise CommercialLeagueProfileRepositoryError(
+                    "Reloaded league profile was not version 1."
+                )
+
+            if stored.profile != profile:
+                raise CommercialLeagueProfileRepositoryError(
+                    "Reloaded profile did not match the saved profile."
+                )
+
+            commissioner_role = grant_commercial_commissioner(
+                connection,
+                user_id=principal.user_id,
+                league_key=stored.league_key,
+                season_year=stored.season_year,
+                manage_transaction=False,
             )
 
-        if result.profile_version != 1:
-            raise CommercialLeagueProfileRepositoryError(
-                "Initial league profile did not start at version 1."
-            )
-
-        if stored.profile_version != 1:
-            raise CommercialLeagueProfileRepositoryError(
-                "Reloaded league profile was not version 1."
-            )
-
-        if stored.profile != profile:
-            raise CommercialLeagueProfileRepositoryError(
-                "Reloaded profile did not match the saved profile."
-            )
+            if (
+                commissioner_role.user_id != principal.user_id
+                or commissioner_role.league_key != stored.league_key
+                or commissioner_role.season_year != stored.season_year
+                or commissioner_role.role_code != "commissioner"
+                or not commissioner_role.active
+            ):
+                raise CommercialAuthorizationRepositoryError(
+                    "Commissioner ownership verification failed."
+                )
 
         return {
             "created": True,
@@ -416,6 +446,12 @@ def create_league(
         raise HTTPException(
             status_code=409,
             detail=str(exc),
+        ) from exc
+
+    except CommercialAuthorizationRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="League authorization is unavailable.",
         ) from exc
 
     except (RuntimeError, psycopg.Error) as exc:
