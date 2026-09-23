@@ -5,9 +5,11 @@ from collections import Counter
 from uuid import uuid4
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+from auth import require_commercial_principal
 
 from draftboard.state.commercial_league_profile import (
     CommercialLeagueProfileError,
@@ -298,6 +300,29 @@ def health() -> dict[str, str]:
     return {
         "status": "ok",
         "service": "commissioner-tools-api",
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(
+    request: Request,
+) -> dict:
+    with database_connection() as connection:
+        principal = require_commercial_principal(
+            connection,
+            request=request,
+        )
+
+    return {
+        "authenticated": True,
+        "user": {
+            "user_id": principal.user_id,
+            "email": principal.email_normalized,
+            "is_site_admin": principal.is_site_admin,
+            "must_change_password": (
+                principal.must_change_password
+            ),
+        },
     }
 
 
