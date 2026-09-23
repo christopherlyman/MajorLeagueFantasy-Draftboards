@@ -75,6 +75,7 @@ def grant_commercial_commissioner(
     user_id: int,
     league_key: str,
     season_year: int,
+    manage_transaction: bool = True,
 ) -> StoredCommercialLeagueRole:
     """
     Grant or reactivate commissioner access for one commercial league season.
@@ -152,11 +153,14 @@ def grant_commercial_commissioner(
                     "Commissioner role grant returned no row."
                 )
 
-        connection.commit()
+        if manage_transaction:
+            connection.commit()
+
         return _row_to_role(row)
 
     except Exception as exc:
-        connection.rollback()
+        if manage_transaction:
+            connection.rollback()
 
         if isinstance(exc, CommercialAuthorizationRepositoryError):
             raise

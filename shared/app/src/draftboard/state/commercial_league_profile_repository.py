@@ -141,6 +141,7 @@ def save_commercial_league_profile(
     changed_by: str,
     notes: str | None = None,
     expected_profile_version: int | None = None,
+    manage_transaction: bool = True,
 ) -> CommercialLeagueProfileSaveResult:
     """
     Atomically create or update one commercial league profile.
@@ -309,9 +310,13 @@ def save_commercial_league_profile(
                         changed=True,
                     )
 
-        connection.commit()
+        if manage_transaction:
+            connection.commit()
+
         return result
 
     except Exception:
-        connection.rollback()
+        if manage_transaction:
+            connection.rollback()
+
         raise

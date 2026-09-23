@@ -228,5 +228,50 @@ class CommercialLeagueProfileRepositoryTests(unittest.TestCase):
         )
 
 
+    def test_caller_managed_transaction_leaves_control_to_caller(self):
+        success = FakeConnection(select_rows=[None])
+
+        with patch.object(
+            repo,
+            "serialize_commercial_league_profile",
+            return_value="profile: new\\n",
+        ):
+            result = repo.save_commercial_league_profile(
+                success,
+                _profile(),
+                changed_by="unit-test",
+                notes="caller-managed success",
+                expected_profile_version=0,
+                manage_transaction=False,
+            )
+
+        self.assertTrue(result.created)
+        self.assertEqual(success.commit_count, 0)
+        self.assertEqual(success.rollback_count, 0)
+
+        failure = FakeConnection(
+            select_rows=[None],
+            fail_contains="INSERT INTO public.league_profile (",
+        )
+
+        with patch.object(
+            repo,
+            "serialize_commercial_league_profile",
+            return_value="profile: new\\n",
+        ):
+            with self.assertRaises(RuntimeError):
+                repo.save_commercial_league_profile(
+                    failure,
+                    _profile(),
+                    changed_by="unit-test",
+                    notes="caller-managed failure",
+                    expected_profile_version=0,
+                    manage_transaction=False,
+                )
+
+        self.assertEqual(failure.commit_count, 0)
+        self.assertEqual(failure.rollback_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

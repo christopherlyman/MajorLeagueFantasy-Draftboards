@@ -258,5 +258,47 @@ class CommercialAuthorizationRepositoryTests(unittest.TestCase):
         )
 
 
+    def test_caller_managed_transaction_leaves_control_to_caller(self):
+        success = ScriptedConnection(
+            [
+                {"one": (1,)},
+                {"one": (True,)},
+                {"one": ROLE_ROW},
+            ]
+        )
+
+        stored = grant_commercial_commissioner(
+            success,
+            user_id=7,
+            league_key="commercial.test",
+            season_year=2027,
+            manage_transaction=False,
+        )
+
+        self.assertEqual(stored.user_id, 7)
+        self.assertEqual(success.commits, 0)
+        self.assertEqual(success.rollbacks, 0)
+
+        failure = ScriptedConnection(
+            [
+                {"one": None},
+            ]
+        )
+
+        with self.assertRaises(
+            CommercialAuthorizationRepositoryError
+        ):
+            grant_commercial_commissioner(
+                failure,
+                user_id=999,
+                league_key="commercial.test",
+                season_year=2027,
+                manage_transaction=False,
+            )
+
+        self.assertEqual(failure.commits, 0)
+        self.assertEqual(failure.rollbacks, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
