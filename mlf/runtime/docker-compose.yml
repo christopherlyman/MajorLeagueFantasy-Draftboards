@@ -56,7 +56,7 @@ services:
       - mlf_net
 
   api:
-    image: mlf-fastapi:d6cfd08
+    image: mlf-fastapi:1e4ffe7
     container_name: mlf_api
     env_file:
       - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
