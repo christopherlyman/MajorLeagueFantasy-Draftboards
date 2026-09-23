@@ -6,7 +6,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-import main as commercial_main
+from api import main as commercial_main
 
 
 PRINCIPAL_ROW = (

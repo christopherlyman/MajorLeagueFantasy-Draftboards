@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from auth import (
+from api.auth import (
     DEFAULT_AUTH_COOKIE_NAME,
     get_auth_cookie_name,
     read_auth_session_token,

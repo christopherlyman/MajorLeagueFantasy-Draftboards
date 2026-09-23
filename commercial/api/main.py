@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from auth import require_commercial_principal
+from api.auth import require_commercial_principal
 
 from draftboard.state.commercial_league_profile import (
     CommercialLeagueProfileError,
