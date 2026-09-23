@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import html
-import importlib.util
 import json
 import random
 import secrets
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-import requests
 import streamlit as st
 
+from draftboard.data.yahoo_client import (
+    fetch_yahoo_json,
+    get_yahoo_access_token,
+)
 from draftboard.state.autosave import save_autosave
 from draftboard.state.runtime import (
     get_draft_key,
@@ -90,62 +91,6 @@ def _parse_int_safe(raw: Any) -> int | None:
         return int(val)
     except Exception:
         return None
-
-
-def _find_yahoo_auth_module_path() -> str:
-    candidates = [
-        "/app/scripts/yahoo/auth.py",
-        "/app/app/scripts/yahoo/auth.py",
-        "/league_runtime/app/scripts/yahoo/auth.py",
-        "/workspace/app/scripts/yahoo/auth.py",
-    ]
-    for candidate in candidates:
-        p = Path(candidate)
-        if p.exists():
-            return str(p)
-    raise RuntimeError("Could not find Yahoo auth.py inside the app container.")
-
-
-def _get_yahoo_access_token() -> str:
-    auth_path = _find_yahoo_auth_module_path()
-    spec = importlib.util.spec_from_file_location("nffl_lottery_yahoo_auth", auth_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load Yahoo auth module from {auth_path}.")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return str(mod.get_access_token())
-
-
-def _load_active_context(dsn: str) -> dict[str, Any]:
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT
-                    current_season_year,
-                    current_league_key,
-                    prior_season_year,
-                    prior_league_key,
-                    draft_key
-                FROM nffl.v_active_season_context
-                LIMIT 1
-                """
-            )
-            row = cur.fetchone()
-    if not row:
-        raise RuntimeError("No active season context found in nffl.v_active_season_context.")
-    return dict(row)
-
-
-def _fetch_yahoo_json(token: str, url: str) -> dict[str, Any]:
-    resp = requests.get(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        timeout=45,
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Yahoo API returned HTTP {resp.status_code}: {resp.text[:500]}")
-    return resp.json()
 
 
 def _extract_standings_team_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -244,9 +189,9 @@ def _load_yahoo_auto_lottery_defaults(
     if not prior_league_key or not prior_season_year:
         raise RuntimeError("Active context is missing prior_league_key/prior_season_year.")
 
-    token = _get_yahoo_access_token()
+    token = get_yahoo_access_token()
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{prior_league_key}/standings?format=json"
-    payload = _fetch_yahoo_json(token, url)
+    payload = fetch_yahoo_json(token, url)
     standings_rows = _extract_standings_team_rows(payload)
 
     if len(standings_rows) != 12:

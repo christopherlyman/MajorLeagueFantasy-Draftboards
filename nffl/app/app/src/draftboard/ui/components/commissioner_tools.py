@@ -44,6 +44,10 @@ from draftboard.domain.nffl_new_season_apply import (
     stage_nffl_new_season,
     validate_nffl_activation_runtime,
 )
+from draftboard.data.yahoo_client import (
+    refresh_yahoo_team_map,
+    resolve_yahoo_league_key,
+)
 from draftboard.state.autosave import save_autosave
 from draftboard.state.store import DraftState
 
@@ -3484,8 +3488,9 @@ def _render_nffl_initialize_new_season_preview() -> None:
         expanded=False,
     ):
         st.caption(
-            "Preview only. This section does not modify the database. "
-            "Review the proposed rollover before any apply action is enabled."
+            "The season rollover remains preview-only until explicitly staged. "
+            "The Yahoo team refresh action below updates only "
+            "public.yahoo_team_map for the entered target league and season."
         )
 
         col_current, col_target, col_managers = st.columns(3)
@@ -3507,11 +3512,15 @@ def _render_nffl_initialize_new_season_preview() -> None:
             f"Current Yahoo league: {prior_league_key}"
         )
 
-        target_league_key = st.text_input(
-            "New Yahoo league key",
+        target_league_id = st.text_input(
+            "New Yahoo League ID",
             value="",
-            placeholder="Example: 999.l.12345",
-            key=f"nffl_new_season_league_key_{target_year}",
+            placeholder="Example: 84346",
+            key=f"nffl_new_season_league_id_{target_year}",
+            help=(
+                "Yahoo shows this as ID# in the league header and as "
+                "the number after /f1/ in the league URL."
+            ),
         ).strip()
 
         target_draft_key = st.text_input(
@@ -3520,13 +3529,60 @@ def _render_nffl_initialize_new_season_preview() -> None:
             key=f"nffl_new_season_draft_key_{target_year}",
         ).strip()
 
-        if not target_league_key:
+        if not target_league_id:
             st.info(
-                "After Yahoo renews the league, enter the new Yahoo "
-                "league key here. The rollover preview will remain "
-                "read-only until the new season is explicitly applied."
+                "After Yahoo renews the league, enter the numeric "
+                "Yahoo League ID shown in the league header or URL."
             )
             return
+
+        if (
+            not target_league_id.isdigit()
+            or int(target_league_id) <= 0
+        ):
+            st.error(
+                "Yahoo League ID must be the positive numeric ID "
+                "shown in Yahoo, such as 84346."
+            )
+            return
+
+        resolved_state_key = (
+            "nffl_resolved_yahoo_league_key_"
+            f"{target_year}_{target_league_id}"
+        )
+
+        target_league_key = str(
+            st.session_state.get(resolved_state_key) or ""
+        ).strip()
+
+        if not target_league_key:
+            try:
+                target_league_key = resolve_yahoo_league_key(
+                    target_league_id,
+                    season_year=target_year,
+                )
+            except ValueError as exc:
+                st.warning(str(exc))
+                st.info(
+                    f"Yahoo must expose its NFL game for {target_year} "
+                    "before the new-season workflow can continue."
+                )
+                return
+            except Exception as exc:
+                st.error(
+                    "Could not resolve the Yahoo League ID to its "
+                    "full Yahoo league key."
+                )
+                st.exception(exc)
+                return
+
+            st.session_state[
+                resolved_state_key
+            ] = target_league_key
+
+        st.caption(
+            f"Resolved Yahoo league key: `{target_league_key}`"
+        )
 
         try:
             spec = build_nffl_new_season_spec(
@@ -3583,10 +3639,45 @@ def _render_nffl_initialize_new_season_preview() -> None:
                 f"{len(target_rows)} are currently loaded in "
                 "public.yahoo_team_map for the new Yahoo league key."
             )
+
+            refresh_clicked = st.button(
+                "Refresh Yahoo Teams",
+                key=(
+                    "nffl_refresh_yahoo_teams_"
+                    f"{target_year}_{target_league_key}"
+                ),
+                help=(
+                    "Load the renewed Yahoo league teams and replace the "
+                    "target season snapshot in public.yahoo_team_map."
+                ),
+            )
+
+            if refresh_clicked:
+                try:
+                    refreshed_rows = refresh_yahoo_team_map(
+                        _get_dsn(),
+                        league_key=spec.current_league_key,
+                        season_year=spec.current_season_year,
+                        expected_manager_count=spec.manager_count,
+                    )
+                except Exception as exc:
+                    st.error(
+                        "Yahoo team refresh failed. "
+                        "No incomplete team snapshot was written."
+                    )
+                    st.exception(exc)
+                    return
+
+                st.success(
+                    f"Loaded {len(refreshed_rows)} Yahoo teams for "
+                    f"NFFL {spec.current_season_year}."
+                )
+                st.rerun()
+
             st.info(
-                "No database changes have been made. Once the renewed "
-                "Yahoo teams are loaded, return here to preview the "
-                "franchise rollover."
+                "Enter the renewed Yahoo league key above, then click "
+                "Refresh Yahoo Teams. After the expected team count is "
+                "loaded, franchise matching will continue automatically."
             )
             return
 
