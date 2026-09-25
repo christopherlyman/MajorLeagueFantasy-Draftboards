@@ -66,6 +66,20 @@ services:
     networks:
       - mlf_net
 
+  next:
+    image: mlf-next:ec704b2
+    container_name: mlf_next
+    env_file:
+      - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
+    environment:
+      MLF_API_INTERNAL_URL: http://mlf_api:8000
+    depends_on:
+      - postgres
+      - api
+    restart: unless-stopped
+    networks:
+      - mlf_net
+
   caddy:
     image: caddy:2
     container_name: mlf_caddy
