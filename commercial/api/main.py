@@ -10,6 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from api.auth import require_commercial_principal
+from api.yahoo_legacy_token import (
+    YahooLegacyTokenBridgeError,
+    get_legacy_yahoo_access_token,
+)
 
 from draftboard.state.commercial_league_profile import (
     CommercialLeagueProfileError,
@@ -24,6 +28,14 @@ from draftboard.state.commercial_franchise_repository import (
     CommercialFranchiseRepositoryError,
     initialize_commercial_league_franchises,
     load_commercial_league_franchises,
+)
+from draftboard.state.commercial_provider_repository import (
+    CommercialProviderRepositoryError,
+    load_provider_connection,
+)
+from draftboard.state.commercial_yahoo_adapter import (
+    YahooFantasyAdapter,
+    YahooFantasyAdapterError,
 )
 from draftboard.state.commercial_league_profile_repository import (
     CommercialLeagueProfileRepositoryError,
@@ -328,6 +340,152 @@ def auth_me(
             ),
         },
     }
+
+
+def _yahoo_league_response(item) -> dict:
+    return {
+        "league_key": item.league_key,
+        "league_id": item.league_id,
+        "name": item.name,
+        "game_key": item.game_key,
+        "season": item.season,
+        "num_teams": item.num_teams,
+    }
+
+
+@app.get(
+    "/api/providers/yahoo/connections/"
+    "{provider_connection_id}/leagues"
+)
+def get_yahoo_connection_leagues(
+    provider_connection_id: int,
+    request: Request,
+    game_key: str,
+) -> dict:
+    try:
+        with database_connection() as connection:
+            principal = require_commercial_principal(
+                connection,
+                request=request,
+            )
+
+            provider_connection = (
+                load_provider_connection(
+                    connection,
+                    user_id=principal.user_id,
+                    provider_connection_id=(
+                        provider_connection_id
+                    ),
+                )
+            )
+
+            if provider_connection is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Provider connection was not found."
+                    ),
+                )
+
+            if (
+                provider_connection.provider_code
+                != "yahoo"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Provider connection is not Yahoo."
+                    ),
+                )
+
+            if provider_connection.status != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Yahoo provider connection "
+                        "is not active."
+                    ),
+                )
+
+            normalized_game_key = str(
+                game_key or ""
+            ).strip()
+
+            if (
+                not normalized_game_key
+                or not normalized_game_key.isdigit()
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Yahoo game_key must be numeric."
+                    ),
+                )
+
+            access_token = (
+                get_legacy_yahoo_access_token(
+                    connection
+                )
+            )
+
+        leagues = (
+            YahooFantasyAdapter()
+            .fetch_leagues(
+                access_token=access_token,
+                game_key=normalized_game_key,
+            )
+        )
+
+        return {
+            "provider_connection_id":
+                provider_connection.provider_connection_id,
+            "provider": "yahoo",
+            "game_key":
+                normalized_game_key,
+            "leagues": [
+                _yahoo_league_response(
+                    item
+                )
+                for item in leagues
+            ],
+        }
+
+    except HTTPException:
+        raise
+
+    except CommercialProviderRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Provider connection service "
+                "is unavailable."
+            ),
+        ) from exc
+
+    except YahooLegacyTokenBridgeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Yahoo connection is unavailable."
+            ),
+        ) from exc
+
+    except YahooFantasyAdapterError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Yahoo Fantasy service is unavailable."
+            ),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Yahoo league discovery "
+                "is unavailable."
+            ),
+        ) from exc
 
 
 @app.post("/api/leagues/validate")
