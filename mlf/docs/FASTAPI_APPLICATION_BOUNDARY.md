@@ -334,18 +334,19 @@ Before exposing trades, inspect apply_trade_assets_atomic directly.
 
 ## Cutover and rollback
 
-No production Caddy routing changes occur during API scaffolding.
+Production cutover to Next.js completed on September 28, 2026 after
+Next.js/FastAPI parity, authorization, failure handling, authenticated safe
+write transport, zero-mutation, and rollback proofs passed.
 
-Before production cutover:
+Current production routing sends the MLF root to `mlf_next`, `/gateway/*` to
+`mlf_api`, and `/auth/*` to `mlf_auth_bridge`.
 
-- Next.js/FastAPI parity passes;
-- authorization behavior passes;
-- concurrency and duplicate behavior pass;
-- failure behavior passes;
-- rollback procedure is proven.
+The legacy Streamlit application remains running only as temporary rollback
+insurance during post-cutover stabilization.
 
-The current Streamlit application remains the rollback target until the new
-production architecture is fully proven.
+The live Caddyfile is intentionally ignored by Git. Current production routing,
+health checks, and the exact Caddy-only rollback procedure are documented in
+`PRODUCTION_OPERATIONS.md`.
 
 ## No zombie code
 
@@ -369,6 +370,7 @@ The FastAPI boundary runs as the Compose service `api` with container name `mlf_
 - It uses the dedicated FastAPI image and the existing ignored MLF `.env`.
 - It joins only the internal `mlf_net` Docker network.
 - It publishes no host port.
-- Caddy does not route production traffic to it during the internal migration phase.
-- The existing Streamlit production route remains unchanged until explicit cutover.
+- Caddy routes `/gateway/*` directly to this service in production.
+- Same-origin Next.js `/api/mlf/*` route handlers also use this internal service as the application boundary.
+- The production root now routes to `mlf_next`; Streamlit is retained only as temporary rollback insurance.
 - The temporary proof container `mlf_api_internal` is not part of the persistent architecture.
