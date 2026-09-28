@@ -2590,6 +2590,7 @@ def _load_nffl_contract_readiness(
                 WHERE c.league_key=%s
                   AND c.season_year=%s
                   AND c.status='active'
+                  AND c.source_snapshot_id IS NOT NULL
             ),
             rostered_same_team AS (
                 SELECT DISTINCT
@@ -3968,45 +3969,13 @@ def _render_nffl_initialize_new_season_preview() -> None:
             "Database writes performed by this preview: 0"
         )
 
-def render_commissioner_actions(
-    state: DraftState,
-    auth_ctx: dict[str, object] | None = None,
-    *,
-    show_header: bool = True,
+def _render_admin_password_reset_tool(
+    auth_ctx: dict[str, object] | None,
 ) -> None:
-    if show_header:
-        st.subheader("Commissioner Tools")
-
-        st.caption(
-            "All Commissioner tools are collapsed by default. "
-            "Open only the section you need."
-        )
-
-    _render_nffl_draft_schedule_controls()
-    _render_nffl_contract_readiness_panel()
-    _render_nffl_qoft_publish_controls(
-        state,
-        auth_ctx=auth_ctx,
-    )
-
     auth_ctx = dict(auth_ctx or {})
-    is_site_admin = bool(auth_ctx.get("is_site_admin", False))
-    league_key = _get_league_key()
-    is_milf = str(league_key) == "469.l.60688"
-
-    # Feature-gate league-specific commissioner tools.
-    # NFFL has prospect_tags=false, so Prospect Tag controls must not render there.
-    try:
-        from draftboard.state.league_profile import get_active_league_profile
-        _profile = get_active_league_profile()
-        _features = dict((_profile or {}).get("features") or {})
-    except Exception:
-        _features = {}
-    prospect_tags_enabled = bool(_features.get("prospect_tags", False))
-
-    # NFFL commissioner page cleanup: hide stale/risky legacy tools without deleting shared code.
-    show_trade_builder = False
-    show_contract_overrides = False
+    is_site_admin = bool(
+        auth_ctx.get("is_site_admin", False)
+    )
 
     with st.expander("Admin Password Reset Tool", expanded=False):
         if not is_site_admin:
@@ -4069,11 +4038,138 @@ def render_commissioner_actions(
                         st.success("Password reset successful.")
                         st.code(temp_pw, language=None)
                         st.warning("Copy this temporary password now. It is only shown after reset.")
-    _render_nffl_initialize_new_season_preview()
 
-    # -----------------------
-    # Set Draft Order
-    # -----------------------
+
+def _render_draft_lottery_reset_tool(
+    state: DraftState,
+) -> None:
+    with st.expander("Reset Draft Lottery to Pre-Lottery State", expanded=False):
+        st.subheader("Reset Draft Lottery to Pre-Lottery State")
+        st.warning(
+            "Use this only during pre-draft testing/rehearsal. "
+            "It restores draft order from a validated draft_pick backup table and voids the current lottery run."
+        )
+        st.caption(
+            "This does not touch QO/FT decisions, QO/FT reveal state, contracts, manager links, or public qualifying_offer rows."
+        )
+
+        try:
+            dsn = _get_dsn()
+            league_key = _get_league_key()
+            season_year = int(_get_season_year())
+            draft_key = _get_draft_key()
+
+            backup_tables = _load_draft_lottery_reset_backup_tables(dsn)
+            if not backup_tables:
+                st.error("No nffl_test_backup.draft_pick_* backup tables found.")
+            else:
+                preferred_backup = "draft_pick_20260627_152830"
+                default_index = backup_tables.index(preferred_backup) if preferred_backup in backup_tables else 0
+                backup_table = st.selectbox(
+                    "Draft pick backup table to restore",
+                    options=backup_tables,
+                    index=default_index,
+                    key="draft_lottery_reset_backup_table",
+                    help="The selected table supplies the pre-lottery draft order.",
+                )
+
+                preview = _preview_draft_lottery_reset(
+                    dsn=dsn,
+                    league_key=league_key,
+                    season_year=season_year,
+                    draft_key=draft_key,
+                    backup_table=backup_table,
+                )
+
+                runs = preview.get("runs", [])
+                if not runs:
+                    st.info("No non-VOID lottery run exists. Nothing to reset.")
+                else:
+                    st.markdown("**Current non-VOID lottery run**")
+                    st.table(
+                        [
+                            {
+                                "run_id": str(r[0]),
+                                "status": str(r[1]),
+                                "completed_at_utc": str(r[2]),
+                                "applied_at_utc": str(r[3]),
+                            }
+                            for r in runs
+                        ]
+                    )
+
+                current_integrity = preview.get("current_integrity")
+                backup_integrity = preview.get("backup_integrity")
+                if current_integrity:
+                    st.write(
+                        "Current draft_pick integrity: "
+                        f"rows={current_integrity[0]}, rounds={current_integrity[1]}, slots={current_integrity[2]}, "
+                        f"untraded={current_integrity[3]}, traded_or_overridden={current_integrity[4]}"
+                    )
+                if backup_integrity:
+                    st.write(
+                        "Backup integrity: "
+                        f"rows={backup_integrity[0]}, rounds={backup_integrity[1]}, slots={backup_integrity[2]}, "
+                        f"wrong_draft_key_rows={backup_integrity[3]}, untraded={backup_integrity[4]}, "
+                        f"traded_or_overridden={backup_integrity[5]}"
+                    )
+
+                st.write(f"Draft selections currently recorded: **{preview.get('draft_selection_rows', 0)}**")
+                st.write(f"Draft-order slots that would change: **{preview.get('slots_that_would_change', 0)}**")
+
+                target_rows = preview.get("target_order_rows", [])
+                if target_rows:
+                    st.markdown("**Target restored order**")
+                    st.table(
+                        [
+                            {
+                                "Pick #": int(r[0]),
+                                "Team Key": str(r[1]),
+                                "Team": str(r[2] or ""),
+                                "Owner": str(r[3] or ""),
+                            }
+                            for r in target_rows
+                        ]
+                    )
+
+                confirm_backup = st.checkbox(
+                    f"I confirm restoring from nffl_test_backup.{backup_table}",
+                    key="draft_lottery_reset_confirm_backup",
+                )
+
+                disabled = (
+                    not confirm_backup
+                    or int(preview.get("draft_selection_rows", 0) or 0) != 0
+                    or not runs
+                )
+
+                if st.button(
+                    "Reset Draft Lottery to Pre-Lottery State",
+                    key="draft_lottery_reset_btn",
+                    type="secondary",
+                    disabled=disabled,
+                ):
+                    result = reset_draft_lottery_to_backup_order(
+                        state,
+                        backup_table=backup_table,
+                        actor="commissioner",
+                    )
+                    st.success(
+                        "Draft lottery reset complete. "
+                        f"updated_draft_pick_rows={result.get('updated_draft_pick_rows')}; "
+                        f"voided_runs={result.get('voided_runs')}"
+                    )
+                    st.rerun()
+
+        except Exception as exc:
+            st.error(f"Draft lottery reset tool failed: {exc}")
+
+
+
+
+def _render_nffl_set_draft_order(
+    state: DraftState,
+) -> bool:
     with st.expander("Set Draft Order", expanded=False):
         st.subheader("Set Draft Order")
 
@@ -4093,7 +4189,7 @@ def render_commissioner_actions(
             st.error(
                 "Cannot set draft order because no teams are loaded."
             )
-            return
+            return False
 
         def _init_slot_map() -> dict[int, str]:
             """
@@ -4304,131 +4400,13 @@ def render_commissioner_actions(
     # -----------------------
     # Reset Draft Lottery
     # -----------------------
-    with st.expander("Reset Draft Lottery to Pre-Lottery State", expanded=False):
-        st.subheader("Reset Draft Lottery to Pre-Lottery State")
-        st.warning(
-            "Use this only during pre-draft testing/rehearsal. "
-            "It restores draft order from a validated draft_pick backup table and voids the current lottery run."
-        )
-        st.caption(
-            "This does not touch QO/FT decisions, QO/FT reveal state, contracts, manager links, or public qualifying_offer rows."
-        )
-
-        try:
-            dsn = _get_dsn()
-            league_key = _get_league_key()
-            season_year = int(_get_season_year())
-            draft_key = _get_draft_key()
-
-            backup_tables = _load_draft_lottery_reset_backup_tables(dsn)
-            if not backup_tables:
-                st.error("No nffl_test_backup.draft_pick_* backup tables found.")
-            else:
-                preferred_backup = "draft_pick_20260627_152830"
-                default_index = backup_tables.index(preferred_backup) if preferred_backup in backup_tables else 0
-                backup_table = st.selectbox(
-                    "Draft pick backup table to restore",
-                    options=backup_tables,
-                    index=default_index,
-                    key="draft_lottery_reset_backup_table",
-                    help="The selected table supplies the pre-lottery draft order.",
-                )
-
-                preview = _preview_draft_lottery_reset(
-                    dsn=dsn,
-                    league_key=league_key,
-                    season_year=season_year,
-                    draft_key=draft_key,
-                    backup_table=backup_table,
-                )
-
-                runs = preview.get("runs", [])
-                if not runs:
-                    st.info("No non-VOID lottery run exists. Nothing to reset.")
-                else:
-                    st.markdown("**Current non-VOID lottery run**")
-                    st.table(
-                        [
-                            {
-                                "run_id": str(r[0]),
-                                "status": str(r[1]),
-                                "completed_at_utc": str(r[2]),
-                                "applied_at_utc": str(r[3]),
-                            }
-                            for r in runs
-                        ]
-                    )
-
-                current_integrity = preview.get("current_integrity")
-                backup_integrity = preview.get("backup_integrity")
-                if current_integrity:
-                    st.write(
-                        "Current draft_pick integrity: "
-                        f"rows={current_integrity[0]}, rounds={current_integrity[1]}, slots={current_integrity[2]}, "
-                        f"untraded={current_integrity[3]}, traded_or_overridden={current_integrity[4]}"
-                    )
-                if backup_integrity:
-                    st.write(
-                        "Backup integrity: "
-                        f"rows={backup_integrity[0]}, rounds={backup_integrity[1]}, slots={backup_integrity[2]}, "
-                        f"wrong_draft_key_rows={backup_integrity[3]}, untraded={backup_integrity[4]}, "
-                        f"traded_or_overridden={backup_integrity[5]}"
-                    )
-
-                st.write(f"Draft selections currently recorded: **{preview.get('draft_selection_rows', 0)}**")
-                st.write(f"Draft-order slots that would change: **{preview.get('slots_that_would_change', 0)}**")
-
-                target_rows = preview.get("target_order_rows", [])
-                if target_rows:
-                    st.markdown("**Target restored order**")
-                    st.table(
-                        [
-                            {
-                                "Pick #": int(r[0]),
-                                "Team Key": str(r[1]),
-                                "Team": str(r[2] or ""),
-                                "Owner": str(r[3] or ""),
-                            }
-                            for r in target_rows
-                        ]
-                    )
-
-                confirm_backup = st.checkbox(
-                    f"I confirm restoring from nffl_test_backup.{backup_table}",
-                    key="draft_lottery_reset_confirm_backup",
-                )
-
-                disabled = (
-                    not confirm_backup
-                    or int(preview.get("draft_selection_rows", 0) or 0) != 0
-                    or not runs
-                )
-
-                if st.button(
-                    "Reset Draft Lottery to Pre-Lottery State",
-                    key="draft_lottery_reset_btn",
-                    type="secondary",
-                    disabled=disabled,
-                ):
-                    result = reset_draft_lottery_to_backup_order(
-                        state,
-                        backup_table=backup_table,
-                        actor="commissioner",
-                    )
-                    st.success(
-                        "Draft lottery reset complete. "
-                        f"updated_draft_pick_rows={result.get('updated_draft_pick_rows')}; "
-                        f"voided_runs={result.get('voided_runs')}"
-                    )
-                    st.rerun()
-
-        except Exception as exc:
-            st.error(f"Draft lottery reset tool failed: {exc}")
-
-
     # -----------------------
-    # Refresh Yahoo Player Universe
-    # -----------------------
+
+    return True
+
+def _render_nffl_yahoo_player_universe_refresh(
+    state: DraftState,
+) -> None:
     with st.expander("Refresh Yahoo Player Universe", expanded=False):
         st.caption(
             "Refreshes player meta (rank, % rostered, prior-year stats) from Yahoo into Postgres, "
@@ -4574,6 +4552,95 @@ def render_commissioner_actions(
             st.rerun()
 
     # -----------------------
+
+
+def render_commissioner_actions(
+    state: DraftState,
+    auth_ctx: dict[str, object] | None = None,
+    *,
+    show_header: bool = True,
+    render_targets: dict[str, object] | None = None,
+) -> None:
+    render_targets = dict(render_targets or {})
+
+    def _target_container(key: str):
+        target = render_targets.get(key)
+        if target is not None:
+            return target
+        return st.container()
+
+    def _target_expander(
+        key: str,
+        label: str,
+        *,
+        expanded: bool = False,
+    ):
+        target = render_targets.get(key)
+        if target is not None:
+            return target.expander(
+                label,
+                expanded=expanded,
+            )
+        return st.expander(
+            label,
+            expanded=expanded,
+        )
+
+    if show_header:
+        st.subheader("Commissioner Tools")
+
+        st.caption(
+            "All Commissioner tools are collapsed by default. "
+            "Open only the section you need."
+        )
+
+    with _target_container("draft_schedule"):
+        _render_nffl_draft_schedule_controls()
+
+    with _target_container("contract_readiness"):
+        _render_nffl_contract_readiness_panel()
+
+    with _target_container("qoft"):
+        _render_nffl_qoft_publish_controls(
+            state,
+            auth_ctx=auth_ctx,
+        )
+
+    auth_ctx = dict(auth_ctx or {})
+    league_key = _get_league_key()
+    is_milf = str(league_key) == "469.l.60688"
+
+    # Feature-gate league-specific commissioner tools.
+    # NFFL has prospect_tags=false, so Prospect Tag controls must not render there.
+    try:
+        from draftboard.state.league_profile import get_active_league_profile
+        _profile = get_active_league_profile()
+        _features = dict((_profile or {}).get("features") or {})
+    except Exception:
+        _features = {}
+    prospect_tags_enabled = bool(_features.get("prospect_tags", False))
+
+    # NFFL commissioner page cleanup: hide stale/risky legacy tools without deleting shared code.
+    show_trade_builder = False
+    show_contract_overrides = False
+
+    with _target_container("initialize_new_season"):
+        _render_nffl_initialize_new_season_preview()
+
+    # -----------------------
+    # Set Draft Order
+    # -----------------------
+    with _target_container("set_draft_order"):
+        if not _render_nffl_set_draft_order(
+            state
+        ):
+            return
+    # Refresh Yahoo Player Universe
+    # -----------------------
+    with _target_container("yahoo_player_universe"):
+        _render_nffl_yahoo_player_universe_refresh(
+            state
+        )
     # Trade Builder (UI ONLY — SAFE)
     # -----------------------
     if show_trade_builder:
@@ -4975,7 +5042,7 @@ def render_commissioner_actions(
     if not is_milf:
         # Qualifying Offers
         # -----------------------
-        with st.expander("Qualifying Offers", expanded=False):
+        with _target_expander("exceptions", "Qualifying Offers", expanded=False):
             # (Your existing QO block unchanged)
             st.subheader("Qualifying Offers (Predraft)")
 
@@ -5512,7 +5579,7 @@ def render_commissioner_actions(
     # -----------------------
     # NFFL Keeper / Roster Overrides
     # -----------------------
-    with st.expander("NFFL Keeper / Roster Overrides", expanded=False):
+    with _target_expander("exceptions", "NFFL Keeper / Roster Overrides", expanded=False):
         st.caption(
             "NFFL-native commissioner overrides. Writes to nffl.contract, "
             "nffl.offseason_keeper_decision, and nffl.franchise_tag_history."
@@ -6207,7 +6274,7 @@ def render_commissioner_actions(
     # -----------------------
     # NFFL Pick Ownership Overrides
     # -----------------------
-    with st.expander("NFFL Pick Ownership Overrides", expanded=False):
+    with _target_expander("exceptions", "NFFL Pick Ownership Overrides", expanded=False):
         st.caption(
             "Commissioner pick ownership correction. Writes to nffl.draft_pick only. "
             "Selected picks are blocked here; correct selected picks through Draft Tools first."
@@ -6334,7 +6401,7 @@ def render_commissioner_actions(
                         st.error(f"Pick ownership update failed: {e}")
 
         
-    with st.expander("Draft Tools", expanded=False):
+    with _target_expander("draft_operations", "Draft Tools", expanded=False):
 
         st.subheader("Draft Clock")
 
@@ -6467,7 +6534,34 @@ def render_commissioner_actions(
 # -----------------------
 # Danger Zone (your existing block)
 # -----------------------
-    with st.expander("Danger Zone", expanded=False):
+    if not render_targets:
+        st.markdown("#### Support & Recovery")
+        st.caption(
+            "Use these only for account recovery or controlled "
+            "pre-draft testing/rehearsal. They are not normal "
+            "annual Commissioner workflow steps."
+        )
+
+    with _target_container("support_recovery"):
+        _render_admin_password_reset_tool(
+            auth_ctx
+        )
+        _render_draft_lottery_reset_tool(
+            state
+        )
+
+    if not render_targets:
+        st.markdown("#### Danger Zone")
+        st.caption(
+            "Destructive draft-state actions. Use only when the "
+            "current draft must be deliberately reset."
+        )
+
+    with _target_expander(
+        "danger_zone",
+        "Danger Zone",
+        expanded=False,
+    ):
         with st.form("reset_draft_form", clear_on_submit=False):
             reset_confirm = st.checkbox(
                 "I understand this will wipe ALL picks and reset the draft.",

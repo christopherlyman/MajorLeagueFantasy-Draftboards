@@ -5239,13 +5239,9 @@ def _render_decision_controls(
 
 
 
-def render_nffl_contract_administration(
-    dsn: str,
-    *,
-    gateway_context: dict[str, Any] | None = None,
-) -> None:
-    """Commissioner-only contract rollover and reveal workflow."""
-
+def _nffl_commissioner_actor(
+    gateway_context: dict[str, Any] | None,
+) -> str | None:
     gateway_context = gateway_context or {}
 
     gateway_role = str(
@@ -5254,20 +5250,30 @@ def render_nffl_contract_administration(
     ).strip().lower()
 
     if gateway_role != "commissioner":
-        return
+        return None
 
-    acting_as = str(
+    return str(
         gateway_context.get("acting_as")
         or "commissioner_ui"
     )
 
-    qoft_revealed = _qoft_revealed(dsn)
-    contracts_revealed = (
-        _post_draft_contracts_revealed(dsn)
+
+def render_nffl_season_end_contract_rollover(
+    dsn: str,
+    *,
+    gateway_context: dict[str, Any] | None = None,
+) -> None:
+    """Render the Commissioner season-end contract rollover workflow."""
+
+    acting_as = _nffl_commissioner_actor(
+        gateway_context
     )
 
+    if acting_as is None:
+        return
+
     with st.expander(
-        "Contract Administration",
+        "Season-End Contract Rollover",
         expanded=False,
     ):
         _render_season_end_contract_update(
@@ -5275,11 +5281,30 @@ def render_nffl_contract_administration(
             acting_as=acting_as,
         )
 
-        st.divider()
-        st.markdown(
-            "### Post-Draft Contract Reveal"
-        )
 
+def render_nffl_post_draft_contract_reveal(
+    dsn: str,
+    *,
+    gateway_context: dict[str, Any] | None = None,
+) -> None:
+    """Render the Commissioner post-draft contract publication workflow."""
+
+    acting_as = _nffl_commissioner_actor(
+        gateway_context
+    )
+
+    if acting_as is None:
+        return
+
+    qoft_revealed = _qoft_revealed(dsn)
+    contracts_revealed = (
+        _post_draft_contracts_revealed(dsn)
+    )
+
+    with st.expander(
+        "Post-Draft Contract Reveal",
+        expanded=False,
+    ):
         if (
             qoft_revealed
             and not contracts_revealed

@@ -34,7 +34,8 @@ from draftboard.state.init_restore import (
 from draftboard.ui.components.board_html import render_board_html
 from draftboard.ui.components.postgres_board_html import render_postgres_board_html
 from draftboard.ui.components.nffl_team_workbench import (
-    render_nffl_contract_administration,
+    render_nffl_season_end_contract_rollover,
+    render_nffl_post_draft_contract_reveal,
     render_nffl_team_workbench,
 )
 from draftboard.ui.components.commissioner_tools import render_commissioner_actions
@@ -5734,8 +5735,8 @@ def render_app() -> None:
             st.subheader("Commissioner Tools")
 
             st.caption(
-                "All Commissioner tools are collapsed by default. "
-                "Open only the section you need."
+                "Follow Commissioner Readiness and the numbered annual workflow below. "
+                "Correction, recovery, and destructive tools are separated from normal steps."
             )
 
             auth_ctx = (
@@ -5745,27 +5746,150 @@ def render_app() -> None:
                 or _nffl_gateway_auth_context(None)
             )
 
-            with st.expander(
-                "Manager Access",
-                expanded=False,
-            ):
-                _render_nffl_manager_links_tab(
-                    get_postgres_dsn()
-                )
-                st.divider()
-                _render_nffl_gateway_audit_tab(
-                    get_postgres_dsn()
-                )
+            from draftboard.ui.components.commissioner_checklist import (
+                render_commissioner_checklist,
+            )
 
-            render_nffl_contract_administration(
-                get_postgres_dsn(),
+            render_commissioner_checklist(
                 gateway_context=auth_ctx,
             )
+
+            st.markdown("### Annual Commissioner Workflow")
+            st.caption(
+                "Work from top to bottom. The Next action above is "
+                "authoritative; completed phases can be left alone."
+            )
+
+            season_closeout = st.container()
+            with season_closeout:
+                st.markdown("#### 1. Season Closeout")
+                st.caption(
+                    "Do: roll season-end contracts, verify contract integrity, "
+                    "then publish and reveal QO/FT decisions. "
+                    "Done when Contract Readiness is clear and QO/FT is revealed."
+                )
+                season_rollover_target = st.container()
+                contract_readiness_target = st.container()
+                qoft_target = st.container()
+
+            new_season_setup = st.container()
+            with new_season_setup:
+                st.markdown("#### 2. New Season Setup")
+                st.caption(
+                    "Do: initialize the renewed Yahoo season, confirm manager "
+                    "access, and refresh current Yahoo player data. "
+                    "Done when the renewed season is active and current data is loaded."
+                )
+                initialize_new_season_target = st.container()
+                manager_access_target = st.container()
+                yahoo_player_universe_target = st.container()
+
+            draft_preparation = st.container()
+            with draft_preparation:
+                st.markdown("#### 3. Draft Preparation")
+                st.caption(
+                    "Do: set the draft schedule and establish the verified draft order. "
+                    "Done when both match the league's approved draft setup."
+                )
+                draft_schedule_target = st.container()
+                set_draft_order_target = st.container()
+
+            draft_operations = st.container()
+            with draft_operations:
+                st.markdown("#### 4. Draft Operations")
+                st.caption(
+                    "Use Draft Tools for the live draft clock and pick corrections "
+                    "during the draft."
+                )
+                draft_operations_target = st.container()
+
+            post_draft_closeout = st.container()
+            with post_draft_closeout:
+                st.markdown("#### 5. Post-Draft Closeout")
+                st.caption(
+                    "After the draft, finalize and reveal new contracts only after "
+                    "every team's contract plan is saved."
+                )
+                post_draft_target = st.container()
+
+            exceptions_section = st.container()
+            with exceptions_section:
+                st.markdown("#### Exceptions & Corrections")
+                st.caption(
+                    "Manual correction tools only. These are not normal annual "
+                    "workflow steps unless Commissioner Readiness identifies a problem."
+                )
+                exceptions_target = st.container()
+
+            support_section = st.container()
+            with support_section:
+                st.markdown("#### Support & Recovery")
+                st.caption(
+                    "Account recovery and controlled pre-draft rehearsal tools. "
+                    "Use only when needed."
+                )
+                support_recovery_target = st.container()
+
+            danger_section = st.container()
+            with danger_section:
+                st.markdown("#### Danger Zone")
+                st.caption(
+                    "Destructive draft-state actions. Use only for an intentional "
+                    "draft reset."
+                )
+                danger_zone_target = st.container()
+
+            with season_rollover_target:
+                render_nffl_season_end_contract_rollover(
+                    get_postgres_dsn(),
+                    gateway_context=auth_ctx,
+                )
+
+            with manager_access_target:
+                with st.expander(
+                    "Manager Access",
+                    expanded=False,
+                ):
+                    _render_nffl_manager_links_tab(
+                        get_postgres_dsn()
+                    )
+                    st.divider()
+                    _render_nffl_gateway_audit_tab(
+                        get_postgres_dsn()
+                    )
+
+            with post_draft_target:
+                render_nffl_post_draft_contract_reveal(
+                    get_postgres_dsn(),
+                    gateway_context=auth_ctx,
+                )
 
             render_commissioner_actions(
                 state,
                 auth_ctx=auth_ctx,
                 show_header=False,
+                render_targets={
+                    "contract_readiness":
+                        contract_readiness_target,
+                    "qoft":
+                        qoft_target,
+                    "initialize_new_season":
+                        initialize_new_season_target,
+                    "yahoo_player_universe":
+                        yahoo_player_universe_target,
+                    "draft_schedule":
+                        draft_schedule_target,
+                    "set_draft_order":
+                        set_draft_order_target,
+                    "draft_operations":
+                        draft_operations_target,
+                    "exceptions":
+                        exceptions_target,
+                    "support_recovery":
+                        support_recovery_target,
+                    "danger_zone":
+                        danger_zone_target,
+                },
             )
 
     st.divider()
