@@ -22,6 +22,7 @@ from draftboard.state.commercial_league_profile import (
 )
 from draftboard.state.commercial_authorization_repository import (
     CommercialAuthorizationRepositoryError,
+    can_administer_commercial_league,
     grant_commercial_commissioner,
 )
 from draftboard.state.commercial_franchise_repository import (
@@ -484,6 +485,303 @@ def get_yahoo_connection_leagues(
             detail=(
                 "Yahoo league discovery "
                 "is unavailable."
+            ),
+        ) from exc
+
+
+def _yahoo_team_response(item) -> dict:
+    return {
+        "team_key": item.team_key,
+        "team_id": item.team_id,
+        "name": item.name,
+        "owner_name": item.owner_name,
+        "owner_guid": item.owner_guid,
+    }
+
+
+@app.get(
+    "/api/leagues/{league_key}/{season_year}/"
+    "providers/yahoo/connections/"
+    "{provider_connection_id}/teams/preview"
+)
+def preview_yahoo_league_teams(
+    league_key: str,
+    season_year: int,
+    provider_connection_id: int,
+    request: Request,
+    provider_league_key: str,
+) -> dict:
+    try:
+        normalized_provider_league_key = str(
+            provider_league_key or ""
+        ).strip()
+
+        parts = normalized_provider_league_key.split(
+            ".l.",
+            1,
+        )
+
+        if (
+            len(parts) != 2
+            or not parts[0].isdigit()
+            or not parts[1].strip()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Yahoo provider_league_key "
+                    "has an invalid format."
+                ),
+            )
+
+        provider_game_key = parts[0]
+
+        with database_connection() as connection:
+            principal = require_commercial_principal(
+                connection,
+                request=request,
+            )
+
+            if not can_administer_commercial_league(
+                connection,
+                user_id=principal.user_id,
+                league_key=league_key,
+                season_year=season_year,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Commissioner access required.",
+                )
+
+            stored_profile = (
+                load_commercial_league_profile(
+                    connection,
+                    league_key,
+                    season_year,
+                )
+            )
+
+            league_profile = (
+                stored_profile.profile.get("league")
+            )
+
+            if not isinstance(
+                league_profile,
+                dict,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Commercial league profile "
+                        "is missing league metadata."
+                    ),
+                )
+
+            profile_platform = str(
+                league_profile.get(
+                    "platform",
+                    "",
+                )
+            ).strip().lower()
+
+            if profile_platform != "yahoo":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Commercial league platform "
+                        "is not Yahoo."
+                    ),
+                )
+
+            expected_manager_count = (
+                league_profile.get(
+                    "manager_count"
+                )
+            )
+
+            if (
+                isinstance(
+                    expected_manager_count,
+                    bool,
+                )
+                or not isinstance(
+                    expected_manager_count,
+                    int,
+                )
+                or expected_manager_count <= 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Commercial league manager_count "
+                        "is invalid."
+                    ),
+                )
+
+            provider_connection = (
+                load_provider_connection(
+                    connection,
+                    user_id=principal.user_id,
+                    provider_connection_id=(
+                        provider_connection_id
+                    ),
+                )
+            )
+
+            if provider_connection is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Provider connection was not found."
+                    ),
+                )
+
+            if (
+                provider_connection.provider_code
+                != "yahoo"
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Provider connection is not Yahoo."
+                    ),
+                )
+
+            if provider_connection.status != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Yahoo provider connection "
+                        "is not active."
+                    ),
+                )
+
+            access_token = (
+                get_legacy_yahoo_access_token(
+                    connection
+                )
+            )
+
+        adapter = YahooFantasyAdapter()
+
+        visible_leagues = adapter.fetch_leagues(
+            access_token=access_token,
+            game_key=provider_game_key,
+        )
+
+        selected_league = next(
+            (
+                item
+                for item in visible_leagues
+                if item.league_key
+                == normalized_provider_league_key
+            ),
+            None,
+        )
+
+        if selected_league is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Selected Yahoo league is not "
+                    "available to this connection."
+                ),
+            )
+
+        teams = adapter.fetch_teams(
+            access_token=access_token,
+            league_key=(
+                normalized_provider_league_key
+            ),
+        )
+
+        actual_team_count = len(teams)
+
+        team_count_matches = (
+            actual_team_count
+            == expected_manager_count
+        )
+
+        return {
+            "commercial_league": {
+                "league_key": league_key,
+                "season_year": season_year,
+                "name": league_profile.get("name"),
+                "manager_count":
+                    expected_manager_count,
+            },
+            "provider_connection_id":
+                provider_connection.provider_connection_id,
+            "provider": "yahoo",
+            "selected_league":
+                _yahoo_league_response(
+                    selected_league
+                ),
+            "import_preview": {
+                "expected_team_count":
+                    expected_manager_count,
+                "provider_declared_team_count":
+                    selected_league.num_teams,
+                "actual_team_count":
+                    actual_team_count,
+                "team_count_matches":
+                    team_count_matches,
+                "ready_to_import":
+                    team_count_matches,
+            },
+            "teams": [
+                _yahoo_team_response(item)
+                for item in teams
+            ],
+        }
+
+    except HTTPException:
+        raise
+
+    except CommercialAuthorizationRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "League authorization is unavailable."
+            ),
+        ) from exc
+
+    except CommercialLeagueProfileRepositoryError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except CommercialProviderRepositoryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Provider connection service "
+                "is unavailable."
+            ),
+        ) from exc
+
+    except YahooLegacyTokenBridgeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Yahoo connection is unavailable."
+            ),
+        ) from exc
+
+    except YahooFantasyAdapterError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Yahoo Fantasy service is unavailable."
+            ),
+        ) from exc
+
+    except (RuntimeError, psycopg.Error) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Yahoo team preview is unavailable."
             ),
         ) from exc
 
