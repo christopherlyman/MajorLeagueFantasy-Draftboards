@@ -3906,6 +3906,20 @@ def _render_nffl_initialize_new_season_preview() -> None:
 
                     with psycopg.connect(dsn) as conn:
                         with conn.transaction():
+                            from draftboard.data.nffl_rollover_backup import (
+                                create_nffl_rollover_backup,
+                            )
+                            backup_result = create_nffl_rollover_backup(
+                                dsn=_get_dsn(),
+                                source_season_year=int(_get_season_year()),
+                                target_season_year=int(spec.season_year),
+                            )
+                            st.caption(
+                                "Automatic safety backup created: "
+                                f"{backup_result.path.name} "
+                                f"({backup_result.size_bytes:,} bytes)."
+                            )
+
                             stage_result = stage_nffl_new_season(
                                 conn,
                                 spec=spec,

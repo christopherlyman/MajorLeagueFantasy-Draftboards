@@ -1,6 +1,9 @@
 services:
   nffl-draftboard:
-    image: mlf_tools:latest
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: nffl_tools:latest
     container_name: nffl_draftboard
     env_file:
       - .env
