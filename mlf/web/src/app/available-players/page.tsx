@@ -671,7 +671,7 @@ export default async function AvailablePlayersPage({
                   <td>
                     {!row.draftPick
                     && !row.isPt
-                    && row.contractYears === null ? (
+                    && !row.isContract ? (
                       <button
                         type="button"
                         className={styles.draftActionButton}
@@ -771,7 +771,7 @@ export default async function AvailablePlayersPage({
             {draftRuntime.currentPickId
             && !row.draftPick
             && !row.isPt
-            && row.contractYears === null ? (
+            && !row.isContract ? (
               <button
                 type="button"
                 className={

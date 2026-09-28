@@ -312,8 +312,6 @@ export function DraftActionController({
                     currentOwnerTeamKey,
                   yahoo_player_key:
                     playerKey,
-                  expected_pick_kind:
-                    null,
                 }),
               },
             );
