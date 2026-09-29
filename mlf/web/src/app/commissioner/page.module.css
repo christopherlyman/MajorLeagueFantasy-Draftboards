@@ -227,23 +227,6 @@
   padding: 20px;
 }
 
-.operationGrid {
-  margin-top: 15px;
-  display: grid;
-  grid-template-columns:
-    repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.operationGrid span {
-  padding: 10px 12px;
-  border: 1px solid #e1e5ea;
-  border-radius: 7px;
-  background: #f8f9fb;
-  color: #59636e;
-  font-weight: 700;
-}
-
 .dangerTool {
   margin-top: 8px;
   border-color: #e1b4b4;
@@ -509,16 +492,6 @@
   padding: 20px;
 }
 
-.operationGrid {
-  gap: 9px;
-}
-
-.operationGrid span {
-  border-color: #343d49;
-  background: #11161c;
-  color: #c7d2de;
-}
-
 .dangerTool {
   border-color: #64383d;
 }
@@ -564,5 +537,105 @@
   .workflow,
   .topActions {
     width: 100%;
+  }
+}
+/* Commissioner operations ordered workflow */
+
+.operationsHeading {
+  margin-bottom: 18px;
+}
+
+.operationsHeading h2 {
+  margin: 0 0 5px;
+}
+
+.operationsHeading p:last-child {
+  max-width: 820px;
+}
+
+.operationSteps {
+  position: relative;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operationStep {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 74px;
+  padding: 0 0 18px;
+}
+
+.operationStep:last-child {
+  min-height: auto;
+  padding-bottom: 0;
+}
+
+.operationStep::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: -2px;
+  left: 16px;
+  width: 1px;
+  background: #394554;
+}
+
+.operationStep:last-child::before {
+  display: none;
+}
+
+.stepNumber {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #53667a;
+  border-radius: 50%;
+  background: #111820;
+  color: #d9e7f5;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.stepContent {
+  padding: 3px 0 0;
+}
+
+.stepContent strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #f4f7fa;
+  font-size: 0.98rem;
+}
+
+.stepContent span {
+  display: block;
+  max-width: 760px;
+  color: #9facbd;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 800px) {
+  .operationStep {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .operationStep::before {
+    left: 15px;
+  }
+
+  .stepNumber {
+    width: 32px;
+    height: 32px;
   }
 }

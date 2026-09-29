@@ -518,41 +518,145 @@ export default async function CommissionerPage() {
         </details>
 
         <section className={styles.pendingOperations}>
-          <h2>
-            Commissioner Operations
-          </h2>
+          <div className={styles.operationsHeading}>
+            <div>
+              <p className={styles.eyebrow}>
+                Operational Sequence
+              </p>
 
-          <p>
-            The existing MLF operational tools
-            are being moved here behind
-            authoritative commissioner mutation
-            endpoints rather than recreated as
-            browser-only logic.
-          </p>
+              <h2>
+                Commissioner Operations
+              </h2>
 
-          <div className={styles.operationGrid}>
-            <span>
-              Set Draft Order
-            </span>
-            <span>
-              Refresh Yahoo Player Universe
-            </span>
-            <span>
-              Trade Builder
-            </span>
-            <span>
-              Qualifying Offers
-            </span>
-            <span>
-              Prospect Tags
-            </span>
-            <span>
-              Contract Overrides
-            </span>
-            <span>
-              Draft Tools
-            </span>
+              <p>
+                Work through these steps in order.
+                Each step will contain its controls
+                here as its authoritative API
+                boundary is migrated.
+              </p>
+            </div>
           </div>
+
+          <ol className={styles.operationSteps}>
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                1
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Set Draft Order
+                </strong>
+
+                <span>
+                  Establish and verify the saved
+                  draft slot order.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                2
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Refresh Yahoo Player Universe
+                </strong>
+
+                <span>
+                  Refresh the player pool used by
+                  Commissioner and draft workflows.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                3
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Trade Builder
+                </strong>
+
+                <span>
+                  Process Commissioner-managed
+                  player and draft-asset trades.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                4
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Qualifying Offers
+                </strong>
+
+                <span>
+                  Review and administer preseason
+                  qualifying-offer state.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                5
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Prospect Tags
+                </strong>
+
+                <span>
+                  Review and administer prospect
+                  designations.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                6
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Contract Overrides
+                </strong>
+
+                <span>
+                  Handle Commissioner contract
+                  corrections and exceptions.
+                </span>
+              </div>
+            </li>
+
+            <li className={styles.operationStep}>
+              <span className={styles.stepNumber}>
+                7
+              </span>
+
+              <div className={styles.stepContent}>
+                <strong>
+                  Draft Tools
+                </strong>
+
+                <span>
+                  Run live-draft controls and
+                  Commissioner corrections.
+                </span>
+              </div>
+            </li>
+          </ol>
         </section>
 
         <details
