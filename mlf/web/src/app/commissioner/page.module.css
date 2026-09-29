@@ -344,3 +344,225 @@
     justify-content: flex-start;
   }
 }
+/* Commissioner dark-shell visual alignment */
+
+.deniedPage {
+  background: #0d1117;
+  color: #f3f6fa;
+}
+
+.deniedSubtitle {
+  color: #9eabc0;
+}
+
+.topActions {
+  width: min(1380px, 100%);
+  margin: -4px auto 18px;
+}
+
+.topActions .secondaryButton {
+  padding: 7px 11px;
+  border-color: #394452;
+  background: #171c23;
+  color: #d9e2ec;
+  font-size: 0.82rem;
+}
+
+.topActions .secondaryButton:hover {
+  background: #202731;
+  border-color: #566272;
+}
+
+.notice,
+.readiness,
+.pendingOperations,
+.tool {
+  color: #eef3f8;
+  border-color: #303843;
+  background: #171c23;
+  box-shadow: none;
+}
+
+.readiness,
+.workflow {
+  width: min(1380px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.readiness {
+  padding: 20px;
+  margin-bottom: 26px;
+}
+
+.sectionHeading h2,
+.workflowHeading h2,
+.pendingOperations h2 {
+  color: #f5f7fa;
+}
+
+.eyebrow {
+  color: #9fb2ca;
+}
+
+.readinessGrid {
+  margin-top: 16px;
+  gap: 10px;
+}
+
+.metric {
+  min-height: 82px;
+  padding: 14px 16px;
+  border-color: #343d49;
+  background: #11161c;
+}
+
+.metric span {
+  color: #93a4b8;
+}
+
+.metric strong {
+  color: #f7f9fb;
+  font-size: 1.08rem;
+}
+
+.nextAction {
+  padding: 14px 16px;
+  border-left-color: #6f8eae;
+  background: #111820;
+}
+
+.nextAction strong {
+  color: #f1f5f9;
+}
+
+.nextAction p {
+  color: #b6c2d0;
+}
+
+.workflow {
+  gap: 10px;
+}
+
+.workflowHeading {
+  padding: 0 2px 4px;
+}
+
+.workflowHeading p,
+.pendingOperations p {
+  color: #9facbd;
+}
+
+.tool {
+  overflow: clip;
+}
+
+.tool summary {
+  min-height: 58px;
+  padding: 15px 17px;
+  color: #eef3f8;
+  background: #171c23;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.tool summary:hover {
+  background: #1d242d;
+}
+
+.tool summary:focus-visible {
+  outline: 2px solid #7aa2cc;
+  outline-offset: -3px;
+}
+
+.tool[open] summary {
+  border-bottom-color: #303843;
+  background: #1b222b;
+}
+
+.toolBody {
+  background: #11161c;
+}
+
+.toolIntro {
+  color: #aebac8;
+}
+
+.toolStatus {
+  background: #26303b;
+  color: #c5d1df;
+}
+
+.readyBadge {
+  background: #143525;
+  color: #8ce1ad;
+}
+
+.actionBadge {
+  background: #3a2a13;
+  color: #f3c57a;
+}
+
+.pendingOperations {
+  margin-top: 12px;
+  padding: 20px;
+}
+
+.operationGrid {
+  gap: 9px;
+}
+
+.operationGrid span {
+  border-color: #343d49;
+  background: #11161c;
+  color: #c7d2de;
+}
+
+.dangerTool {
+  border-color: #64383d;
+}
+
+.dangerTool summary {
+  color: #ffb4b9;
+}
+
+.table th {
+  border-bottom-color: #303843;
+  background: #11161c;
+  color: #9fb0c2;
+}
+
+.table td {
+  border-bottom-color: #282f38;
+  color: #e5ebf1;
+}
+
+.table td small {
+  color: #8e9bab;
+}
+
+.managerUrl {
+  background: #0c1117;
+  color: #b8c6d6;
+}
+
+.secondaryButton,
+.copyButton {
+  border-color: #3a4654;
+  background: #20262e;
+  color: #edf2f7;
+}
+
+.secondaryButton:hover,
+.copyButton:hover {
+  background: #29313b;
+}
+
+@media (max-width: 800px) {
+  .readiness,
+  .workflow,
+  .topActions {
+    width: 100%;
+  }
+}
