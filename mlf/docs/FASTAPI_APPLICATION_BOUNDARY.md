@@ -159,13 +159,25 @@ Those rules are not duplicated in FastAPI or TypeScript.
 
 ## Commissioner authorization
 
-Future commissioner endpoints require:
+Commissioner authority is separate from manager Team Gateway identity.
 
-- authenticated site administrator; or
-- authenticated active league commissioner.
+The old Streamlit `?commissioner=1` parameter is presentation state only and
+must never participate in FastAPI authorization.
 
-The old Streamlit ?commissioner=1 parameter is only a presentation gate and
-must never participate in API authorization.
+The first rebuilt commissioner capability is the read-only manager-link
+inventory. A private commissioner claim token from
+`MLF_COMMISSIONER_GATEWAY_TOKEN` establishes a distinct signed
+`mlf_commissioner_gateway` browser cookie. That cookie is Secure, HttpOnly,
+SameSite=Strict, scoped to Path=/, tied to the active MLF league and season,
+and expires after 30 days.
+
+This initial commissioner credential authorizes read-only commissioner
+endpoints only. It does not authorize draft, contract, trade, lottery, or other
+commissioner mutations.
+
+Before any commissioner mutation endpoint is exposed, mutation authority still
+requires a separately proven user-bound authorization contract for an
+authenticated site administrator or authenticated active league commissioner.
 
 ## Submit-pick mapping
 

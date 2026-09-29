@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import psycopg
 from urllib.parse import urlsplit
 from fastapi import (
@@ -13,7 +15,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from draftboard.data.draft_runtime import submit_draft_pick_atomic
-from draftboard.state.runtime import get_draft_key, get_postgres_dsn
+from draftboard.state.runtime import (
+    get_draft_key,
+    get_league_key,
+    get_postgres_dsn,
+    get_season_year,
+)
 
 from .gateway import (
     GATEWAY_COOKIE_MAX_AGE_SECONDS,
@@ -483,3 +490,243 @@ def gateway_clear(
     )
 
     return response
+
+# ------------------------------------------------------------------
+# MLF COMMISSIONER READ-ONLY GATEWAY
+#
+# This authority is deliberately separate from the manager Team Gateway.
+# It currently authorizes only read-only commissioner endpoints.
+# Future commissioner mutations require a separately proven authorization
+# contract and must not rely on this read-only bearer credential alone.
+# ------------------------------------------------------------------
+
+from urllib.parse import urlencode
+
+from mlf_api.commissioner_auth import (
+    COMMISSIONER_COOKIE_MAX_AGE_SECONDS,
+    commissioner_token_is_valid,
+    get_commissioner_cookie_name,
+    pack_commissioner_cookie,
+    resolve_commissioner_cookie,
+)
+from mlf_api.gateway_store import get_team_gateway_links
+from mlf_api.models import (
+    CommissionerPrincipal,
+    ManagerGatewayLink,
+)
+
+
+def _public_commissioner_principal() -> dict[str, object]:
+    return {
+        "is_authenticated": False,
+        "role": "public",
+        "league_key": str(get_league_key()),
+        "season_year": int(get_season_year()),
+        "display_name": "Public",
+        "acting_as": "public",
+    }
+
+
+def _resolve_commissioner_request(
+    request: Request,
+) -> dict[str, object] | None:
+    raw_cookie = request.cookies.get(
+        get_commissioner_cookie_name()
+    )
+
+    if not raw_cookie:
+        return None
+
+    return resolve_commissioner_cookie(
+        raw_cookie
+    )
+
+
+@app.get("/gateway/commissioner/claim")
+def commissioner_gateway_claim(
+    token: str,
+    next: str = "/commissioner",
+) -> RedirectResponse:
+    try:
+        valid = commissioner_token_is_valid(
+            token
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "invalid_commissioner_link"
+            },
+        )
+
+    try:
+        signed_cookie = pack_commissioner_cookie()
+    except Exception:
+        raise _service_unavailable() from None
+
+    response = RedirectResponse(
+        url=_safe_next_path(next),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+    response.set_cookie(
+        key=get_commissioner_cookie_name(),
+        value=signed_cookie,
+        max_age=COMMISSIONER_COOKIE_MAX_AGE_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+    return response
+
+
+@app.get("/gateway/commissioner/clear")
+def commissioner_gateway_clear(
+    next: str = "/",
+) -> RedirectResponse:
+    response = RedirectResponse(
+        url=_safe_next_path(next),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+    response.delete_cookie(
+        key=get_commissioner_cookie_name(),
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+    return response
+
+
+@app.get(
+    "/commissioner/auth/me",
+    response_model=CommissionerPrincipal,
+)
+def commissioner_auth_me(
+    request: Request,
+    response: Response,
+) -> CommissionerPrincipal:
+    try:
+        principal = _resolve_commissioner_request(
+            request
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if principal is None:
+        return CommissionerPrincipal(
+            **_public_commissioner_principal()
+        )
+
+    return CommissionerPrincipal(
+        **principal
+    )
+
+
+@app.get(
+    "/commissioner/manager-links",
+    response_model=list[ManagerGatewayLink],
+)
+def commissioner_manager_links(
+    request: Request,
+) -> list[ManagerGatewayLink]:
+    try:
+        principal = _resolve_commissioner_request(
+            request
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "commissioner_required"
+            },
+        )
+
+    try:
+        rows = get_team_gateway_links()
+    except Exception:
+        raise _service_unavailable() from None
+
+    base_url = str(
+        os.environ.get(
+            "MLF_PUBLIC_URL",
+            "https://mlf.majorleaguefantasy.app",
+        )
+        or "https://mlf.majorleaguefantasy.app"
+    ).rstrip("/")
+
+    output: list[ManagerGatewayLink] = []
+
+    for row in rows:
+        link_token = str(
+            row.get("link_token")
+            or ""
+        ).strip()
+
+        query = urlencode(
+            {
+                "token": link_token,
+                "next": "/",
+            }
+        )
+
+        claimed = row.get(
+            "last_claimed_at_utc"
+        )
+
+        output.append(
+            ManagerGatewayLink(
+                franchise_id=int(
+                    row["franchise_id"]
+                ),
+                team_key=str(
+                    row["team_key"]
+                ),
+                team_name=str(
+                    row.get("team_name")
+                    or row["team_key"]
+                ),
+                owner_name=(
+                    str(row["owner_name"])
+                    if row.get("owner_name")
+                    is not None
+                    else None
+                ),
+                is_active=bool(
+                    row["is_active"]
+                ),
+                claim_count=int(
+                    row.get("claim_count")
+                    or 0
+                ),
+                last_claimed_at_utc=(
+                    claimed.isoformat()
+                    if hasattr(
+                        claimed,
+                        "isoformat",
+                    )
+                    else (
+                        str(claimed)
+                        if claimed is not None
+                        else None
+                    )
+                ),
+                manager_url=(
+                    f"{base_url}"
+                    f"/gateway/claim?"
+                    f"{query}"
+                ),
+            )
+        )
+
+    return output

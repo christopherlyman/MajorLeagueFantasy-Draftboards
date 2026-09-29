@@ -38,3 +38,23 @@ class DraftPickSubmitResponse(BaseModel):
     selected_pick_kind: str
     next_pick_id: str | None
     selected_at_utc: datetime | None
+
+
+class CommissionerPrincipal(BaseModel):
+    is_authenticated: bool
+    role: Literal["public", "commissioner"]
+    league_key: str
+    season_year: int
+    display_name: str
+    acting_as: str
+
+
+class ManagerGatewayLink(BaseModel):
+    franchise_id: int
+    team_key: str
+    team_name: str
+    owner_name: str | None
+    is_active: bool
+    claim_count: int
+    last_claimed_at_utc: str | None
+    manager_url: str

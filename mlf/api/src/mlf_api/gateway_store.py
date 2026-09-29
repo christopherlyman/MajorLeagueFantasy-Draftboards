@@ -237,3 +237,51 @@ def record_clear_browser(
             )
 
         conn.commit()
+
+def get_team_gateway_links() -> list[dict[str, Any]]:
+    """
+    Commissioner-facing read-only inventory of current-season
+    manager gateway links.
+
+    This function does not create, rotate, activate, deactivate,
+    or claim a link.
+    """
+    league_key = str(get_league_key())
+    season_year = int(get_season_year())
+
+    with psycopg.connect(
+        get_postgres_dsn(),
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    g.franchise_id,
+                    g.team_key,
+                    fst.team_name,
+                    fst.owner_name,
+                    g.is_active,
+                    g.claim_count,
+                    g.last_claimed_at_utc,
+                    g.link_token
+                FROM mlf.team_gateway_link g
+                JOIN public.franchise_season_team fst
+                  ON fst.franchise_id = g.franchise_id
+                 AND fst.league_key = g.league_key
+                 AND fst.season_year = g.season_year
+                 AND fst.team_key = g.team_key
+                WHERE g.league_key = %s
+                  AND g.season_year = %s
+                ORDER BY g.franchise_id
+                """,
+                (
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            return [
+                dict(row)
+                for row in cur.fetchall()
+            ]
