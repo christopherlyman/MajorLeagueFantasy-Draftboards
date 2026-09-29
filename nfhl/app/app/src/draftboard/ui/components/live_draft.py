@@ -801,6 +801,12 @@ def render_live_draft_experience(
                     and player.get(
                         "yahoo_player_key"
                     )
+                    and bool(
+                        player.get(
+                            "is_yahoo_current",
+                            False,
+                        )
+                    )
                 ]
 
                 available_players.sort(

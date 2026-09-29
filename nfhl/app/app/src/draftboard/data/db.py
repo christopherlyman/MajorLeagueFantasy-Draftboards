@@ -122,6 +122,8 @@ def get_player_universe() -> list[dict[str, Any]]:
             p.rank_value,
             p.percent_drafted,
             p.preseason_percent_drafted,
+            p.is_yahoo_current,
+            p.last_yahoo_seen_at_utc,
 
             s.stats_season_year,
             s.gp,
@@ -3828,6 +3830,7 @@ def save_autopick_queue(
                         WHERE league_key = %s
                           AND season_year = %s
                           AND yahoo_player_key = %s
+                          AND is_yahoo_current
                         """,
                         (
                             get_league_key(),
@@ -4492,6 +4495,961 @@ def get_team_gateway_audit(
 
 
 # NFHL_TEAM_GATEWAY_DB_END
+
+
+# NFHL_YAHOO_PLAYER_REFRESH_DB_START
+# ================================================================
+# COMMISSIONER YAHOO PLAYER-UNIVERSE REFRESH
+#
+# Player-only:
+#   - uses the existing Yahoo OAuth integration;
+#   - fetches and validates the complete Yahoo league player set
+#     before opening the reconciliation transaction;
+#   - never refreshes teams or gateway links;
+#   - never deletes player_universe rows;
+#   - serializes reconciliation against manual/Auto-Pick execution
+#     with the canonical draft-wide advisory transaction lock;
+#   - supports PREP and ACTIVE drafts;
+#   - preserves draft, clock, order, selection, and Auto-Pick state.
+# ================================================================
+
+
+def refresh_yahoo_players_live(
+    *,
+    actor: str,
+) -> dict[str, Any]:
+    from pathlib import Path
+    import importlib.util
+    import sys
+    import tempfile
+
+    import requests
+
+    league_key = get_league_key()
+    season_year = get_season_year()
+    draft_key = get_draft_key()
+
+    actor = str(
+        actor or ""
+    ).strip() or "commissioner"
+
+    sync_path = Path(
+        "/league_runtime/scripts/yahoo/"
+        "sync_nfhl_live.py"
+    )
+
+    auth_path = Path(
+        "/league_runtime/scripts/yahoo/"
+        "auth.py"
+    )
+
+    config_path = Path(
+        f"/league_runtime/config/"
+        f"nfhl_{season_year}.json"
+    )
+
+    for required in (
+        sync_path,
+        auth_path,
+        config_path,
+    ):
+        if not required.exists():
+            raise RuntimeError(
+                "Required NFHL Yahoo file "
+                f"is unavailable: {required}"
+            )
+
+    script_dir = str(sync_path.parent)
+
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
+    sync_spec = importlib.util.spec_from_file_location(
+        "nfhl_yahoo_player_sync_runtime",
+        sync_path,
+    )
+
+    if (
+        sync_spec is None
+        or sync_spec.loader is None
+    ):
+        raise RuntimeError(
+            "Unable to load NFHL Yahoo player sync module."
+        )
+
+    sync = importlib.util.module_from_spec(sync_spec)
+
+    sys.modules[sync_spec.name] = sync
+    sync_spec.loader.exec_module(sync)
+
+    auth_spec = importlib.util.spec_from_file_location(
+        "nfhl_yahoo_player_auth_runtime",
+        auth_path,
+    )
+
+    if (
+        auth_spec is None
+        or auth_spec.loader is None
+    ):
+        raise RuntimeError(
+            "Unable to load NFHL Yahoo authentication module."
+        )
+
+    auth = importlib.util.module_from_spec(auth_spec)
+
+    sys.modules[auth_spec.name] = auth
+    auth_spec.loader.exec_module(auth)
+
+    ctx = sync.load_config(config_path)
+
+    if str(ctx["league_key"]) != str(league_key):
+        raise RuntimeError(
+            "NFHL Yahoo config league_key does not match runtime."
+        )
+
+    if int(ctx["season_year"]) != int(season_year):
+        raise RuntimeError(
+            "NFHL Yahoo config season_year does not match runtime."
+        )
+
+    if str(ctx["draft_key"]) != str(draft_key):
+        raise RuntimeError(
+            "NFHL Yahoo config draft_key does not match runtime."
+        )
+
+    access_token = auth.get_access_token()
+
+    if not access_token:
+        raise RuntimeError(
+            "Yahoo authentication returned no access token."
+        )
+
+    session = requests.Session()
+
+    session.headers.update(
+        {
+            "Authorization":
+                f"Bearer {access_token}"
+        }
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="nfhl_player_refresh_"
+    ) as temp_dir:
+        players = sync.fetch_all_players(
+            session,
+            league_key,
+            season_year,
+            Path(temp_dir),
+        )
+
+    player_rows = sync.prepare_player_rows(players)
+
+    yahoo_keys = [
+        str(
+            row.get("yahoo_player_key")
+            or ""
+        ).strip()
+        for row in player_rows
+    ]
+
+    if (
+        any(not key for key in yahoo_keys)
+        or len(set(yahoo_keys)) != len(yahoo_keys)
+    ):
+        raise RuntimeError(
+            "Yahoo player payload contains "
+            "missing or duplicate player keys."
+        )
+
+    if not player_rows:
+        raise RuntimeError(
+            "Yahoo returned zero players. "
+            "No database changes were made."
+        )
+
+    dsn = get_postgres_dsn()
+
+    with psycopg.connect(
+        dsn,
+        row_factory=dict_row,
+    ) as conn:
+
+        with conn.transaction():
+
+            with conn.cursor() as cur:
+
+                cur.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(
+                            %s,
+                            0
+                        )
+                    )
+                    """,
+                    (draft_key,),
+                )
+
+                def draft_invariants() -> dict[str, Any]:
+                    cur.execute(
+                        """
+                        SELECT
+                            (
+                                SELECT status
+                                FROM nfhl.draft
+                                WHERE draft_key = %s
+                            ) AS draft_status,
+
+                            (
+                                SELECT COUNT(*)
+                                FROM nfhl.draft_pick
+                                WHERE draft_key = %s
+                            ) AS draft_pick_rows,
+
+                            (
+                                SELECT COUNT(*)
+                                FROM nfhl.draft_selection
+                                WHERE draft_key = %s
+                            ) AS selection_count,
+
+                            (
+                                SELECT md5(
+                                    COALESCE(
+                                        string_agg(
+                                            pick_id
+                                            || '|'
+                                            || yahoo_player_key
+                                            || '|'
+                                            || selecting_team_key,
+                                            '||'
+                                            ORDER BY pick_id
+                                        ),
+                                        ''
+                                    )
+                                )
+                                FROM nfhl.draft_selection
+                                WHERE draft_key = %s
+                            ) AS selection_hash,
+
+                            (
+                                SELECT state_sha256
+                                FROM nfhl.draft_state
+                                WHERE draft_key = %s
+                            ) AS state_sha256,
+
+                            (
+                                SELECT
+                                    state_json
+                                    -> 'clock'
+                                    ->> 'current_pick_id'
+                                FROM nfhl.draft_state
+                                WHERE draft_key = %s
+                            ) AS current_pick_id,
+
+                            (
+                                SELECT md5(
+                                    COALESCE(
+                                        string_agg(
+                                            pick_id
+                                            || '|'
+                                            || round_number::text
+                                            || '|'
+                                            || slot_number::text
+                                            || '|'
+                                            || COALESCE(
+                                                current_owner_team_key,
+                                                ''
+                                            ),
+                                            '||'
+                                            ORDER BY pick_id
+                                        ),
+                                        ''
+                                    )
+                                )
+                                FROM nfhl.draft_pick
+                                WHERE draft_key = %s
+                            ) AS draft_order_hash,
+
+                            (
+                                SELECT md5(
+                                    COALESCE(
+                                        string_agg(
+                                            team_key
+                                            || '|'
+                                            || queue_rank::text
+                                            || '|'
+                                            || yahoo_player_key,
+                                            '||'
+                                            ORDER BY
+                                                team_key,
+                                                queue_rank
+                                        ),
+                                        ''
+                                    )
+                                )
+                                FROM nfhl.draft_autopick_queue
+                                WHERE draft_key = %s
+                            ) AS autopick_queue_hash,
+
+                            (
+                                SELECT md5(
+                                    COALESCE(
+                                        string_agg(
+                                            team_key
+                                            || '|'
+                                            || enabled::text
+                                            || '|'
+                                            || COALESCE(
+                                                armed_pick_id,
+                                                ''
+                                            ),
+                                            '||'
+                                            ORDER BY team_key
+                                        ),
+                                        ''
+                                    )
+                                )
+                                FROM nfhl.draft_autopick_control
+                                WHERE draft_key = %s
+                            ) AS autopick_control_hash
+                        """,
+                        (
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                            draft_key,
+                        ),
+                    )
+
+                    row = cur.fetchone()
+
+                    if row is None:
+                        raise RuntimeError(
+                            "Unable to snapshot NFHL draft invariants."
+                        )
+
+                    return dict(row)
+
+                before = draft_invariants()
+
+                draft_status = str(
+                    before.get("draft_status")
+                    or ""
+                ).upper()
+
+                if draft_status not in {
+                    "PREP",
+                    "ACTIVE",
+                    "COMPLETE",
+                }:
+                    raise RuntimeError(
+                        "Yahoo player refresh is allowed only "
+                        "while the NFHL draft is PREP, ACTIVE, "
+                        "or COMPLETE; "
+                        f"found {draft_status!r}."
+                    )
+
+                if int(
+                    before.get("draft_pick_rows")
+                    or 0
+                ) != 252:
+                    raise RuntimeError(
+                        "Expected exactly 252 NFHL draft-pick rows."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS player_count,
+                        COUNT(*) FILTER (
+                            WHERE is_yahoo_current
+                        ) AS current_player_count
+                    FROM nfhl.player_universe
+                    WHERE league_key = %s
+                      AND season_year = %s
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                player_count_row = cur.fetchone()
+
+                existing_total = int(
+                    player_count_row["player_count"]
+                )
+
+                existing_current = int(
+                    player_count_row["current_player_count"]
+                )
+
+                yahoo_total = len(player_rows)
+
+                if (
+                    existing_current >= 100
+                    and yahoo_total
+                    < int(existing_current * 0.75)
+                ):
+                    raise RuntimeError(
+                        "Yahoo player universe is suspiciously "
+                        "smaller than the current NFHL universe: "
+                        f"Yahoo={yahoo_total}, "
+                        f"CurrentDB={existing_current}, "
+                        f"RetainedDB={existing_total}. "
+                        "No database changes were made."
+                    )
+
+                cur.execute(
+                    """
+                    CREATE TEMP TABLE
+                        nfhl_yahoo_player_refresh_stage
+                    (
+                        league_key text NOT NULL,
+                        season_year integer NOT NULL,
+                        yahoo_player_key text NOT NULL,
+                        source_game_key text NOT NULL,
+                        full_name text NOT NULL,
+                        nhl_team_abbr text,
+                        eligible_positions jsonb NOT NULL,
+                        primary_position text,
+                        position_type text,
+                        player_status text,
+                        percent_owned numeric,
+                        rank_value numeric,
+                        percent_drafted numeric,
+                        preseason_percent_drafted numeric,
+                        raw_payload jsonb,
+                        PRIMARY KEY (
+                            league_key,
+                            season_year,
+                            yahoo_player_key
+                        )
+                    )
+                    ON COMMIT DROP
+                    """
+                )
+
+                stage_sql = """
+                    INSERT INTO
+                        nfhl_yahoo_player_refresh_stage
+                    (
+                        league_key,
+                        season_year,
+                        yahoo_player_key,
+                        source_game_key,
+                        full_name,
+                        nhl_team_abbr,
+                        eligible_positions,
+                        primary_position,
+                        position_type,
+                        player_status,
+                        percent_owned,
+                        rank_value,
+                        percent_drafted,
+                        preseason_percent_drafted,
+                        raw_payload
+                    )
+                    VALUES (
+                        %(league_key)s,
+                        %(season_year)s,
+                        %(yahoo_player_key)s,
+                        %(source_game_key)s,
+                        %(full_name)s,
+                        %(nhl_team_abbr)s,
+                        %(eligible_positions)s::jsonb,
+                        %(primary_position)s,
+                        %(position_type)s,
+                        %(player_status)s,
+                        %(percent_owned)s,
+                        %(rank_value)s,
+                        %(percent_drafted)s,
+                        %(preseason_percent_drafted)s,
+                        %(raw_payload)s::jsonb
+                    )
+                """
+
+                cur.executemany(
+                    stage_sql,
+                    player_rows,
+                )
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS inserted
+                    FROM
+                        nfhl_yahoo_player_refresh_stage s
+                    LEFT JOIN nfhl.player_universe p
+                      ON p.league_key = s.league_key
+                     AND p.season_year = s.season_year
+                     AND p.yahoo_player_key =
+                         s.yahoo_player_key
+                    WHERE p.yahoo_player_key IS NULL
+                    """
+                )
+
+                inserted_count = int(
+                    cur.fetchone()["inserted"]
+                )
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS updated
+                    FROM
+                        nfhl_yahoo_player_refresh_stage s
+                    JOIN nfhl.player_universe p
+                      ON p.league_key = s.league_key
+                     AND p.season_year = s.season_year
+                     AND p.yahoo_player_key =
+                         s.yahoo_player_key
+                    WHERE
+                        NOT p.is_yahoo_current
+
+                        OR p.source_game_key
+                           IS DISTINCT FROM
+                           s.source_game_key
+
+                        OR p.full_name
+                           IS DISTINCT FROM
+                           s.full_name
+
+                        OR p.nhl_team_abbr
+                           IS DISTINCT FROM
+                           s.nhl_team_abbr
+
+                        OR p.eligible_positions
+                           IS DISTINCT FROM
+                           s.eligible_positions
+
+                        OR p.primary_position
+                           IS DISTINCT FROM
+                           s.primary_position
+
+                        OR p.position_type
+                           IS DISTINCT FROM
+                           s.position_type
+
+                        OR p.player_status
+                           IS DISTINCT FROM
+                           s.player_status
+
+                        OR p.percent_owned
+                           IS DISTINCT FROM
+                           s.percent_owned
+
+                        OR p.rank_value
+                           IS DISTINCT FROM
+                           s.rank_value
+
+                        OR p.percent_drafted
+                           IS DISTINCT FROM
+                           s.percent_drafted
+
+                        OR p.preseason_percent_drafted
+                           IS DISTINCT FROM
+                           s.preseason_percent_drafted
+
+                        OR p.raw_payload
+                           IS DISTINCT FROM
+                           s.raw_payload
+                    """
+                )
+
+                updated_count = int(
+                    cur.fetchone()["updated"]
+                )
+
+                unchanged_count = (
+                    yahoo_total
+                    - inserted_count
+                    - updated_count
+                )
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS deactivated
+                    FROM nfhl.player_universe p
+                    WHERE p.league_key = %s
+                      AND p.season_year = %s
+                      AND p.is_yahoo_current
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM
+                              nfhl_yahoo_player_refresh_stage s
+                          WHERE s.league_key =
+                                p.league_key
+                            AND s.season_year =
+                                p.season_year
+                            AND s.yahoo_player_key =
+                                p.yahoo_player_key
+                      )
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                deactivated_count = int(
+                    cur.fetchone()["deactivated"]
+                )
+
+                cur.execute(
+                    """
+                    WITH stale AS (
+                        SELECT p.yahoo_player_key
+                        FROM nfhl.player_universe p
+                        WHERE p.league_key = %s
+                          AND p.season_year = %s
+                          AND p.is_yahoo_current
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM
+                                  nfhl_yahoo_player_refresh_stage s
+                              WHERE s.league_key =
+                                    p.league_key
+                                AND s.season_year =
+                                    p.season_year
+                                AND s.yahoo_player_key =
+                                    p.yahoo_player_key
+                          )
+                    ),
+                    protected AS (
+                        SELECT DISTINCT
+                            yahoo_player_key
+                        FROM nfhl.draft_selection
+                        WHERE draft_key = %s
+
+                        UNION
+
+                        SELECT DISTINCT
+                            yahoo_player_key
+                        FROM nfhl.draft_autopick_queue
+                        WHERE draft_key = %s
+                    )
+                    SELECT COUNT(*) AS protected_retained
+                    FROM stale
+                    JOIN protected
+                      USING (yahoo_player_key)
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        draft_key,
+                        draft_key,
+                    ),
+                )
+
+                protected_retained_count = int(
+                    cur.fetchone()["protected_retained"]
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO nfhl.player_universe AS p
+                    (
+                        league_key,
+                        season_year,
+                        yahoo_player_key,
+                        source_game_key,
+                        full_name,
+                        nhl_team_abbr,
+                        eligible_positions,
+                        primary_position,
+                        position_type,
+                        player_status,
+                        percent_owned,
+                        rank_value,
+                        percent_drafted,
+                        preseason_percent_drafted,
+                        raw_payload,
+                        is_yahoo_current,
+                        last_yahoo_seen_at_utc,
+                        created_at_utc,
+                        updated_at_utc
+                    )
+                    SELECT
+                        s.league_key,
+                        s.season_year,
+                        s.yahoo_player_key,
+                        s.source_game_key,
+                        s.full_name,
+                        s.nhl_team_abbr,
+                        s.eligible_positions,
+                        s.primary_position,
+                        s.position_type,
+                        s.player_status,
+                        s.percent_owned,
+                        s.rank_value,
+                        s.percent_drafted,
+                        s.preseason_percent_drafted,
+                        s.raw_payload,
+                        true,
+                        now(),
+                        now(),
+                        now()
+                    FROM
+                        nfhl_yahoo_player_refresh_stage s
+
+                    ON CONFLICT (
+                        league_key,
+                        season_year,
+                        yahoo_player_key
+                    )
+                    DO UPDATE SET
+                        source_game_key =
+                            EXCLUDED.source_game_key,
+
+                        full_name =
+                            EXCLUDED.full_name,
+
+                        nhl_team_abbr =
+                            EXCLUDED.nhl_team_abbr,
+
+                        eligible_positions =
+                            EXCLUDED.eligible_positions,
+
+                        primary_position =
+                            EXCLUDED.primary_position,
+
+                        position_type =
+                            EXCLUDED.position_type,
+
+                        player_status =
+                            EXCLUDED.player_status,
+
+                        percent_owned =
+                            EXCLUDED.percent_owned,
+
+                        rank_value =
+                            EXCLUDED.rank_value,
+
+                        percent_drafted =
+                            EXCLUDED.percent_drafted,
+
+                        preseason_percent_drafted =
+                            EXCLUDED.preseason_percent_drafted,
+
+                        raw_payload =
+                            EXCLUDED.raw_payload,
+
+                        is_yahoo_current = true,
+
+                        last_yahoo_seen_at_utc = now(),
+
+                        updated_at_utc =
+                            CASE
+                                WHEN
+                                    NOT p.is_yahoo_current
+
+                                    OR p.source_game_key
+                                       IS DISTINCT FROM
+                                       EXCLUDED.source_game_key
+
+                                    OR p.full_name
+                                       IS DISTINCT FROM
+                                       EXCLUDED.full_name
+
+                                    OR p.nhl_team_abbr
+                                       IS DISTINCT FROM
+                                       EXCLUDED.nhl_team_abbr
+
+                                    OR p.eligible_positions
+                                       IS DISTINCT FROM
+                                       EXCLUDED.eligible_positions
+
+                                    OR p.primary_position
+                                       IS DISTINCT FROM
+                                       EXCLUDED.primary_position
+
+                                    OR p.position_type
+                                       IS DISTINCT FROM
+                                       EXCLUDED.position_type
+
+                                    OR p.player_status
+                                       IS DISTINCT FROM
+                                       EXCLUDED.player_status
+
+                                    OR p.percent_owned
+                                       IS DISTINCT FROM
+                                       EXCLUDED.percent_owned
+
+                                    OR p.rank_value
+                                       IS DISTINCT FROM
+                                       EXCLUDED.rank_value
+
+                                    OR p.percent_drafted
+                                       IS DISTINCT FROM
+                                       EXCLUDED.percent_drafted
+
+                                    OR p.preseason_percent_drafted
+                                       IS DISTINCT FROM
+                                       EXCLUDED.preseason_percent_drafted
+
+                                    OR p.raw_payload
+                                       IS DISTINCT FROM
+                                       EXCLUDED.raw_payload
+
+                                THEN now()
+                                ELSE p.updated_at_utc
+                            END
+                    """
+                )
+
+                cur.execute(
+                    """
+                    UPDATE nfhl.player_universe p
+                       SET is_yahoo_current = false,
+                           updated_at_utc = now()
+                     WHERE p.league_key = %s
+                       AND p.season_year = %s
+                       AND p.is_yahoo_current
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM
+                               nfhl_yahoo_player_refresh_stage s
+                           WHERE s.league_key =
+                                 p.league_key
+                             AND s.season_year =
+                                 p.season_year
+                             AND s.yahoo_player_key =
+                                 p.yahoo_player_key
+                       )
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS total_rows,
+                        COUNT(*) FILTER (
+                            WHERE is_yahoo_current
+                        ) AS current_rows
+                    FROM nfhl.player_universe
+                    WHERE league_key = %s
+                      AND season_year = %s
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                post_counts = cur.fetchone()
+
+                total_rows_after = int(
+                    post_counts["total_rows"]
+                )
+
+                current_rows_after = int(
+                    post_counts["current_rows"]
+                )
+
+                if current_rows_after != yahoo_total:
+                    raise RuntimeError(
+                        "NFHL current-Yahoo player count "
+                        "does not match the validated "
+                        "Yahoo universe: "
+                        f"Yahoo={yahoo_total}, "
+                        f"DB-current={current_rows_after}."
+                    )
+
+                if (
+                    total_rows_after
+                    != existing_total
+                    + inserted_count
+                ):
+                    raise RuntimeError(
+                        "Unexpected NFHL retained "
+                        "player-universe row count: "
+                        f"before={existing_total}, "
+                        f"inserted={inserted_count}, "
+                        f"after={total_rows_after}."
+                    )
+
+                after = draft_invariants()
+
+                invariant_fields = (
+                    "draft_status",
+                    "draft_pick_rows",
+                    "selection_count",
+                    "selection_hash",
+                    "state_sha256",
+                    "current_pick_id",
+                    "draft_order_hash",
+                    "autopick_queue_hash",
+                    "autopick_control_hash",
+                )
+
+                changed_invariants = [
+                    field
+                    for field in invariant_fields
+                    if before.get(field)
+                    != after.get(field)
+                ]
+
+                if changed_invariants:
+                    raise RuntimeError(
+                        "NFHL draft invariant changed "
+                        "during Yahoo player refresh: "
+                        + ", ".join(
+                            changed_invariants
+                        )
+                    )
+
+                cur.execute(
+                    """
+                    SELECT MAX(
+                        last_yahoo_seen_at_utc
+                    ) AS refreshed_at_utc
+                    FROM nfhl.player_universe
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND is_yahoo_current
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                    ),
+                )
+
+                refreshed_row = cur.fetchone()
+
+                refreshed_at_utc = (
+                    refreshed_row["refreshed_at_utc"]
+                    if refreshed_row
+                    else None
+                )
+
+    return {
+        "result_status": "REFRESHED",
+        "actor": actor,
+        "draft_status": draft_status,
+        "yahoo_player_count": yahoo_total,
+        "db_player_count": total_rows_after,
+        "db_current_player_count": current_rows_after,
+        "inserted_count": inserted_count,
+        "updated_count": updated_count,
+        "unchanged_count": unchanged_count,
+        "deactivated_count": deactivated_count,
+        "protected_retained_count": (
+            protected_retained_count
+        ),
+        "refreshed_at_utc": refreshed_at_utc,
+    }
+
+
+# NFHL_YAHOO_PLAYER_REFRESH_DB_END
 
 
 # NFHL_YAHOO_TEAM_REFRESH_DB_START

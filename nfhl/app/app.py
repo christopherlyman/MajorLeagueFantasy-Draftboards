@@ -32,6 +32,7 @@ from draftboard.data.db import (
     get_team_gateway_audit,
     get_teams,
     refresh_yahoo_teams_live,
+    refresh_yahoo_players_live,
     initialize_lottery,
     reveal_next_lottery_slot,
     initialize_draft_from_lottery,
@@ -2169,6 +2170,25 @@ def render_players(
         st.warning("No current Yahoo players are loaded.")
         return
 
+    if "is_yahoo_current" not in df.columns:
+        st.error(
+            "Current Yahoo player data is missing "
+            "is_yahoo_current."
+        )
+        return
+
+    df = df[
+        df["is_yahoo_current"]
+        .fillna(False)
+        .astype(bool)
+    ].copy()
+
+    if df.empty:
+        st.warning(
+            "No current Yahoo players are loaded."
+        )
+        return
+
     if "yahoo_player_key" not in df.columns:
         st.error(
             "Current Yahoo player data is missing "
@@ -2810,6 +2830,14 @@ def _render_autopick_panel_contents(
         if player_key in drafted_player_keys:
             continue
 
+        if not bool(
+            player.get(
+                "is_yahoo_current",
+                False,
+            )
+        ):
+            continue
+
         player_keys.append(
             player_key
         )
@@ -2826,6 +2854,13 @@ def _render_autopick_panel_contents(
 
         if not player:
             return player_key
+
+        yahoo_current = bool(
+            player.get(
+                "is_yahoo_current",
+                False,
+            )
+        )
 
         rank = player.get(
             "rank_value"
@@ -2864,6 +2899,11 @@ def _render_autopick_panel_contents(
         return (
             f"{rank_text} — "
             f"{name} — {nhl} — {pos}"
+            + (
+                ""
+                if yahoo_current
+                else " — No longer in Yahoo"
+            )
         )
 
     options = [
@@ -2908,6 +2948,13 @@ def _render_autopick_panel_contents(
             start=1,
         )
     }
+
+    for saved_key in current_by_rank.values():
+        if (
+            saved_key
+            and saved_key not in options
+        ):
+            options.append(saved_key)
 
     # ------------------------------------------------------------
     # QUEUE EDITOR / STAGED AUTO-PICK SETTINGS
@@ -3991,26 +4038,19 @@ def render_draft_readiness_panel(
                 st.rerun()
 
         if st.button(
-            "Refresh Yahoo Player Data",
+            "Refresh Available Players",
             use_container_width=True,
             key="nfhl_refresh_yahoo_players",
         ):
             try:
                 with st.spinner(
-                    "Refreshing Yahoo player data..."
+                    "Refreshing Yahoo player universe..."
                 ):
                     player_refresh_result = (
-                        refresh_yahoo_teams_live(
+                        refresh_yahoo_players_live(
                             actor="commissioner_link",
-                            include_players=True,
                         )
                     )
-
-                    from draftboard.data.season_team_slots import (
-                        auto_match_season_team_slots,
-                    )
-
-                    auto_match_season_team_slots()
 
             except Exception as exc:
                 st.error(
@@ -4023,14 +4063,15 @@ def render_draft_readiness_panel(
                     "nfhl_yahoo_team_refresh_notice"
                 ] = (
                     "Yahoo player refresh complete: "
-                    f"{player_refresh_result['yahoo_player_count']} "
-                    "players fetched; "
-                    f"{player_refresh_result['db_player_count']} "
-                    "player rows available. "
-                    "Yahoo rankings, roster percentage, "
-                    "eligibility, status, and draft analysis "
-                    "were refreshed. Team metadata was "
-                    "refreshed too."
+                    "{yahoo_player_count} fetched; "
+                    "{inserted_count} added; "
+                    "{updated_count} updated; "
+                    "{unchanged_count} unchanged; "
+                    "{deactivated_count} no longer available; "
+                    "{protected_retained_count} drafted/queued "
+                    "stale rows retained."
+                ).format(
+                    **player_refresh_result
                 )
 
                 st.cache_data.clear()
