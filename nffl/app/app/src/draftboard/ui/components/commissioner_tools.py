@@ -2625,7 +2625,7 @@ def _load_nffl_contract_readiness(
             player_name,
             matched_full_name,
             yahoo_player_key,
-            years_remaining_2026,
+            years_remaining_2026 AS years_remaining,
             reconciliation_status
         FROM nffl.v_contract_import_active_blockers
         WHERE league_key=%s
@@ -2662,7 +2662,7 @@ def _load_nffl_contract_readiness(
                         "player_name": str(row[1] or ""),
                         "matched_full_name": str(row[2] or ""),
                         "yahoo_player_key": str(row[3] or ""),
-                        "years_remaining_2026": int(row[4] or 0),
+                        "years_remaining": int(row[4] or 0),
                         "reconciliation_status": str(row[5] or ""),
                     }
                 )
@@ -4014,7 +4014,7 @@ def _render_admin_password_reset_tool(
 
                 for a in reset_candidates:
                     label = (
-                        f"{a.get('team_name') or '(No Team)'} — "
+                        f"{a.get('team_name') or '(No Team)'} â€” "
                         f"{a.get('email_normalized') or ''} "
                         f"[FID {a.get('franchise_id')}]"
                     )
@@ -4077,8 +4077,7 @@ def _render_draft_lottery_reset_tool(
             if not backup_tables:
                 st.error("No nffl_test_backup.draft_pick_* backup tables found.")
             else:
-                preferred_backup = "draft_pick_20260627_152830"
-                default_index = backup_tables.index(preferred_backup) if preferred_backup in backup_tables else 0
+                default_index = 0
                 backup_table = st.selectbox(
                     "Draft pick backup table to restore",
                     options=backup_tables,
@@ -4434,14 +4433,14 @@ def _render_nffl_yahoo_player_universe_refresh(
             st.write(f"Finished at (UTC): {last.get('finished_utc', '')}")
             st.write(f"Exit code: {last.get('exit_code', '')}")
             st.write(f"Duration (sec): {last.get('duration_sec', '')}")
-            st.write(f"Players reloaded: {last.get('players_before', '')} → {last.get('players_after', '')}")
+            st.write(f"Players reloaded: {last.get('players_before', '')} â†’ {last.get('players_after', '')}")
             st.write(f"Meta rows updated (last 10 min): {last.get('meta_updated_last_10m', '')}")
 
             log_text = (last.get("stdout", "") or "") + ("\n" if last.get("stdout") and last.get("stderr") else "") + (last.get("stderr", "") or "")
             if log_text.strip():
                 lines = [ln for ln in log_text.splitlines()]
 
-                # Lightweight “conflict” signals from log text (deterministic string matches)
+                # Lightweight â€œconflictâ€ signals from log text (deterministic string matches)
                 skipped = [ln for ln in lines if "skipping bad player_key" in ln.lower()]
                 conflicts = [ln for ln in lines if "conflict" in ln.lower()]
 
@@ -4540,7 +4539,7 @@ def _render_nffl_yahoo_player_universe_refresh(
                     state.players = load_available_players(dsn)
                     after_n = len(state.players or {})
 
-                    # Keep contract cache in sync (PT eligibility uses contracted_keys_2026)
+                    # Keep the canonical contract cache in sync for PT eligibility.
                     _refresh_contract_cache_into_session_state()
 
                     # Persist receipt so results survive st.rerun()
@@ -4558,7 +4557,7 @@ def _render_nffl_yahoo_player_universe_refresh(
                     save_autosave(state)
 
                 # Show a short success toast before rerun (the receipt persists anyway)
-                st.success(f"Player universe refreshed and reloaded. Players: {before_n} → {after_n}")
+                st.success(f"Player universe refreshed and reloaded. Players: {before_n} â†’ {after_n}")
 
             finally:
                 st.session_state["yahoo_refresh_running"] = False
@@ -4655,7 +4654,7 @@ def render_commissioner_actions(
         _render_nffl_yahoo_player_universe_refresh(
             state
         )
-    # Trade Builder (UI ONLY — SAFE)
+    # Trade Builder (UI ONLY â€” SAFE)
     # -----------------------
     if show_trade_builder:
         with st.expander("Trade (Builder)", expanded=False):
@@ -4773,7 +4772,7 @@ def render_commissioner_actions(
 
                 with c2:
                     contract_years = st.number_input(
-                        "Contract years (0–5)",
+                        "Contract years (0â€“5)",
                         min_value=0,
                         max_value=5,
                         value=0,
@@ -4797,9 +4796,9 @@ def render_commissioner_actions(
                     nm = state.players.get(pk).name if pk in state.players else pk
                     a, b = st.columns([6, 1])
                     with a:
-                        st.write(f"• {nm} ({pk}) — contract {yrs}y")
+                        st.write(f"â€¢ {nm} ({pk}) â€” contract {yrs}y")
                     with b:
-                        if st.button("✕", key=f"trade_rm_player_{which}_{i}"):
+                        if st.button("âœ•", key=f"trade_rm_player_{which}_{i}"):
                             pane["players"].pop(i)
                             st.rerun()
 
@@ -4848,9 +4847,9 @@ def render_commissioner_actions(
                     lbl = pick_label_by_id.get(pid, pid)
                     a, b = st.columns([6, 1])
                     with a:
-                        st.write(f"• {lbl}")
+                        st.write(f"â€¢ {lbl}")
                     with b:
-                        if st.button("✕", key=f"trade_rm_pick_{which}_{i}"):
+                        if st.button("âœ•", key=f"trade_rm_pick_{which}_{i}"):
                             pane["picks"].remove(pid)
                             st.rerun()
                         
@@ -4891,7 +4890,7 @@ def render_commissioner_actions(
             st.divider()
 
             # -----------------------
-            # Finalize → Submit
+            # Finalize â†’ Submit
             # -----------------------
             tb["finalize"] = st.checkbox(
                 "Finalize Trade (locks selections and enables Submit)",
@@ -5093,7 +5092,7 @@ def render_commissioner_actions(
                 return out
 
             if dsn:
-                st.caption(f"League: {league_key} • Season: {season_year}")
+                st.caption(f"League: {league_key} â€¢ Season: {season_year}")
 
                 team_keys = sorted([t.team_key for t in state.teams.values()])
                 team_key = st.selectbox(
@@ -5103,10 +5102,8 @@ def render_commissioner_actions(
                     format_func=lambda k: state.teams[k].name if k in state.teams else k,
                 )
 
-                contracted_keys = (
-                    getattr(state, "contracted_player_keys_2026", None)
-                    or getattr(state, "contracted_keys_2026", None)
-                    or getattr(state, "contracted_keys", None)
+                contracted_keys = set(
+                    st.session_state.get("contracted_keys", set())
                     or set()
                 )
 
@@ -5140,16 +5137,16 @@ def render_commissioner_actions(
                     tm = getattr(p, "mlb_team", "") or ""
                     pos = "/".join([_pos_label(x) for x in getattr(p, "positions", [])]) if getattr(p, "positions", None) else ""
                     if tm and pos:
-                        return f"{p.name} — {tm} — {pos}"
+                        return f"{p.name} â€” {tm} â€” {pos}"
                     if tm:
-                        return f"{p.name} — {tm}"
+                        return f"{p.name} â€” {tm}"
                     if pos:
-                        return f"{p.name} — {pos}"
+                        return f"{p.name} â€” {pos}"
                     return p.name
 
                 existing = _load_team_qos(dsn, league_key, season_year, team_key)
 
-                st.write(f"Select QO1–QO{get_active_qo_rounds()} using searchable dropdowns (type to search).")
+                st.write(f"Select QO1â€“QO{get_active_qo_rounds()} using searchable dropdowns (type to search).")
 
                 selected: dict[int, str] = {}
                 for lvl in range(1, get_active_qo_rounds() + 1):
@@ -5299,7 +5296,7 @@ def render_commissioner_actions(
                     bits.append(team)
                 if pos:
                     bits.append(pos)
-                return " — ".join(bits)
+                return " â€” ".join(bits)
 
             pt_player_key = st.selectbox(
                 "Select PT player",
@@ -5432,7 +5429,7 @@ def render_commissioner_actions(
                         bits.append(tm)
                     if pos:
                         bits.append(pos)
-                    return " — ".join(bits)
+                    return " â€” ".join(bits)
 
                 # Read mode FIRST (so the Player dropdown can depend on it)
                 mode = st.radio(
@@ -5463,7 +5460,7 @@ def render_commissioner_actions(
                     options=player_options,
                     format_func=_player_label,
                     index=None,
-                    placeholder="Start typing a player name…",
+                    placeholder="Start typing a player nameâ€¦",
                     key="contract_override_player",
                 )
 
@@ -5654,7 +5651,7 @@ def render_commissioner_actions(
                 if pos:
                     bits.append(pos)
                 bits.append(str(pk))
-                return " — ".join(bits)
+                return " â€” ".join(bits)
 
             action = st.radio(
                 "Contract / roster state",

@@ -242,12 +242,12 @@ def _load_yahoo_auto_lottery_defaults(
         proof_rows.append(
             {
                 "Pool": pool,
-                "2025 Rank": int(row["rank"]),
-                "2025 Team": row["source_team_name"],
-                "2025 Key": row["source_team_key"],
-                "2026 Team": str(b.get("current_team_name") or current_team_key),
-                "2026 Owner": str(b.get("current_owner_name") or ""),
-                "2026 Key": current_team_key,
+                f"{prior_season_year} Rank": int(row["rank"]),
+                f"{prior_season_year} Team": row["source_team_name"],
+                f"{prior_season_year} Key": row["source_team_key"],
+                f"{current_season_year} Team": str(b.get("current_team_name") or current_team_key),
+                f"{current_season_year} Owner": str(b.get("current_owner_name") or ""),
+                f"{current_season_year} Key": current_team_key,
             }
         )
 
@@ -1071,7 +1071,7 @@ def _render_setup_form(state: Any, dsn: str, league_key: str, season_year: int, 
             default=consolation_default_effective,
             format_func=lambda tk: _team_name(state, tk),
             key="lottery_consolation_team_keys",
-            help="Default is every non-playoff team after Yahoo standings are mapped into the 2026 team keys.",
+            help=f"Default is every non-playoff team after Yahoo standings are mapped into the {season_year} team keys.",
         )
 
         st.caption(
