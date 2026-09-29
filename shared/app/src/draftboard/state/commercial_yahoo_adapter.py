@@ -38,6 +38,7 @@ class YahooTeam:
     team_id: str | None
     name: str | None
     owner_name: str | None
+    manager_id: str | None
     owner_guid: str | None
 
 
@@ -154,7 +155,11 @@ def _league_game_key(
 
 def _extract_owner(
     team_blocks: list[Any],
-) -> tuple[str | None, str | None]:
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+]:
     managers_block = _extract_from_blocks(
         team_blocks,
         "managers",
@@ -164,7 +169,7 @@ def _extract_owner(
         not isinstance(managers_block, list)
         or not managers_block
     ):
-        return (None, None)
+        return (None, None, None)
 
     managers: list[dict[str, Any]] = []
 
@@ -178,7 +183,7 @@ def _extract_owner(
             managers.append(manager)
 
     if not managers:
-        return (None, None)
+        return (None, None, None)
 
     chosen = next(
         (
@@ -198,6 +203,9 @@ def _extract_owner(
     return (
         _optional_text(
             chosen.get("nickname")
+        ),
+        _optional_text(
+            chosen.get("manager_id")
         ),
         _optional_text(
             chosen.get("guid")
@@ -352,9 +360,11 @@ def parse_yahoo_teams(
 
         seen.add(team_key)
 
-        owner_name, owner_guid = (
-            _extract_owner(blocks)
-        )
+        (
+            owner_name,
+            manager_id,
+            owner_guid,
+        ) = _extract_owner(blocks)
 
         teams.append(
             YahooTeam(
@@ -372,6 +382,7 @@ def parse_yahoo_teams(
                     )
                 ),
                 owner_name=owner_name,
+                manager_id=manager_id,
                 owner_guid=owner_guid,
             )
         )

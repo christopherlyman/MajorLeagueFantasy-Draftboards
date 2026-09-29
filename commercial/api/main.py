@@ -495,6 +495,7 @@ def _yahoo_team_response(item) -> dict:
         "team_id": item.team_id,
         "name": item.name,
         "owner_name": item.owner_name,
+        "provider_manager_id": item.manager_id,
         "owner_guid": item.owner_guid,
     }
 

@@ -107,6 +107,7 @@ def yahoo_team(
         team_id=str(slot),
         name=f"Team {slot}",
         owner_name=owner,
+        manager_id=f"manager-{slot}",
         owner_guid=f"guid-{slot}",
     )
 
@@ -532,6 +533,8 @@ class YahooTeamPreviewTests(
                     "Team 1",
                 "owner_name":
                     "Commissioner",
+                "provider_manager_id":
+                    "manager-1",
                 "owner_guid":
                     "guid-1",
             },

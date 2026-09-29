@@ -218,6 +218,8 @@ class YahooFantasyAdapterTests(
                                                     "manager": {
                                                         "nickname":
                                                             "First Manager",
+                                                        "manager_id":
+                                                            "101",
                                                         "guid":
                                                             "first-guid",
                                                         "is_commissioner":
@@ -228,6 +230,8 @@ class YahooFantasyAdapterTests(
                                                     "manager": {
                                                         "nickname":
                                                             "Commissioner",
+                                                        "manager_id":
+                                                            "102",
                                                         "guid":
                                                             "commissioner-guid",
                                                         "is_commissioner":
@@ -271,6 +275,10 @@ class YahooFantasyAdapterTests(
             "Commissioner",
         )
         self.assertEqual(
+            teams[0].manager_id,
+            "102",
+        )
+        self.assertEqual(
             teams[0].owner_guid,
             "commissioner-guid",
         )
@@ -310,6 +318,8 @@ class YahooFantasyAdapterTests(
                                                     "manager": {
                                                         "nickname":
                                                             "First Manager",
+                                                        "manager_id":
+                                                            "101",
                                                         "guid":
                                                             "first-guid",
                                                     }
@@ -318,6 +328,8 @@ class YahooFantasyAdapterTests(
                                                     "manager": {
                                                         "nickname":
                                                             "Second Manager",
+                                                        "manager_id":
+                                                            "202",
                                                         "guid":
                                                             "second-guid",
                                                     }
@@ -345,6 +357,10 @@ class YahooFantasyAdapterTests(
         self.assertEqual(
             teams[0].owner_name,
             "First Manager",
+        )
+        self.assertEqual(
+            teams[0].manager_id,
+            "101",
         )
         self.assertEqual(
             teams[0].owner_guid,
