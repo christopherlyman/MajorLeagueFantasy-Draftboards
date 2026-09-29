@@ -5,6 +5,10 @@ import {
 } from "next/headers";
 
 import {
+  AppShell,
+} from "../../components/AppShell";
+
+import {
   CopyManagerLinkButton,
 } from "../../components/CopyManagerLinkButton";
 
@@ -130,21 +134,20 @@ export default async function CommissionerPage() {
 
   if (!authorized) {
     return (
-      <main className={styles.page}>
-        <header className={styles.header}>
+      <main className={styles.deniedPage}>
+        <header className={styles.deniedHeader}>
           <div>
             <p className={styles.eyebrow}>
               MLF Commissioner
             </p>
 
             <h1>
-              Manager Access
+              Commissioner Tools
             </h1>
 
-            <p className={styles.subtitle}>
+            <p className={styles.deniedSubtitle}>
               Commissioner authorization is
-              required to view private manager
-              credentials.
+              required to access this workspace.
             </p>
           </div>
 
@@ -181,195 +184,400 @@ export default async function CommissionerPage() {
     || !Array.isArray(linksResult.body)
   ) {
     return (
-      <main className={styles.page}>
+      <AppShell
+        title="Commissioner Tools"
+        subtitle="MLF commissioner administration"
+        activePath="/commissioner"
+        badge="Commissioner"
+      >
         <section className={styles.notice}>
           <strong>
-            Manager links are temporarily
+            Commissioner data is temporarily
             unavailable.
           </strong>
         </section>
-      </main>
+      </AppShell>
     );
   }
 
   const links = linksResult.body;
 
+  const activeLinks = links.filter(
+    (row) => row.is_active,
+  ).length;
+
+  const claimedLinks = links.filter(
+    (row) => row.claim_count > 0,
+  ).length;
+
+  const managerAccessReady = (
+    links.length === 16
+    && activeLinks === 16
+  );
+
   return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>
-            MLF Commissioner
-          </p>
+    <AppShell
+      title="Commissioner Tools"
+      subtitle={
+        "Commissioner readiness, annual workflow, manager access, and league operations"
+      }
+      activePath="/commissioner"
+      badge="Commissioner"
+    >
+      <div className={styles.topActions}>
+        <a
+          href="/gateway/commissioner/clear?next=%2F"
+          className={styles.secondaryButton}
+        >
+          Clear Commissioner Access
+        </a>
+      </div>
 
-          <h1>
-            Manager Access
-          </h1>
-
-          <p className={styles.subtitle}>
-            Private current-season manager
-            gateway links. Give each manager
-            only their own link.
-          </p>
-        </div>
-
-        <div className={styles.headerActions}>
-          <Link
-            href="/"
-            className={styles.secondaryButton}
-          >
-            Draft Board
-          </Link>
-
-          <a
-            href="/gateway/commissioner/clear?next=%2F"
-            className={styles.secondaryButton}
-          >
-            Clear Commissioner Access
-          </a>
-        </div>
-      </header>
-
-      <section className={styles.summary}>
-        <div>
-          <span>
-            League
-          </span>
-
-          <strong>
-            {auth.body?.league_key}
-          </strong>
-        </div>
-
-        <div>
-          <span>
-            Season
-          </span>
-
-          <strong>
-            {auth.body?.season_year}
-          </strong>
-        </div>
-
-        <div>
-          <span>
-            Manager Links
-          </span>
-
-          <strong>
-            {links.length}
-          </strong>
-        </div>
-      </section>
-
-      <section className={styles.panel}>
-        <div className={styles.panelHeader}>
+      <section className={styles.readiness}>
+        <div className={styles.sectionHeading}>
           <div>
-            <h2>
-              Manager Team Links
-            </h2>
-
-            <p>
-              Each URL is a private bearer
-              credential for one MLF team.
+            <p className={styles.eyebrow}>
+              Commissioner Readiness
             </p>
+
+            <h2>
+              Current League State
+            </h2>
+          </div>
+
+          <span
+            className={
+              managerAccessReady
+                ? styles.readyBadge
+                : styles.actionBadge
+            }
+          >
+            {managerAccessReady
+              ? "Manager Access Ready"
+              : "Action Needed"}
+          </span>
+        </div>
+
+        <div className={styles.readinessGrid}>
+          <div className={styles.metric}>
+            <span>
+              League
+            </span>
+
+            <strong>
+              {auth.body?.league_key}
+            </strong>
+          </div>
+
+          <div className={styles.metric}>
+            <span>
+              Season
+            </span>
+
+            <strong>
+              {auth.body?.season_year}
+            </strong>
+          </div>
+
+          <div className={styles.metric}>
+            <span>
+              Active Links
+            </span>
+
+            <strong>
+              {activeLinks} / {links.length}
+            </strong>
+          </div>
+
+          <div className={styles.metric}>
+            <span>
+              Claimed
+            </span>
+
+            <strong>
+              {claimedLinks} / {links.length}
+            </strong>
           </div>
         </div>
 
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>
-                  Team
-                </th>
-                <th>
-                  Manager
-                </th>
-                <th>
-                  Status
-                </th>
-                <th>
-                  Claims
-                </th>
-                <th>
-                  Last Claimed
-                </th>
-                <th>
-                  Manager Link
-                </th>
-              </tr>
-            </thead>
+        <div className={styles.nextAction}>
+          <strong>
+            Next action
+          </strong>
 
-            <tbody>
-              {links.map((row) => (
-                <tr key={row.team_key}>
-                  <td>
-                    <strong>
-                      {row.team_name}
-                    </strong>
-
-                    <small>
-                      {row.team_key}
-                    </small>
-                  </td>
-
-                  <td>
-                    {row.owner_name ?? "\u2014"}
-                  </td>
-
-                  <td>
-                    <span
-                      className={
-                        row.is_active
-                          ? styles.active
-                          : styles.inactive
-                      }
-                    >
-                      {row.is_active
-                        ? "Active"
-                        : "Inactive"}
-                    </span>
-                  </td>
-
-                  <td>
-                    {row.claim_count}
-                  </td>
-
-                  <td>
-                    {formatClaimed(
-                      row.last_claimed_at_utc,
-                    )}
-                  </td>
-
-                  <td>
-                    <div
-                      className={
-                        styles.linkCell
-                      }
-                    >
-                      <CopyManagerLinkButton
-                        url={row.manager_url}
-                        className={
-                          styles.copyButton
-                        }
-                      />
-
-                      <code
-                        className={
-                          styles.managerUrl
-                        }
-                      >
-                        {row.manager_url}
-                      </code>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <p>
+            {managerAccessReady
+              ? "Manager access is configured. Continue through the Commissioner workflow below."
+              : "Review Manager Access and resolve inactive or missing team links before continuing."}
+          </p>
         </div>
       </section>
-    </main>
+
+      <section className={styles.workflow}>
+        <div className={styles.workflowHeading}>
+          <h2>
+            Annual Commissioner Workflow
+          </h2>
+
+          <p>
+            Normal administration is kept
+            separate from correction, recovery,
+            and destructive operations.
+          </p>
+        </div>
+
+        <details className={styles.tool}>
+          <summary>
+            <span>
+              1. Manager Access
+            </span>
+
+            <span className={styles.toolStatus}>
+              {activeLinks} active
+            </span>
+          </summary>
+
+          <div className={styles.toolBody}>
+            <p className={styles.toolIntro}>
+              Private current-season manager
+              gateway links. Give each manager
+              only their own link.
+            </p>
+
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>
+                      Team
+                    </th>
+                    <th>
+                      Manager
+                    </th>
+                    <th>
+                      Status
+                    </th>
+                    <th>
+                      Claims
+                    </th>
+                    <th>
+                      Last Claimed
+                    </th>
+                    <th>
+                      Manager Link
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {links.map((row) => (
+                    <tr key={row.team_key}>
+                      <td>
+                        <strong>
+                          {row.team_name}
+                        </strong>
+
+                        <small>
+                          {row.team_key}
+                        </small>
+                      </td>
+
+                      <td>
+                        {row.owner_name ?? "\u2014"}
+                      </td>
+
+                      <td>
+                        <span
+                          className={
+                            row.is_active
+                              ? styles.active
+                              : styles.inactive
+                          }
+                        >
+                          {row.is_active
+                            ? "Active"
+                            : "Inactive"}
+                        </span>
+                      </td>
+
+                      <td>
+                        {row.claim_count}
+                      </td>
+
+                      <td>
+                        {formatClaimed(
+                          row.last_claimed_at_utc,
+                        )}
+                      </td>
+
+                      <td>
+                        <div
+                          className={
+                            styles.linkCell
+                          }
+                        >
+                          <CopyManagerLinkButton
+                            url={row.manager_url}
+                            className={
+                              styles.copyButton
+                            }
+                          />
+
+                          <code
+                            className={
+                              styles.managerUrl
+                            }
+                          >
+                            {row.manager_url}
+                          </code>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
+        <details className={styles.tool}>
+          <summary>
+            <span>
+              2. Draft Preparation
+            </span>
+
+            <span className={styles.toolStatus}>
+              Views available
+            </span>
+          </summary>
+
+          <div className={styles.toolBody}>
+            <p className={styles.toolIntro}>
+              Review QOs and the draft lottery
+              before draft operations.
+            </p>
+
+            <div className={styles.toolLinks}>
+              <Link
+                href="/qos"
+                className={styles.secondaryButton}
+              >
+                QOs
+              </Link>
+
+              <Link
+                href="/draft-lottery"
+                className={styles.secondaryButton}
+              >
+                Draft Lottery
+              </Link>
+            </div>
+          </div>
+        </details>
+
+        <details className={styles.tool}>
+          <summary>
+            <span>
+              3. Draft Operations
+            </span>
+
+            <span className={styles.toolStatus}>
+              Live views
+            </span>
+          </summary>
+
+          <div className={styles.toolBody}>
+            <p className={styles.toolIntro}>
+              Monitor the active board, pick
+              history, and draft statistics.
+            </p>
+
+            <div className={styles.toolLinks}>
+              <Link
+                href="/"
+                className={styles.secondaryButton}
+              >
+                Draft Board
+              </Link>
+
+              <Link
+                href="/pick-tracker"
+                className={styles.secondaryButton}
+              >
+                Pick Tracker
+              </Link>
+
+              <Link
+                href="/draft-statistics"
+                className={styles.secondaryButton}
+              >
+                Draft Statistics
+              </Link>
+            </div>
+          </div>
+        </details>
+
+        <section className={styles.pendingOperations}>
+          <h2>
+            Commissioner Operations
+          </h2>
+
+          <p>
+            The existing MLF operational tools
+            are being moved here behind
+            authoritative commissioner mutation
+            endpoints rather than recreated as
+            browser-only logic.
+          </p>
+
+          <div className={styles.operationGrid}>
+            <span>
+              Set Draft Order
+            </span>
+            <span>
+              Refresh Yahoo Player Universe
+            </span>
+            <span>
+              Trade Builder
+            </span>
+            <span>
+              Qualifying Offers
+            </span>
+            <span>
+              Prospect Tags
+            </span>
+            <span>
+              Contract Overrides
+            </span>
+            <span>
+              Draft Tools
+            </span>
+          </div>
+        </section>
+
+        <details
+          className={`${styles.tool} ${styles.dangerTool}`}
+        >
+          <summary>
+            <span>
+              Recovery / Danger Zone
+            </span>
+
+            <span className={styles.toolStatus}>
+              Protected
+            </span>
+          </summary>
+
+          <div className={styles.toolBody}>
+            <p className={styles.toolIntro}>
+              Destructive and recovery actions
+              remain unavailable here until their
+              authenticated mutation boundaries
+              are migrated and proven.
+            </p>
+          </div>
+        </details>
+      </section>
+    </AppShell>
   );
 }

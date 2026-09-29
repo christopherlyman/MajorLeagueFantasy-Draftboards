@@ -1,7 +1,15 @@
-import type { ReactNode } from "react";
+import type {
+  ReactNode,
+} from "react";
+
 import Link from "next/link";
 
+import {
+  cookies,
+} from "next/headers";
+
 import styles from "../app/page.module.css";
+
 
 type AppShellProps = {
   activePath: string;
@@ -10,6 +18,13 @@ type AppShellProps = {
   badge?: string;
   children: ReactNode;
 };
+
+
+type CommissionerPrincipal = {
+  is_authenticated: boolean;
+  role: "public" | "commissioner";
+};
+
 
 const NAV_ITEMS = [
   {
@@ -49,13 +64,78 @@ const NAV_ITEMS = [
   },
 ] as const;
 
-export function AppShell({
+
+function apiBase(): string {
+  return (
+    process.env.MLF_API_INTERNAL_URL
+    ?? "http://mlf_api:8000"
+  ).replace(/\/+$/, "");
+}
+
+
+async function hasCommissionerAccess(): Promise<boolean> {
+  try {
+    const cookieStore = await cookies();
+
+    const cookieHeader = cookieStore
+      .getAll()
+      .map(
+        ({ name, value }) =>
+          `${name}=${value}`,
+      )
+      .join("; ");
+
+    const response = await fetch(
+      `${apiBase()}/commissioner/auth/me`,
+      {
+        method: "GET",
+        headers: cookieHeader
+          ? {
+              cookie: cookieHeader,
+            }
+          : undefined,
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const principal =
+      await response.json() as CommissionerPrincipal;
+
+    return (
+      principal.is_authenticated === true
+      && principal.role === "commissioner"
+    );
+  } catch {
+    return false;
+  }
+}
+
+
+export async function AppShell({
   activePath,
   title,
   subtitle,
   badge = "Read-only preview",
   children,
 }: AppShellProps) {
+  const commissioner =
+    await hasCommissionerAccess();
+
+  const navItems = commissioner
+    ? [
+        ...NAV_ITEMS,
+        {
+          label: "Commissioner",
+          href: "/commissioner",
+          enabled: true,
+        },
+      ]
+    : NAV_ITEMS;
+
   return (
     <main className={styles.appShell}>
       <header className={styles.appHeader}>
@@ -84,7 +164,7 @@ export function AppShell({
         className={styles.tabs}
         aria-label="MLF sections"
       >
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const active =
             item.href === activePath;
 
