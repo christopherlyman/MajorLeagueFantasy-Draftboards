@@ -107,3 +107,4 @@ nffl/app/scripts/reset_manager_passwords.py
 
 # NFFL Discord bot runtime state
 /nffl-discord-bot/data/
+mlf/runtime/.commissioner.env

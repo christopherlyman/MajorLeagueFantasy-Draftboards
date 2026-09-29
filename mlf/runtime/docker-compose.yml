@@ -56,10 +56,11 @@ services:
       - mlf_net
 
   api:
-    image: mlf-fastapi:1e4ffe7
+    image: mlf-fastapi:a43e2d0
     container_name: mlf_api
     env_file:
       - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
+      - /Volume1/Bots/fantasy/DraftBoards/mlf/runtime/.commissioner.env
     depends_on:
       - postgres
     restart: unless-stopped
@@ -67,7 +68,7 @@ services:
       - mlf_net
 
   next:
-    image: mlf-next:55462f6
+    image: mlf-next:c2c5903
     container_name: mlf_next
     env_file:
       - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
