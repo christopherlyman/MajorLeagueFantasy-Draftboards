@@ -39,12 +39,12 @@ The production Compose/runtime services are:
   - public reverse proxy
   - restart policy: `unless-stopped`
 - `mlf_next`
-  - image: `mlf-next:6eb4b4b`
+  - image: `mlf-next:ed4acd5`
   - primary production presentation/runtime
   - no host port
   - restart policy: `unless-stopped`
 - `mlf_api`
-  - image: `mlf-fastapi:6eb4b4b`
+  - image: `mlf-fastapi:ed4acd5`
   - authenticated application/mutation boundary
   - no host port
   - restart policy: `unless-stopped`
