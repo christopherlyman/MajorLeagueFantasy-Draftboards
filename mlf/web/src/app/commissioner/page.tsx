@@ -20,6 +20,10 @@ import {
   CommissionerTradeBuilder,
 } from "../../components/CommissionerTradeBuilder";
 
+import {
+  CommissionerQualifyingOffers,
+} from "../../components/CommissionerQualifyingOffers";
+
 import styles from "./page.module.css";
 
 
@@ -708,20 +712,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 4
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Qualifying Offers
-                </strong>
-
-                <span>
-                  Review and administer preseason
-                  qualifying-offer state.
-                </span>
+                <CommissionerQualifyingOffers />
               </div>
             </li>
 

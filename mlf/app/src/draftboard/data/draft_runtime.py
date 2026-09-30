@@ -798,3 +798,478 @@ def apply_trade_assets_atomic(
         int(row[1]),
         int(row[2]),
     )
+# MLF_PREDRAFT_QO_REPLACE_ATOMIC_V1
+
+def replace_team_predraft_qos_atomic(
+    dsn: str,
+    draft_key: str,
+    team_key: str,
+    yahoo_player_keys: list[str],
+    note: str | None = None,
+) -> int:
+    """
+    Replace one team's five predraft qualifying offers.
+
+    mlf.qualifying_offer is the relational draft-runtime source.
+    public.qualifying_offer is maintained transactionally as a
+    compatibility mirror for remaining legacy readers.
+
+    Predraft QOs are immutable after any real draft selection exists.
+    """
+    import psycopg
+
+    draft = str(
+        draft_key or ""
+    ).strip()
+
+    team = str(
+        team_key or ""
+    ).strip()
+
+    players = [
+        str(value or "").strip()
+        for value in (
+            yahoo_player_keys or []
+        )
+    ]
+
+    if not draft:
+        raise ValueError(
+            "Missing draft key."
+        )
+
+    if not team:
+        raise ValueError(
+            "Missing team key."
+        )
+
+    if len(players) != 5:
+        raise ValueError(
+            "Exactly five qualifying offers are required."
+        )
+
+    if any(not player for player in players):
+        raise ValueError(
+            "All five qualifying offers are required."
+        )
+
+    if len(set(players)) != 5:
+        raise ValueError(
+            "Qualifying-offer players must be unique."
+        )
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(%s, 0)
+                )
+                """,
+                (draft,),
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    league_key,
+                    season_year,
+                    qo_rounds
+                FROM mlf.draft
+                WHERE draft_key = %s
+                FOR UPDATE
+                """,
+                (draft,),
+            )
+
+            draft_row = cur.fetchone()
+
+            if draft_row is None:
+                raise RuntimeError(
+                    f"Draft {draft!r} was not found."
+                )
+
+            league_key = str(
+                draft_row[0]
+            )
+
+            season_year = int(
+                draft_row[1]
+            )
+
+            qo_rounds = int(
+                draft_row[2]
+            )
+
+            if qo_rounds != 5:
+                raise RuntimeError(
+                    "Active draft does not have "
+                    "five QO rounds."
+                )
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM mlf.draft_selection
+                WHERE draft_key = %s
+                """,
+                (draft,),
+            )
+
+            selection_count = int(
+                cur.fetchone()[0]
+            )
+
+            if selection_count != 0:
+                raise RuntimeError(
+                    "Predraft qualifying offers "
+                    "cannot be changed after "
+                    "draft selections exist."
+                )
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM mlf.team
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            if cur.fetchone() is None:
+                raise ValueError(
+                    "Team is not in the active "
+                    "MLF season."
+                )
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM mlf.player_universe
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND is_active = true
+                  AND yahoo_player_key = ANY(%s)
+                """,
+                (
+                    league_key,
+                    season_year,
+                    players,
+                ),
+            )
+
+            if int(cur.fetchone()[0]) != 5:
+                raise ValueError(
+                    "Every qualifying-offer player "
+                    "must exist in the active "
+                    "MLF player universe."
+                )
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM mlf.v_active_contract
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = ANY(%s)
+                """,
+                (
+                    league_key,
+                    season_year,
+                    players,
+                ),
+            )
+
+            if int(cur.fetchone()[0]) != 0:
+                raise ValueError(
+                    "Contracted players cannot be "
+                    "assigned predraft qualifying offers."
+                )
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM mlf.qualifying_offer
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = ANY(%s)
+                  AND team_key <> %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    players,
+                    team,
+                ),
+            )
+
+            if int(cur.fetchone()[0]) != 0:
+                raise ValueError(
+                    "A selected player is already "
+                    "a qualifying offer for another team."
+                )
+
+            # Fail closed if the legacy mirror has already
+            # diverged from relational truth.
+            cur.execute(
+                """
+                WITH public_rows AS (
+                    SELECT
+                        team_key,
+                        qo_level,
+                        yahoo_player_key
+                    FROM public.qualifying_offer
+                    WHERE league_key = %s
+                      AND season_year = %s
+                ),
+                mlf_rows AS (
+                    SELECT
+                        team_key,
+                        qo_level,
+                        yahoo_player_key
+                    FROM mlf.qualifying_offer
+                    WHERE league_key = %s
+                      AND season_year = %s
+                )
+                SELECT
+                    (
+                        SELECT count(*)
+                        FROM (
+                            SELECT *
+                            FROM public_rows
+
+                            EXCEPT
+
+                            SELECT *
+                            FROM mlf_rows
+                        ) AS public_only
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM (
+                            SELECT *
+                            FROM mlf_rows
+
+                            EXCEPT
+
+                            SELECT *
+                            FROM public_rows
+                        ) AS mlf_only
+                    )
+                """,
+                (
+                    league_key,
+                    season_year,
+                    league_key,
+                    season_year,
+                ),
+            )
+
+            public_only, mlf_only = (
+                cur.fetchone()
+            )
+
+            if (
+                int(public_only) != 0
+                or int(mlf_only) != 0
+            ):
+                raise RuntimeError(
+                    "QO compatibility mirror is "
+                    "out of sync with relational truth."
+                )
+
+            cur.execute(
+                """
+                DELETE FROM mlf.qualifying_offer
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            cur.execute(
+                """
+                DELETE FROM public.qualifying_offer
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            audit_note = (
+                str(note).strip()
+                if note is not None
+                else None
+            )
+
+            for level, player_key in enumerate(
+                players,
+                start=1,
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO mlf.qualifying_offer (
+                        league_key,
+                        season_year,
+                        team_key,
+                        yahoo_player_key,
+                        qo_level,
+                        note,
+                        updated_at_utc
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        now()
+                    )
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        team,
+                        player_key,
+                        level,
+                        audit_note,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO public.qualifying_offer (
+                        league_key,
+                        season_year,
+                        team_key,
+                        yahoo_player_key,
+                        qo_level,
+                        note,
+                        updated_at,
+                        team_key_yahoo
+                    )
+                    VALUES (
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        now(),
+                        %s
+                    )
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        team,
+                        player_key,
+                        level,
+                        audit_note,
+                        team,
+                    ),
+                )
+
+            cur.execute(
+                """
+                SELECT mlf.rebuild_draft_qo_current(%s)
+                """,
+                (draft,),
+            )
+
+            current_qo_count = int(
+                cur.fetchone()[0]
+            )
+
+            # Verify the compatibility mirror before commit.
+            cur.execute(
+                """
+                WITH public_rows AS (
+                    SELECT
+                        team_key,
+                        qo_level,
+                        yahoo_player_key
+                    FROM public.qualifying_offer
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND team_key = %s
+                ),
+                mlf_rows AS (
+                    SELECT
+                        team_key,
+                        qo_level,
+                        yahoo_player_key
+                    FROM mlf.qualifying_offer
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND team_key = %s
+                )
+                SELECT
+                    (
+                        SELECT count(*)
+                        FROM (
+                            SELECT *
+                            FROM public_rows
+
+                            EXCEPT
+
+                            SELECT *
+                            FROM mlf_rows
+                        ) AS public_only
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM (
+                            SELECT *
+                            FROM mlf_rows
+
+                            EXCEPT
+
+                            SELECT *
+                            FROM public_rows
+                        ) AS mlf_only
+                    )
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            public_only, mlf_only = (
+                cur.fetchone()
+            )
+
+            if (
+                int(public_only) != 0
+                or int(mlf_only) != 0
+            ):
+                raise RuntimeError(
+                    "QO compatibility mirror "
+                    "verification failed."
+                )
+
+        conn.commit()
+
+    return current_qo_count

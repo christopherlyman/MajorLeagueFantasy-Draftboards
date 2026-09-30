@@ -106,6 +106,8 @@ class GatewayContractTests(unittest.TestCase):
                 "/gateway/commissioner/yahoo-player-universe/refresh": {"POST"},
                 "/gateway/commissioner/trade-builder": {"GET"},
                 "/gateway/commissioner/trade-builder/submit": {"POST"},
+                "/gateway/commissioner/qualifying-offers": {"GET"},
+                "/gateway/commissioner/qualifying-offers/{team_key}": {"POST"},
                 "/gateway/claim": {"GET"},
                 "/gateway/clear": {"GET"},
                 "/drafts/{draft_key}/picks": {"POST"},

@@ -1242,3 +1242,127 @@
     flex-direction: column;
   }
 }
+/* Commissioner Qualifying Offers */
+
+.qoPanel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #303b47;
+  border-radius: 9px;
+  background: #10161d;
+}
+
+.qoTeamSelect {
+  display: grid;
+  max-width: 420px;
+  gap: 5px;
+  margin-bottom: 13px;
+}
+
+.qoTeamSelect > span,
+.qoField > span {
+  color: #aab7c4;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.qoTeamSelect select,
+.qoField select {
+  width: 100%;
+  min-width: 0;
+  height: 39px;
+  padding: 0 9px;
+  border: 1px solid #3a4653;
+  border-radius: 7px;
+  background: #0d1319;
+  color: #edf3f8;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.qoGrid {
+  display: grid;
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.qoField {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.qoCurrent {
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid #2e3844;
+}
+
+.qoCurrent > strong {
+  display: block;
+  margin-bottom: 9px;
+  color: #dfe7ee;
+  font-size: 0.84rem;
+}
+
+.qoCurrentGrid {
+  display: grid;
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.qoCurrentGrid > div {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #2d3844;
+  border-radius: 7px;
+  background: #151b22;
+}
+
+.qoCurrentGrid span {
+  display: block;
+  margin-bottom: 3px;
+  color: #7f93a7;
+  font-size: 0.67rem;
+  font-weight: 800;
+}
+
+.qoCurrentGrid strong {
+  display: block;
+  overflow: hidden;
+  color: #e6edf3;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qoActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #2d3742;
+}
+
+@media (max-width: 1100px) {
+  .qoGrid,
+  .qoCurrentGrid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .qoGrid,
+  .qoCurrentGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .qoActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

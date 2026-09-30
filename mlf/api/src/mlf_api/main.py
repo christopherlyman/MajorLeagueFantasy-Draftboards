@@ -1186,3 +1186,90 @@ def commissioner_trade_builder_submit(
             principal["email"]
         ),
     )
+# MLF_COMMISSIONER_QO_V1
+
+from mlf_api.models import (
+    CommissionerQOState,
+    CommissionerQOUpdateRequest,
+    CommissionerQOUpdateResponse,
+)
+from mlf_api.qo_store import (
+    QOConflict,
+    QORequestError,
+    get_commissioner_qo_state,
+    save_commissioner_qos,
+)
+
+
+@app.get(
+    "/gateway/commissioner/qualifying-offers",
+    response_model=CommissionerQOState,
+)
+def commissioner_qualifying_offers(
+    request: Request,
+) -> CommissionerQOState:
+    _require_commissioner_workspace(
+        request
+    )
+
+    try:
+        state = (
+            get_commissioner_qo_state()
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerQOState(
+        **state
+    )
+
+
+@app.post(
+    "/gateway/commissioner/qualifying-offers/{team_key}",
+    response_model=CommissionerQOUpdateResponse,
+)
+def commissioner_qualifying_offers_update(
+    team_key: str,
+    payload: CommissionerQOUpdateRequest,
+    request: Request,
+) -> CommissionerQOUpdateResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = save_commissioner_qos(
+            team_key=team_key,
+            player_keys=payload.player_keys,
+            created_by=(
+                "commissioner_api:user:"
+                + str(
+                    principal["user_id"]
+                )
+            ),
+        )
+    except QORequestError:
+        raise _bad_request(
+            "invalid_qualifying_offers"
+        ) from None
+    except QOConflict:
+        raise _conflict(
+            "qualifying_offers_locked"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerQOUpdateResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

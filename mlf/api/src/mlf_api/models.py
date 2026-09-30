@@ -151,3 +151,40 @@ class CommissionerTradeResponse(BaseModel):
     receipt_asset_count: int
     receipt_warning: str | None
     performed_by: str
+class CommissionerQOPlayer(BaseModel):
+    yahoo_player_key: str
+    name: str
+    rank_value: float | None
+    predraft_qo_team_key: str | None
+
+
+class CommissionerQOTeam(BaseModel):
+    team_key: str
+    team_name: str
+    predraft: list[str | None]
+    current: list[str | None]
+
+
+class CommissionerQOState(BaseModel):
+    draft_key: str
+    draft_status: str
+    selection_count: int
+    qo_rounds: int
+    baseline_synced: bool
+    can_edit: bool
+    lock_reason: str | None
+    predraft_count: int
+    current_count: int
+    teams: list[CommissionerQOTeam]
+    players: list[CommissionerQOPlayer]
+
+
+class CommissionerQOUpdateRequest(BaseModel):
+    player_keys: list[str]
+
+
+class CommissionerQOUpdateResponse(BaseModel):
+    updated_team_key: str
+    current_qo_count: int
+    performed_by: str
+    state: CommissionerQOState
