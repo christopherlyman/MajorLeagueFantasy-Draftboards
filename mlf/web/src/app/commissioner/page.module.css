@@ -797,3 +797,227 @@
     grid-template-columns: 1fr;
   }
 }
+/* Commissioner write identity + Yahoo refresh */
+
+.writeLockedBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 23px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #252d36;
+  color: #aebac7;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.writePanel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #303b47;
+  border-radius: 9px;
+  background: #10161d;
+}
+
+.writePanelHeader {
+  margin-bottom: 14px;
+}
+
+.writePanelHeader strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #f0f5fa;
+}
+
+.writePanelHeader p,
+.yahooAction p {
+  margin: 0;
+  color: #94a4b6;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.writeMuted {
+  color: #94a4b6;
+  font-size: 0.83rem;
+}
+
+.writeIdentityRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px;
+  border: 1px solid #2e3b47;
+  border-radius: 8px;
+  background: #151c24;
+}
+
+.writeIdentityRow > div {
+  display: grid;
+  gap: 3px;
+}
+
+.writeIdentityRow strong {
+  color: #eef4fa;
+  font-size: 0.9rem;
+}
+
+.writeAuthority {
+  color: #8ce1ad;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.writeLoginForm {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    minmax(0, 1fr)
+    auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.writeField {
+  display: grid;
+  gap: 5px;
+}
+
+.writeField label {
+  color: #aebac7;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.writeField input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid #3a4653;
+  border-radius: 7px;
+  background: #0c1218;
+  color: #f3f6f9;
+  font: inherit;
+}
+
+.writeField input:focus {
+  outline: 2px solid #6f98c2;
+  outline-offset: 1px;
+}
+
+.writePrimaryButton,
+.writeSecondaryButton {
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.writePrimaryButton {
+  border: 1px solid #527aa2;
+  background: #294866;
+  color: #f5f8fb;
+}
+
+.writeSecondaryButton {
+  border: 1px solid #44515f;
+  background: #1b242d;
+  color: #d9e3ed;
+}
+
+.writePrimaryButton:disabled,
+.writeSecondaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.writePrimaryButton:focus-visible,
+.writeSecondaryButton:focus-visible {
+  outline: 2px solid #8eb4da;
+  outline-offset: 2px;
+}
+
+.yahooAction {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #2d3742;
+}
+
+.yahooAction strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #eef4fa;
+}
+
+.writeMessage {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid #384654;
+  border-radius: 7px;
+  background: #151d25;
+  color: #c2cfdb;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.refreshReceipt {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.refreshReceipt > div {
+  padding: 9px 10px;
+  border: 1px solid #2e3844;
+  border-radius: 7px;
+  background: #151c24;
+}
+
+.refreshReceipt span {
+  display: block;
+  color: #8fa1b5;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.refreshReceipt strong {
+  display: block;
+  margin-top: 3px;
+  color: #eff4f9;
+  font-size: 0.84rem;
+}
+
+@media (max-width: 900px) {
+  .writeLoginForm {
+    grid-template-columns: 1fr;
+  }
+
+  .refreshReceipt {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .writeIdentityRow,
+  .yahooAction {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .refreshReceipt {
+    grid-template-columns: 1fr;
+  }
+}

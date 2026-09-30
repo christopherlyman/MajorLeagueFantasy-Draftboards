@@ -74,3 +74,24 @@ class CommissionerDraftOrderState(BaseModel):
     can_rebase: bool
     lock_reason: str | None
     slots: list[DraftOrderSlot]
+class CommissionerWriteLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class CommissionerWriteStatus(BaseModel):
+    write_enabled: bool
+    user_id: int | None
+    email: str | None
+    authority: str
+    must_change_password: bool
+
+
+class YahooPlayerUniverseRefreshResponse(BaseModel):
+    finished_at_utc: str
+    duration_sec: float
+    players_before: int
+    players_after: int
+    meta_updated_last_10m: int
+    stats_season: int
+    performed_by: str

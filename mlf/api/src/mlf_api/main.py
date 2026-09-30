@@ -766,3 +766,340 @@ def commissioner_manager_links(
         )
 
     return output
+# MLF_COMMISSIONER_WRITE_BOUNDARY_V1
+
+from mlf_api.auth import (
+    AUTH_COOKIE_MAX_AGE_SECONDS,
+    create_auth_session,
+    get_auth_cookie_name,
+    is_commissioner_writer,
+    is_login_rate_limited,
+    load_login_user,
+    record_login_attempt,
+    resolve_auth_session,
+    revoke_auth_session,
+    verify_password,
+)
+from mlf_api.models import (
+    CommissionerWriteLoginRequest,
+    CommissionerWriteStatus,
+    YahooPlayerUniverseRefreshResponse,
+)
+from mlf_api.yahoo_refresh import (
+    YahooRefreshBusy,
+    YahooRefreshFailure,
+    refresh_yahoo_player_universe,
+)
+
+
+def _require_commissioner_workspace(
+    request: Request,
+) -> dict[str, object]:
+    try:
+        workspace = _resolve_commissioner_request(
+            request
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if workspace is None:
+        raise _forbidden(
+            "commissioner_workspace_required"
+        )
+
+    return workspace
+
+
+def _resolve_commissioner_write_principal(
+    request: Request,
+) -> dict[str, object] | None:
+    raw_cookie = request.cookies.get(
+        get_auth_cookie_name()
+    )
+
+    if not raw_cookie:
+        return None
+
+    try:
+        return resolve_auth_session(
+            raw_cookie
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+
+def _commissioner_write_status(
+    principal: dict[str, object] | None,
+) -> CommissionerWriteStatus:
+    if principal is None:
+        return CommissionerWriteStatus(
+            write_enabled=False,
+            user_id=None,
+            email=None,
+            authority="none",
+            must_change_password=False,
+        )
+
+    write_enabled = (
+        is_commissioner_writer(principal)
+    )
+
+    if bool(principal.get("is_site_admin")):
+        authority = "site_admin"
+    elif (
+        str(
+            principal.get("league_role")
+            or ""
+        ).strip().lower()
+        == "commissioner"
+    ):
+        authority = "commissioner"
+    else:
+        authority = "none"
+
+    return CommissionerWriteStatus(
+        write_enabled=write_enabled,
+        user_id=int(principal["user_id"]),
+        email=str(principal["email"]),
+        authority=authority,
+        must_change_password=bool(
+            principal.get(
+                "must_change_password",
+                False,
+            )
+        ),
+    )
+
+
+def _require_commissioner_write_principal(
+    request: Request,
+) -> dict[str, object]:
+    principal = (
+        _resolve_commissioner_write_principal(
+            request
+        )
+    )
+
+    if principal is None:
+        raise _unauthenticated()
+
+    if bool(
+        principal.get("must_change_password")
+    ):
+        raise _forbidden(
+            "password_change_required"
+        )
+
+    if not is_commissioner_writer(principal):
+        raise _forbidden(
+            "commissioner_write_required"
+        )
+
+    return principal
+
+
+@app.get(
+    "/gateway/commissioner/write-status",
+    response_model=CommissionerWriteStatus,
+)
+def commissioner_write_status(
+    request: Request,
+) -> CommissionerWriteStatus:
+    _require_commissioner_workspace(request)
+
+    principal = (
+        _resolve_commissioner_write_principal(
+            request
+        )
+    )
+
+    return _commissioner_write_status(
+        principal
+    )
+
+
+@app.post(
+    "/gateway/commissioner/write-login",
+    response_model=CommissionerWriteStatus,
+)
+def commissioner_write_login(
+    payload: CommissionerWriteLoginRequest,
+    request: Request,
+    response: Response,
+) -> CommissionerWriteStatus:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(request)
+
+    email = str(
+        payload.email or ""
+    ).strip().lower()
+
+    password = str(
+        payload.password or ""
+    )
+
+    if not email or not password:
+        raise _bad_request(
+            "credentials_required"
+        )
+
+    try:
+        limited = is_login_rate_limited(
+            email_normalized=email,
+            max_failures=5,
+            window_minutes=10,
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if limited:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "login_rate_limited"
+            },
+        )
+
+    try:
+        principal = load_login_user(email)
+    except Exception:
+        raise _service_unavailable() from None
+
+    valid_password = (
+        principal is not None
+        and bool(principal.get("active"))
+        and verify_password(
+            password,
+            str(
+                principal.get("password_hash")
+                or ""
+            ),
+        )
+    )
+
+    if not valid_password:
+        record_login_attempt(
+            email_normalized=email,
+            success=False,
+        )
+        raise _unauthenticated()
+
+    record_login_attempt(
+        email_normalized=email,
+        success=True,
+    )
+
+    assert principal is not None
+
+    if bool(
+        principal.get("must_change_password")
+    ):
+        raise _forbidden(
+            "password_change_required"
+        )
+
+    if not is_commissioner_writer(principal):
+        raise _forbidden(
+            "commissioner_write_required"
+        )
+
+    try:
+        session_token = create_auth_session(
+            user_id=int(principal["user_id"])
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    response.set_cookie(
+        key=get_auth_cookie_name(),
+        value=session_token,
+        max_age=AUTH_COOKIE_MAX_AGE_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+    return _commissioner_write_status(
+        principal
+    )
+
+
+@app.post(
+    "/gateway/commissioner/write-logout",
+    response_model=CommissionerWriteStatus,
+)
+def commissioner_write_logout(
+    request: Request,
+    response: Response,
+) -> CommissionerWriteStatus:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(request)
+
+    cookie_name = get_auth_cookie_name()
+
+    raw_cookie = request.cookies.get(
+        cookie_name
+    )
+
+    if raw_cookie:
+        try:
+            revoke_auth_session(
+                raw_cookie
+            )
+        except Exception:
+            raise _service_unavailable() from None
+
+    response.delete_cookie(
+        key=cookie_name,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+    return _commissioner_write_status(
+        None
+    )
+
+
+@app.post(
+    "/gateway/commissioner/"
+    "yahoo-player-universe/refresh",
+    response_model=YahooPlayerUniverseRefreshResponse,
+)
+def commissioner_yahoo_player_universe_refresh(
+    request: Request,
+) -> YahooPlayerUniverseRefreshResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+
+    _require_commissioner_workspace(request)
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            refresh_yahoo_player_universe()
+        )
+    except YahooRefreshBusy:
+        raise _conflict(
+            "yahoo_refresh_in_progress"
+        ) from None
+    except YahooRefreshFailure:
+        raise _service_unavailable() from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return YahooPlayerUniverseRefreshResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

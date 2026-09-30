@@ -12,6 +12,10 @@ import {
   CopyManagerLinkButton,
 } from "../../components/CopyManagerLinkButton";
 
+import {
+  CommissionerYahooRefresh,
+} from "../../components/CommissionerYahooRefresh";
+
 import styles from "./page.module.css";
 
 
@@ -676,20 +680,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 2
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Refresh Yahoo Player Universe
-                </strong>
-
-                <span>
-                  Refresh the player pool used by
-                  Commissioner and draft workflows.
-                </span>
+                <CommissionerYahooRefresh />
               </div>
             </li>
 
