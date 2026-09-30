@@ -639,3 +639,161 @@
     height: 32px;
   }
 }
+/* Set Draft Order state panel */
+
+.operationStepExpanded {
+  padding-bottom: 24px;
+}
+
+.stepTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stepTitleRow > strong {
+  margin-bottom: 0;
+}
+
+.stepReady,
+.stepLocked {
+  display: inline-flex;
+  align-items: center;
+  min-height: 23px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.stepReady {
+  background: #143525;
+  color: #8ce1ad;
+}
+
+.stepLocked {
+  background: #3a2a13;
+  color: #f3c57a;
+}
+
+.stepPanel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #303b47;
+  border-radius: 9px;
+  background: #10161d;
+}
+
+.stepMeta {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 13px;
+}
+
+.stepMeta > span {
+  padding: 9px 10px;
+  border: 1px solid #2e3844;
+  border-radius: 7px;
+  background: #151c24;
+  color: #8fa1b5;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stepMeta strong {
+  display: block;
+  margin-top: 3px;
+  color: #eff4f9;
+  font-size: 0.84rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.lockNotice,
+.stepUnavailable {
+  margin-bottom: 13px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.lockNotice {
+  border: 1px solid #634b29;
+  background: #2c2213;
+  color: #f0ce91;
+}
+
+.stepUnavailable {
+  margin-top: 12px;
+  border: 1px solid #3b4652;
+  background: #161d25;
+  color: #aebaca;
+}
+
+.orderGrid {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.orderSlot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #2d3742;
+  border-radius: 7px;
+  background: #151b22;
+}
+
+.orderSlotNumber {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 9px;
+  border-radius: 50%;
+  background: #27323e;
+  color: #bcd0e4;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.orderSlotName {
+  min-width: 0;
+  overflow: hidden;
+  color: #e7edf4;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+  .orderGrid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .stepMeta {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .orderGrid,
+  .stepMeta {
+    grid-template-columns: 1fr;
+  }
+}

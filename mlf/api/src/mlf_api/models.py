@@ -58,3 +58,19 @@ class ManagerGatewayLink(BaseModel):
     claim_count: int
     last_claimed_at_utc: str | None
     manager_url: str
+class DraftOrderSlot(BaseModel):
+    slot_number: int
+    team_key: str
+    team_name: str
+
+
+class CommissionerDraftOrderState(BaseModel):
+    draft_key: str
+    status: str
+    manager_count: int
+    draft_order_mode: str
+    first_standard_round: int
+    selection_count: int
+    can_rebase: bool
+    lock_reason: str | None
+    slots: list[DraftOrderSlot]

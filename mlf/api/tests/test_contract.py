@@ -99,7 +99,7 @@ class GatewayContractTests(unittest.TestCase):
             {
                 "/health": {"GET"},
                 "/auth/me": {"GET"},
-                "/commissioner/auth/me": {"GET"},                 "/commissioner/manager-links": {"GET"},                 "/gateway/commissioner/claim": {"GET"},                 "/gateway/commissioner/clear": {"GET"},
+                "/commissioner/auth/me": {"GET"},                 "/commissioner/draft-order": {"GET"}, "/commissioner/manager-links": {"GET"},                 "/gateway/commissioner/claim": {"GET"},                 "/gateway/commissioner/clear": {"GET"},
                 "/gateway/claim": {"GET"},
                 "/gateway/clear": {"GET"},
                 "/drafts/{draft_key}/picks": {"POST"},

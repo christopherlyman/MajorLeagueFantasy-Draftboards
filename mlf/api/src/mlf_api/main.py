@@ -509,8 +509,12 @@ from mlf_api.commissioner_auth import (
     pack_commissioner_cookie,
     resolve_commissioner_cookie,
 )
+from mlf_api.commissioner_store import (
+    get_commissioner_draft_order_state,
+)
 from mlf_api.gateway_store import get_team_gateway_links
 from mlf_api.models import (
+    CommissionerDraftOrderState,
     CommissionerPrincipal,
     ManagerGatewayLink,
 )
@@ -627,6 +631,38 @@ def commissioner_auth_me(
 
     return CommissionerPrincipal(
         **principal
+    )
+
+
+@app.get(
+    "/commissioner/draft-order",
+    response_model=CommissionerDraftOrderState,
+)
+def commissioner_draft_order(
+    request: Request,
+) -> CommissionerDraftOrderState:
+    try:
+        principal = _resolve_commissioner_request(
+            request
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "commissioner_required"
+            },
+        )
+
+    try:
+        state = get_commissioner_draft_order_state()
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerDraftOrderState(
+        **state
     )
 
 

@@ -40,6 +40,23 @@ type ManagerGatewayLink = {
 };
 
 
+type DraftOrderState = {
+  draft_key: string;
+  status: string;
+  manager_count: number;
+  draft_order_mode: string;
+  first_standard_round: number;
+  selection_count: number;
+  can_rebase: boolean;
+  lock_reason: string | null;
+  slots: Array<{
+    slot_number: number;
+    team_key: string;
+    team_name: string;
+  }>;
+};
+
+
 type ApiResult<T> = {
   status: number;
   body: T | null;
@@ -201,6 +218,19 @@ export default async function CommissionerPage() {
   }
 
   const links = linksResult.body;
+
+  const draftOrderResult =
+    await apiGet<DraftOrderState>(
+      "/commissioner/draft-order",
+      cookieHeader,
+    );
+
+  const draftOrder = (
+    draftOrderResult.status === 200
+    && draftOrderResult.body
+  )
+    ? draftOrderResult.body
+    : null;
 
   const activeLinks = links.filter(
     (row) => row.is_active,
@@ -538,20 +568,111 @@ export default async function CommissionerPage() {
           </div>
 
           <ol className={styles.operationSteps}>
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 1
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Set Draft Order
-                </strong>
+                <div className={styles.stepTitleRow}>
+                  <strong>
+                    Set Draft Order
+                  </strong>
+
+                  {draftOrder && (
+                    <span
+                      className={
+                        draftOrder.can_rebase
+                          ? styles.stepReady
+                          : styles.stepLocked
+                      }
+                    >
+                      {draftOrder.can_rebase
+                        ? "Ready"
+                        : "Locked"}
+                    </span>
+                  )}
+                </div>
 
                 <span>
                   Establish and verify the saved
                   draft slot order.
                 </span>
+
+                {draftOrder ? (
+                  <div className={styles.stepPanel}>
+                    <div className={styles.stepMeta}>
+                      <span>
+                        Draft
+                        <strong>
+                          {draftOrder.draft_key}
+                        </strong>
+                      </span>
+
+                      <span>
+                        Status
+                        <strong>
+                          {draftOrder.status}
+                        </strong>
+                      </span>
+
+                      <span>
+                        Order
+                        <strong>
+                          {draftOrder.draft_order_mode}
+                        </strong>
+                      </span>
+
+                      <span>
+                        Selections
+                        <strong>
+                          {draftOrder.selection_count}
+                        </strong>
+                      </span>
+                    </div>
+
+                    {!draftOrder.can_rebase && (
+                      <div className={styles.lockNotice}>
+                        {draftOrder.lock_reason
+                          ?? "Draft order is locked."}
+                      </div>
+                    )}
+
+                    <ol className={styles.orderGrid}>
+                      {draftOrder.slots.map(
+                        (slot) => (
+                          <li
+                            key={slot.team_key}
+                            className={styles.orderSlot}
+                          >
+                            <span
+                              className={
+                                styles.orderSlotNumber
+                              }
+                            >
+                              {slot.slot_number}
+                            </span>
+
+                            <span
+                              className={
+                                styles.orderSlotName
+                              }
+                            >
+                              {slot.team_name}
+                            </span>
+                          </li>
+                        ),
+                      )}
+                    </ol>
+                  </div>
+                ) : (
+                  <div className={styles.stepUnavailable}>
+                    Draft-order state is temporarily
+                    unavailable.
+                  </div>
+                )}
               </div>
             </li>
 
