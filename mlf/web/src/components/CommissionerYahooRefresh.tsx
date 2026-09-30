@@ -210,6 +210,12 @@ export function CommissionerYahooRefresh() {
       setMessage(
         "Commissioner writes enabled.",
       );
+
+      window.dispatchEvent(
+        new Event(
+          "mlf-commissioner-write-status-changed",
+        ),
+      );
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -252,6 +258,12 @@ export function CommissionerYahooRefresh() {
       );
       setMessage(
         "Commissioner writes disabled.",
+      );
+
+      window.dispatchEvent(
+        new Event(
+          "mlf-commissioner-write-status-changed",
+        ),
       );
     } catch (error) {
       setMessage(

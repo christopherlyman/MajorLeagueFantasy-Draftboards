@@ -1103,3 +1103,86 @@ def commissioner_yahoo_player_universe_refresh(
             principal["email"]
         ),
     )
+# MLF_COMMISSIONER_TRADE_BUILDER_V1
+
+from mlf_api.models import (
+    CommissionerTradeBuilderState,
+    CommissionerTradeRequest,
+    CommissionerTradeResponse,
+)
+from mlf_api.trade_store import (
+    TradeConflict,
+    TradeRequestError,
+    get_trade_builder_state,
+    submit_commissioner_trade,
+)
+
+
+@app.get(
+    "/gateway/commissioner/trade-builder",
+    response_model=CommissionerTradeBuilderState,
+)
+def commissioner_trade_builder_state(
+    request: Request,
+) -> CommissionerTradeBuilderState:
+    _require_commissioner_workspace(
+        request
+    )
+
+    try:
+        state = get_trade_builder_state()
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerTradeBuilderState(
+        **state
+    )
+
+
+@app.post(
+    "/gateway/commissioner/trade-builder/submit",
+    response_model=CommissionerTradeResponse,
+)
+def commissioner_trade_builder_submit(
+    payload: CommissionerTradeRequest,
+    request: Request,
+) -> CommissionerTradeResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = submit_commissioner_trade(
+            payload=payload.model_dump(),
+            created_by=(
+                "api:user:"
+                + str(
+                    principal["user_id"]
+                )
+            ),
+        )
+    except TradeRequestError:
+        raise _bad_request(
+            "invalid_trade_request"
+        ) from None
+    except TradeConflict:
+        raise _conflict(
+            "trade_state_conflict"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerTradeResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

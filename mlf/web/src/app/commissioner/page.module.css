@@ -1021,3 +1021,224 @@
     grid-template-columns: 1fr;
   }
 }
+/* Commissioner Trade Builder */
+
+.tradePanel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #303b47;
+  border-radius: 9px;
+  background: #10161d;
+}
+
+.tradeContext,
+.tradeReceipt {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tradeContext {
+  margin-bottom: 12px;
+}
+
+.tradeContext > span,
+.tradeReceipt > span {
+  padding: 9px 10px;
+  border: 1px solid #2e3844;
+  border-radius: 7px;
+  background: #151c24;
+  color: #8fa1b5;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tradeContext strong,
+.tradeReceipt strong {
+  display: block;
+  margin-top: 3px;
+  color: #eff4f9;
+  font-size: 0.84rem;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.tradeNotice,
+.tradeWriteNotice {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+.tradeNotice {
+  border: 1px solid #344353;
+  background: #151d25;
+  color: #afbdca;
+}
+
+.tradeWriteNotice {
+  border: 1px solid #624b29;
+  background: #2c2213;
+  color: #efca89;
+}
+
+.tradeTeams {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tradeSide {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #2d3844;
+  border-radius: 8px;
+  background: #151b22;
+}
+
+.tradeSide h4 {
+  margin: 0 0 12px;
+  color: #f1f5f8;
+  font-size: 0.94rem;
+}
+
+.tradeField {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tradeField > span {
+  color: #aab7c4;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.tradeField select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid #3a4653;
+  border-radius: 7px;
+  background: #0d1319;
+  color: #edf3f8;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.tradeField select:focus {
+  outline: 2px solid #6f98c2;
+  outline-offset: 1px;
+}
+
+.tradeAssetAdd {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 11px;
+}
+
+.tradeAssets {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.tradeAsset {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #303b47;
+  border-radius: 7px;
+  background: #10161c;
+}
+
+.tradeAsset > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.tradeAsset span {
+  color: #7f93a7;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.tradeAsset strong {
+  overflow: hidden;
+  color: #e7edf3;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tradeAsset button {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #424e5a;
+  border-radius: 6px;
+  background: #1c252e;
+  color: #bdc9d5;
+  cursor: pointer;
+}
+
+.tradeFinalize {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #2d3742;
+}
+
+.tradeFinalize label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c0ccd8;
+  font-size: 0.82rem;
+}
+
+.tradeReceipt {
+  margin-top: 12px;
+}
+
+@media (max-width: 1000px) {
+  .tradeTeams {
+    grid-template-columns: 1fr;
+  }
+
+  .tradeContext,
+  .tradeReceipt {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .tradeAssetAdd,
+  .tradeContext,
+  .tradeReceipt {
+    grid-template-columns: 1fr;
+  }
+
+  .tradeFinalize {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

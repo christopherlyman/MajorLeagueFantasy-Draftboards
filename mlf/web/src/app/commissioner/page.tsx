@@ -16,6 +16,10 @@ import {
   CommissionerYahooRefresh,
 } from "../../components/CommissionerYahooRefresh";
 
+import {
+  CommissionerTradeBuilder,
+} from "../../components/CommissionerTradeBuilder";
+
 import styles from "./page.module.css";
 
 
@@ -692,20 +696,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 3
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Trade Builder
-                </strong>
-
-                <span>
-                  Process Commissioner-managed
-                  player and draft-asset trades.
-                </span>
+                <CommissionerTradeBuilder />
               </div>
             </li>
 

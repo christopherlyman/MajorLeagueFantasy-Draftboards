@@ -95,3 +95,59 @@ class YahooPlayerUniverseRefreshResponse(BaseModel):
     meta_updated_last_10m: int
     stats_season: int
     performed_by: str
+class CommissionerTradeTeam(BaseModel):
+    team_key: str
+    team_name: str
+
+
+class CommissionerTradePlayer(BaseModel):
+    yahoo_player_key: str
+    name: str
+    rank_value: float | None
+    contract_team_key: str | None
+    contract_years: int
+
+
+class CommissionerTradePick(BaseModel):
+    pick_id: str
+    round_number: int
+    slot_number: int
+    current_owner_team_key: str
+    owner_team_name: str
+    traded_flag: bool
+
+
+class CommissionerTradeBuilderState(BaseModel):
+    draft_key: str
+    draft_status: str
+    selection_count: int
+    teams: list[CommissionerTradeTeam]
+    players: list[CommissionerTradePlayer]
+    picks: list[CommissionerTradePick]
+
+
+class CommissionerTradeAssetRequest(BaseModel):
+    asset_type: str
+    asset_id: str
+
+
+class CommissionerTradeRequest(BaseModel):
+    team_a_key: str
+    team_b_key: str
+    team_a_gets: list[
+        CommissionerTradeAssetRequest
+    ]
+    team_b_gets: list[
+        CommissionerTradeAssetRequest
+    ]
+
+
+class CommissionerTradeResponse(BaseModel):
+    player_updates: int
+    pick_updates: int
+    keeper_assignments: int
+    receipt_written: bool
+    receipt_trade_id: str | None
+    receipt_asset_count: int
+    receipt_warning: str | None
+    performed_by: str

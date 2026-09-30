@@ -104,6 +104,8 @@ class GatewayContractTests(unittest.TestCase):
                 "/gateway/commissioner/write-login": {"POST"},
                 "/gateway/commissioner/write-logout": {"POST"},
                 "/gateway/commissioner/yahoo-player-universe/refresh": {"POST"},
+                "/gateway/commissioner/trade-builder": {"GET"},
+                "/gateway/commissioner/trade-builder/submit": {"POST"},
                 "/gateway/claim": {"GET"},
                 "/gateway/clear": {"GET"},
                 "/drafts/{draft_key}/picks": {"POST"},
