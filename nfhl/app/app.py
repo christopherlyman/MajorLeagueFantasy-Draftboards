@@ -50,6 +50,7 @@ from draftboard.data.db import (
 )
 from draftboard.state.runtime import (
     get_league_key,
+    get_runtime_context,
     get_season_year,
 )
 
@@ -57,10 +58,6 @@ from draftboard.state.runtime import (
 from draftboard.ui.components.draft_lottery import (
     render_nfhl_lottery_board,
 )
-CONFIG_PATH = Path(
-    f"/league_runtime/config/nfhl_{get_season_year()}.json"
-)
-
 BLUE = "#002868"
 LIGHT_BLUE = "#4B92DB"
 NAVY = "#001B3F"
@@ -1137,14 +1134,6 @@ def render_gateway_audit() -> None:
 
 
 # NFHL_TEAM_GATEWAY_UI_END
-
-
-def load_config() -> dict:
-    with CONFIG_PATH.open(
-        "r",
-        encoding="utf-8",
-    ) as handle:
-        return json.load(handle)
 
 
 @st.cache_data(ttl=60)
@@ -4295,12 +4284,11 @@ def main() -> None:
 
     gateway_context = render_team_gateway()
 
-    config = load_config()
+    runtime_context = get_runtime_context()
 
-    league = config["league"]
-    draft = config["draft"]
-
-    season_year = get_season_year()
+    season_year = int(
+        runtime_context["season_year"]
+    )
     prior_year = season_year - 1
 
     summary = load_summary()
@@ -4308,7 +4296,7 @@ def main() -> None:
     players = load_players()
 
     target_teams = int(
-        league["manager_count_target"]
+        runtime_context["manager_count"]
     )
 
     current_teams = int(
@@ -4387,12 +4375,17 @@ def main() -> None:
         render_draft_board(
             current_teams,
             target_teams,
-            str(
-                draft.get(
-                    "order_mode_status",
-                    "unverified",
-                )
-            ).lower(),
+            (
+                "verified"
+                if str(
+                    runtime_context.get(
+                        "draft_order_mode"
+                    )
+                    or ""
+                ).lower()
+                in {"straight", "snake"}
+                else "unverified"
+            ),
             gateway_context=gateway_context,
             teams=teams,
             players=players,
