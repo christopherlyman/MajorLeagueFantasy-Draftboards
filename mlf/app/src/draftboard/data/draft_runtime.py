@@ -1273,3 +1273,569 @@ def replace_team_predraft_qos_atomic(
         conn.commit()
 
     return current_qo_count
+# MLF_PROSPECT_TAG_MIRROR_V1
+
+def _prospect_tag_mirror_diff(
+    cur,
+    *,
+    league_key: str,
+    season_year: int,
+) -> tuple[int, int]:
+    cur.execute(
+        """
+        WITH public_rows AS (
+            SELECT
+                team_key,
+                yahoo_player_key
+            FROM public.prospect_tag
+            WHERE league_key = %s
+              AND season_year = %s
+        ),
+        mlf_rows AS (
+            SELECT
+                team_key,
+                yahoo_player_key
+            FROM mlf.prospect_tag
+            WHERE league_key = %s
+              AND season_year = %s
+        )
+        SELECT
+            (
+                SELECT count(*)
+                FROM (
+                    SELECT *
+                    FROM public_rows
+
+                    EXCEPT
+
+                    SELECT *
+                    FROM mlf_rows
+                ) AS public_only
+            ),
+            (
+                SELECT count(*)
+                FROM (
+                    SELECT *
+                    FROM mlf_rows
+
+                    EXCEPT
+
+                    SELECT *
+                    FROM public_rows
+                ) AS mlf_only
+            )
+        """,
+        (
+            league_key,
+            season_year,
+            league_key,
+            season_year,
+        ),
+    )
+
+    row = cur.fetchone()
+
+    if row is None:
+        raise RuntimeError(
+            "Prospect Tag mirror comparison "
+            "returned no row."
+        )
+
+    return (
+        int(row[0]),
+        int(row[1]),
+    )
+
+
+def replace_prospect_tag_mirrored_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    team_key: str,
+    new_yahoo_player_key: str,
+    expected_old_yahoo_player_key: str | None,
+    note: str | None = None,
+) -> int:
+    """
+    Replace/add one team's PT while keeping the legacy
+    public.prospect_tag compatibility mirror synchronized
+    in the same PostgreSQL transaction.
+    """
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+
+    team = _required_text(
+        team_key,
+        field="team_key",
+    )
+
+    new_player = _required_text(
+        new_yahoo_player_key,
+        field="new_yahoo_player_key",
+    )
+
+    old_text = str(
+        expected_old_yahoo_player_key or ""
+    ).strip()
+
+    expected_old = (
+        old_text or None
+    )
+
+    actor_note = (
+        str(note).strip()
+        if note is not None
+        else None
+    )
+
+    with psycopg.connect(
+        _required_text(
+            dsn,
+            field="dsn",
+        )
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(%s, 0)
+                )
+                """,
+                (draft,),
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    league_key,
+                    season_year
+                FROM mlf.draft
+                WHERE draft_key = %s
+                FOR UPDATE
+                """,
+                (draft,),
+            )
+
+            scope = cur.fetchone()
+
+            if scope is None:
+                raise RuntimeError(
+                    f"Draft {draft!r} was not found."
+                )
+
+            league_key = str(
+                scope[0]
+            )
+
+            season_year = int(
+                scope[1]
+            )
+
+            cur.execute(
+                """
+                SELECT yahoo_player_key
+                FROM mlf.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                ORDER BY yahoo_player_key
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            team_rows = [
+                str(row[0])
+                for row in cur.fetchall()
+            ]
+
+            if len(team_rows) > 1:
+                raise RuntimeError(
+                    "Team has multiple Prospect Tags; "
+                    "manual reconciliation is required."
+                )
+
+            actual_old = (
+                team_rows[0]
+                if team_rows
+                else None
+            )
+
+            if actual_old != expected_old:
+                raise RuntimeError(
+                    "Prospect Tag state changed "
+                    "before the update."
+                )
+
+            public_only, mlf_only = (
+                _prospect_tag_mirror_diff(
+                    cur,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
+            )
+
+            if (
+                public_only != 0
+                or mlf_only != 0
+            ):
+                raise RuntimeError(
+                    "Prospect Tag compatibility "
+                    "mirror is out of sync."
+                )
+
+            cur.execute(
+                """
+                SELECT team_key
+                FROM mlf.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    new_player,
+                ),
+            )
+
+            existing = cur.fetchone()
+
+            if (
+                existing is not None
+                and str(existing[0]) != team
+            ):
+                raise ValueError(
+                    "Player already has a Prospect "
+                    "Tag for another team."
+                )
+
+            cur.execute(
+                """
+                SELECT mlf.replace_prospect_tag_atomic(
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    actual_old,
+                    team,
+                    new_player,
+                    actor_note,
+                ),
+            )
+
+            result = cur.fetchone()
+
+            if result is None:
+                raise RuntimeError(
+                    "MLF Prospect Tag replacement "
+                    "returned no row."
+                )
+
+            keeper_assignments = int(
+                result[0]
+            )
+
+            if (
+                actual_old is not None
+                and actual_old != new_player
+            ):
+                cur.execute(
+                    """
+                    DELETE FROM public.prospect_tag
+                    WHERE league_key = %s
+                      AND season_year = %s
+                      AND yahoo_player_key = %s
+                    """,
+                    (
+                        league_key,
+                        season_year,
+                        actual_old,
+                    ),
+                )
+
+            # Enforce the documented one-PT-per-team
+            # invariant in the compatibility surface too.
+            cur.execute(
+                """
+                DELETE FROM public.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                  AND yahoo_player_key <> %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                    new_player,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO public.prospect_tag AS pt (
+                    league_key,
+                    season_year,
+                    team_key,
+                    yahoo_player_key,
+                    note,
+                    updated_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    now()
+                )
+                ON CONFLICT (
+                    league_key,
+                    season_year,
+                    yahoo_player_key
+                )
+                DO UPDATE
+                   SET team_key = EXCLUDED.team_key,
+                       note = COALESCE(
+                           EXCLUDED.note,
+                           pt.note
+                       ),
+                       updated_at = now()
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                    new_player,
+                    actor_note,
+                ),
+            )
+
+            public_only, mlf_only = (
+                _prospect_tag_mirror_diff(
+                    cur,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
+            )
+
+            if (
+                public_only != 0
+                or mlf_only != 0
+            ):
+                raise RuntimeError(
+                    "Prospect Tag mirror verification "
+                    "failed."
+                )
+
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM mlf.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                ),
+            )
+
+            if int(cur.fetchone()[0]) != 1:
+                raise RuntimeError(
+                    "One-PT-per-team invariant failed."
+                )
+
+        conn.commit()
+
+    return keeper_assignments
+
+
+def delete_prospect_tag_mirrored_atomic(
+    *,
+    dsn: str,
+    draft_key: str,
+    team_key: str,
+    expected_yahoo_player_key: str,
+) -> int:
+    """
+    Remove one team's PT while keeping both PT stores
+    synchronized in the same transaction.
+    """
+    draft = _required_text(
+        draft_key,
+        field="draft_key",
+    )
+
+    team = _required_text(
+        team_key,
+        field="team_key",
+    )
+
+    player = _required_text(
+        expected_yahoo_player_key,
+        field="expected_yahoo_player_key",
+    )
+
+    with psycopg.connect(
+        _required_text(
+            dsn,
+            field="dsn",
+        )
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended(%s, 0)
+                )
+                """,
+                (draft,),
+            )
+
+            cur.execute(
+                """
+                SELECT
+                    league_key,
+                    season_year
+                FROM mlf.draft
+                WHERE draft_key = %s
+                FOR UPDATE
+                """,
+                (draft,),
+            )
+
+            scope = cur.fetchone()
+
+            if scope is None:
+                raise RuntimeError(
+                    f"Draft {draft!r} was not found."
+                )
+
+            league_key = str(
+                scope[0]
+            )
+
+            season_year = int(
+                scope[1]
+            )
+
+            cur.execute(
+                """
+                SELECT team_key
+                FROM mlf.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND yahoo_player_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    player,
+                ),
+            )
+
+            current = cur.fetchone()
+
+            if current is None:
+                raise RuntimeError(
+                    "Prospect Tag no longer exists."
+                )
+
+            if str(current[0]) != team:
+                raise RuntimeError(
+                    "Prospect Tag ownership changed "
+                    "before deletion."
+                )
+
+            public_only, mlf_only = (
+                _prospect_tag_mirror_diff(
+                    cur,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
+            )
+
+            if (
+                public_only != 0
+                or mlf_only != 0
+            ):
+                raise RuntimeError(
+                    "Prospect Tag compatibility "
+                    "mirror is out of sync."
+                )
+
+            cur.execute(
+                """
+                SELECT mlf.delete_prospect_tag_atomic(
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    draft,
+                    player,
+                ),
+            )
+
+            result = cur.fetchone()
+
+            if result is None:
+                raise RuntimeError(
+                    "MLF Prospect Tag deletion "
+                    "returned no row."
+                )
+
+            keeper_assignments = int(
+                result[0]
+            )
+
+            cur.execute(
+                """
+                DELETE FROM public.prospect_tag
+                WHERE league_key = %s
+                  AND season_year = %s
+                  AND team_key = %s
+                  AND yahoo_player_key = %s
+                """,
+                (
+                    league_key,
+                    season_year,
+                    team,
+                    player,
+                ),
+            )
+
+            public_only, mlf_only = (
+                _prospect_tag_mirror_diff(
+                    cur,
+                    league_key=league_key,
+                    season_year=season_year,
+                )
+            )
+
+            if (
+                public_only != 0
+                or mlf_only != 0
+            ):
+                raise RuntimeError(
+                    "Prospect Tag mirror verification "
+                    "failed."
+                )
+
+        conn.commit()
+
+    return keeper_assignments

@@ -1366,3 +1366,122 @@
     flex-direction: column;
   }
 }
+/* Commissioner Prospect Tags */
+
+.ptPanel {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #303b47;
+  border-radius: 9px;
+  background: #10161d;
+}
+
+.ptField {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.ptField > span,
+.ptCurrent > span {
+  color: #aab7c4;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.ptField select,
+.ptField input {
+  width: 100%;
+  min-width: 0;
+  height: 39px;
+  padding: 0 9px;
+  border: 1px solid #3a4653;
+  border-radius: 7px;
+  background: #0d1319;
+  color: #edf3f8;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.ptCurrent {
+  display: grid;
+  gap: 4px;
+  margin: 13px 0;
+  padding: 11px 12px;
+  border: 1px solid #34404c;
+  border-radius: 7px;
+  background: #151c24;
+}
+
+.ptCurrent strong {
+  color: #f0f4f8;
+  font-size: 0.88rem;
+}
+
+.ptSelector {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 0.8fr)
+    minmax(0, 1.4fr);
+  gap: 10px;
+}
+
+.ptPreview {
+  display: grid;
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.ptPreview > span {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #2e3844;
+  border-radius: 7px;
+  background: #151b22;
+  color: #8295a8;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.ptPreview strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: #e8eef4;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ptActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #2d3742;
+}
+
+@media (max-width: 900px) {
+  .ptSelector {
+    grid-template-columns: 1fr;
+  }
+
+  .ptPreview {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .ptPreview {
+    grid-template-columns: 1fr;
+  }
+
+  .ptActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

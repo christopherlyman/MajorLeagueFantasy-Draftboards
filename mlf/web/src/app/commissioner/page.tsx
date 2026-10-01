@@ -24,6 +24,10 @@ import {
   CommissionerQualifyingOffers,
 } from "../../components/CommissionerQualifyingOffers";
 
+import {
+  CommissionerProspectTags,
+} from "../../components/CommissionerProspectTags";
+
 import styles from "./page.module.css";
 
 
@@ -724,20 +728,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 5
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Prospect Tags
-                </strong>
-
-                <span>
-                  Review and administer prospect
-                  designations.
-                </span>
+                <CommissionerProspectTags />
               </div>
             </li>
 

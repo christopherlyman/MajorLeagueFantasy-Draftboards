@@ -1273,3 +1273,139 @@ def commissioner_qualifying_offers_update(
             principal["email"]
         ),
     )
+# MLF_COMMISSIONER_PROSPECT_TAG_V1
+
+from mlf_api.models import (
+    CommissionerProspectMutationResponse,
+    CommissionerProspectState,
+    CommissionerProspectUpdateRequest,
+)
+from mlf_api.prospect_store import (
+    ProspectConflict,
+    ProspectRequestError,
+    get_commissioner_prospect_state,
+    remove_commissioner_prospect_tag,
+    save_commissioner_prospect_tag,
+)
+
+
+@app.get(
+    "/gateway/commissioner/prospect-tags",
+    response_model=CommissionerProspectState,
+)
+def commissioner_prospect_tags(
+    request: Request,
+) -> CommissionerProspectState:
+    _require_commissioner_workspace(
+        request
+    )
+
+    try:
+        state = (
+            get_commissioner_prospect_state()
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerProspectState(
+        **state
+    )
+
+
+@app.post(
+    "/gateway/commissioner/prospect-tags/{team_key}",
+    response_model=CommissionerProspectMutationResponse,
+)
+def commissioner_prospect_tags_update(
+    team_key: str,
+    payload: CommissionerProspectUpdateRequest,
+    request: Request,
+) -> CommissionerProspectMutationResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            save_commissioner_prospect_tag(
+                team_key=team_key,
+                yahoo_player_key=
+                    payload.yahoo_player_key,
+                created_by=(
+                    "commissioner_api:user:"
+                    + str(
+                        principal["user_id"]
+                    )
+                ),
+            )
+        )
+    except ProspectRequestError:
+        raise _bad_request(
+            "invalid_prospect_tag"
+        ) from None
+    except ProspectConflict:
+        raise _conflict(
+            "prospect_tag_state_conflict"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerProspectMutationResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )
+
+
+@app.delete(
+    "/gateway/commissioner/prospect-tags/{team_key}",
+    response_model=CommissionerProspectMutationResponse,
+)
+def commissioner_prospect_tags_delete(
+    team_key: str,
+    request: Request,
+) -> CommissionerProspectMutationResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            remove_commissioner_prospect_tag(
+                team_key=team_key,
+            )
+        )
+    except ProspectRequestError:
+        raise _bad_request(
+            "invalid_prospect_tag"
+        ) from None
+    except ProspectConflict:
+        raise _conflict(
+            "prospect_tag_state_conflict"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerProspectMutationResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

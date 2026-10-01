@@ -188,3 +188,51 @@ class CommissionerQOUpdateResponse(BaseModel):
     current_qo_count: int
     performed_by: str
     state: CommissionerQOState
+class CommissionerProspectPlayer(BaseModel):
+    yahoo_player_key: str
+    name: str
+    mlb_team: str
+    positions: list[str]
+    rank_value: float | None
+    h_ab: str | None
+    ip: float | None
+    percent_owned: float | None
+    is_qo_eligible: bool
+    eligible_for_pt: bool
+    ineligibility_reason: str | None
+    prospect_team_key: str | None
+    prospect_note: str | None
+
+
+class CommissionerProspectTeam(BaseModel):
+    team_key: str
+    team_name: str
+    prospect_player_keys: list[str]
+
+
+class CommissionerProspectState(BaseModel):
+    draft_key: str
+    draft_status: str
+    selection_count: int
+    mirror_synced: bool
+    team_multiplicity_valid: bool
+    can_edit: bool
+    lock_reason: str | None
+    prospect_count: int
+    keeper_pt_count: int
+    eligible_count: int
+    teams: list[CommissionerProspectTeam]
+    players: list[CommissionerProspectPlayer]
+
+
+class CommissionerProspectUpdateRequest(BaseModel):
+    yahoo_player_key: str
+
+
+class CommissionerProspectMutationResponse(BaseModel):
+    action: str
+    team_key: str
+    yahoo_player_key: str
+    keeper_assignments: int
+    performed_by: str
+    state: CommissionerProspectState

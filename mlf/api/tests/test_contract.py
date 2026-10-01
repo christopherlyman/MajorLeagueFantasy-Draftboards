@@ -89,10 +89,12 @@ class GatewayContractTests(unittest.TestCase):
             if isinstance(route, APIRoute)
         ]
 
-        route_methods = {
-            route.path: route.methods
-            for route in routes
-        }
+        route_methods: dict[str, set[str]] = {}
+        for route in routes:
+            route_methods.setdefault(
+                route.path,
+                set(),
+            ).update(route.methods)
 
         self.assertEqual(
             route_methods,
@@ -108,6 +110,8 @@ class GatewayContractTests(unittest.TestCase):
                 "/gateway/commissioner/trade-builder/submit": {"POST"},
                 "/gateway/commissioner/qualifying-offers": {"GET"},
                 "/gateway/commissioner/qualifying-offers/{team_key}": {"POST"},
+                "/gateway/commissioner/prospect-tags": {"GET"},
+                "/gateway/commissioner/prospect-tags/{team_key}": {"POST", "DELETE"},
                 "/gateway/claim": {"GET"},
                 "/gateway/clear": {"GET"},
                 "/drafts/{draft_key}/picks": {"POST"},
