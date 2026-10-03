@@ -1263,6 +1263,427 @@ def fetch_database_rows(
     ]
 
 
+def verify_persistent_schema(
+    cursor: object,
+) -> None:
+    cursor.execute(
+        """
+        SELECT
+            to_regclass(
+                'mlf.contract_history_cell'
+            ) IS NOT NULL,
+            to_regclass(
+                'mlf.contract_history_source'
+            ) IS NOT NULL
+        """
+    )
+
+    (
+        history_exists,
+        source_exists,
+    ) = cursor.fetchone()
+
+    if not history_exists:
+        raise RuntimeError(
+            "Migration 011 is not deployed: "
+            "mlf.contract_history_cell is absent."
+        )
+
+    if not source_exists:
+        raise RuntimeError(
+            "Migration 012 is not deployed: "
+            "mlf.contract_history_source is absent."
+        )
+
+    cursor.execute(
+        """
+        SELECT migration_version
+        FROM mlf.schema_migration
+        WHERE migration_version IN (
+            '011',
+            '012'
+        )
+        ORDER BY migration_version
+        """
+    )
+
+    versions = [
+        str(row[0])
+        for row in cursor.fetchall()
+    ]
+
+    if versions != ["011", "012"]:
+        raise RuntimeError(
+            "Persistent import requires exactly "
+            "migrations 011 and 012."
+        )
+
+
+def verify_history_rows(
+    cursor: object,
+    source_id: str,
+    stats: dict[str, object],
+) -> str:
+    cursor.execute(
+        """
+        SELECT count(*)
+        FROM mlf.contract_history_cell
+        WHERE source_id = %s
+        """,
+        (source_id,),
+    )
+
+    database_row_count = cursor.fetchone()[0]
+
+    cursor.execute(
+        """
+        SELECT count(
+            DISTINCT (
+                source_sheet_name,
+                source_row_number
+            )
+        )
+        FROM mlf.contract_history_cell
+        WHERE source_id = %s
+        """,
+        (source_id,),
+    )
+
+    database_episode_count = cursor.fetchone()[0]
+
+    cursor.execute(
+        """
+        SELECT count(*)
+        FROM mlf.contract_history_cell
+        WHERE source_id = %s
+          AND is_year_marker
+        """,
+        (source_id,),
+    )
+
+    database_marker_count = cursor.fetchone()[0]
+
+    if (
+        database_row_count
+        != int(stats["cell_count"])
+    ):
+        raise RuntimeError(
+            "Database row-count mismatch."
+        )
+
+    if (
+        database_episode_count
+        != int(stats["episode_rows"])
+    ):
+        raise RuntimeError(
+            "Database episode-count mismatch."
+        )
+
+    if (
+        database_marker_count
+        != int(stats["year_marker_count"])
+    ):
+        raise RuntimeError(
+            "Database marker-count mismatch."
+        )
+
+    database_rows = fetch_database_rows(
+        cursor,
+        source_id,
+    )
+
+    database_rows_sha256 = (
+        canonical_rows_sha256(
+            database_rows
+        )
+    )
+
+    expected_rows_sha256 = str(
+        stats["rows_sha256"]
+    )
+
+    if (
+        database_rows_sha256
+        != expected_rows_sha256
+    ):
+        raise RuntimeError(
+            "Database round-trip row "
+            "hash mismatch: "
+            f"expected={expected_rows_sha256} "
+            f"actual={database_rows_sha256}"
+        )
+
+    return database_rows_sha256
+
+
+def write_history_source(
+    cursor: object,
+    rows: list[dict[str, object]],
+    stats: dict[str, object],
+) -> str:
+    source_id = str(
+        stats["source_id"]
+    )
+
+    source_kind = "xlsx"
+
+    source_sha256 = str(
+        stats["source_sha256"]
+    )
+
+    # Serialize all source registration and authority
+    # changes. This also protects the zero-row first
+    # import case where SELECT ... FOR UPDATE alone
+    # cannot lock a missing active source.
+    cursor.execute(
+        """
+        LOCK TABLE mlf.contract_history_source
+        IN SHARE ROW EXCLUSIVE MODE
+        """
+    )
+
+    cursor.execute(
+        """
+        SELECT
+            source_kind,
+            source_sha256
+        FROM mlf.contract_history_source
+        WHERE source_id = %s
+        """,
+        (source_id,),
+    )
+
+    existing_source = cursor.fetchone()
+
+    if existing_source is None:
+        cursor.execute(
+            """
+            INSERT INTO mlf.contract_history_source (
+                source_id,
+                source_kind,
+                source_sha256,
+                is_active
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                false
+            )
+            """,
+            (
+                source_id,
+                source_kind,
+                source_sha256,
+            ),
+        )
+    else:
+        (
+            existing_kind,
+            existing_sha256,
+        ) = existing_source
+
+        if (
+            str(existing_kind)
+            != source_kind
+        ):
+            raise RuntimeError(
+                "Existing source_kind mismatch."
+            )
+
+        if (
+            str(existing_sha256)
+            != source_sha256
+        ):
+            raise RuntimeError(
+                "Existing source_sha256 mismatch."
+            )
+
+    cursor.execute(
+        """
+        SELECT count(*)
+        FROM mlf.contract_history_cell
+        WHERE source_id = %s
+        """,
+        (source_id,),
+    )
+
+    existing_row_count = cursor.fetchone()[0]
+
+    if existing_row_count == 0:
+        values = [
+            tuple(
+                row[column]
+                for column
+                in HISTORY_DB_COLUMNS
+            )
+            for row in rows
+        ]
+
+        cursor.executemany(
+            HISTORY_INSERT_SQL,
+            values,
+        )
+
+    database_rows_sha256 = verify_history_rows(
+        cursor,
+        source_id,
+        stats,
+    )
+
+    # A source is not authoritative until every
+    # canonical row has survived database readback.
+    cursor.execute(
+        """
+        UPDATE mlf.contract_history_source
+        SET is_active = false
+        WHERE source_kind = %s
+          AND is_active
+          AND source_id <> %s
+        """,
+        (
+            source_kind,
+            source_id,
+        ),
+    )
+
+    cursor.execute(
+        """
+        UPDATE mlf.contract_history_source
+        SET
+            is_active = true,
+            activated_at_utc = now()
+        WHERE source_id = %s
+          AND NOT is_active
+        """,
+        (source_id,),
+    )
+
+    cursor.execute(
+        """
+        SELECT source_id
+        FROM mlf.contract_history_source
+        WHERE source_kind = %s
+          AND is_active
+        """,
+        (source_kind,),
+    )
+
+    active_sources = [
+        str(row[0])
+        for row in cursor.fetchall()
+    ]
+
+    if active_sources != [source_id]:
+        raise RuntimeError(
+            "Active Contract History source "
+            "verification failed."
+        )
+
+    return database_rows_sha256
+
+
+def run_database_apply(
+    rows: list[dict[str, object]],
+    stats: dict[str, object],
+    dsn_env: str,
+) -> None:
+    try:
+        import psycopg
+    except ImportError as exc:
+        raise RuntimeError(
+            "psycopg is required only for "
+            "database modes."
+        ) from exc
+
+    dsn = os.environ.get(
+        dsn_env
+    )
+
+    if not dsn:
+        raise RuntimeError(
+            f"DSN environment variable "
+            f"{dsn_env!r} is not set."
+        )
+
+    print(
+        "DB_APPLY_DSN_ENV|"
+        + dsn_env
+    )
+
+    conn = psycopg.connect(dsn)
+
+    committed = False
+
+    try:
+        with conn.cursor() as cursor:
+            verify_persistent_schema(
+                cursor
+            )
+
+            print(
+                "DB_APPLY_SCHEMA_PRECONDITION=PASS"
+            )
+
+            database_rows_sha256 = (
+                write_history_source(
+                    cursor,
+                    rows,
+                    stats,
+                )
+            )
+
+            source_id = str(
+                stats["source_id"]
+            )
+
+            print(
+                "DB_APPLY_HISTORY_ROWS|"
+                + str(stats["cell_count"])
+            )
+
+            print(
+                "DB_APPLY_EPISODES|"
+                + str(stats["episode_rows"])
+            )
+
+            print(
+                "DB_APPLY_YEAR_MARKERS|"
+                + str(
+                    stats["year_marker_count"]
+                )
+            )
+
+            print(
+                "DB_APPLY_ROWS_SHA256|"
+                + database_rows_sha256
+            )
+
+            print(
+                "DB_APPLY_ACTIVE_SOURCE|"
+                + source_id
+            )
+
+        conn.commit()
+        committed = True
+
+    finally:
+        if not committed:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        conn.close()
+
+    print(
+        "DB_APPLY_COMMIT=PASS"
+    )
+
+    print(
+        "DB_APPLY=PASS"
+    )
+
 def run_database_dry_run(
     rows: list[dict[str, object]],
     stats: dict[str, object],
@@ -1615,6 +2036,7 @@ def parse_args() -> argparse.Namespace:
         choices=(
             "fingerprint",
             "db-dry-run",
+            "db-apply",
         ),
         required=True,
     )
@@ -1670,6 +2092,14 @@ def main() -> None:
     print_fingerprint(stats)
 
     if args.mode == "fingerprint":
+        return
+
+    if args.mode == "db-apply":
+        run_database_apply(
+            rows,
+            stats,
+            args.dsn_env,
+        )
         return
 
     if not args.migration:
