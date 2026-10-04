@@ -43,11 +43,34 @@ export type LineupRow = {
   player: TeamPlayer | null;
 };
 
+export type ContractHistoryCell = {
+  sourceId: string;
+  sourceSheetName: string;
+  sourceRowNumber: number;
+  sourceColIndex: number;
+  sourceColLabel: string;
+
+  franchiseId: number;
+
+  playerName: string;
+  yahooPlayerKey: string | null;
+
+  seasonYear: number;
+  rawValue: string;
+
+  yearsRemaining: number | null;
+  contractLabel: "FT" | "PT" | null;
+  eventFlags: string[];
+  isYearMarker: boolean;
+};
+
 export type TeamRoster = {
+  franchiseId: number;
   teamKey: string;
   teamName: string;
   draftSlot: number;
   players: TeamPlayer[];
+  contractHistory: ContractHistoryCell[];
 };
 
 export type TeamLineup = {
@@ -57,6 +80,7 @@ export type TeamLineup = {
 };
 
 type RawRosterRow = {
+  franchise_id: number | string;
   draft_slot: number | string;
   team_key: string;
   team_name: string;
@@ -92,6 +116,27 @@ type RawRosterRow = {
   round_number: number | string | null;
   slot_number: number | string | null;
   roster_source: "DRAFT" | "KEEPER" | null;
+};
+
+type RawContractHistoryRow = {
+  source_id: string;
+  source_sheet_name: string;
+  source_row_number: number | string;
+  source_col_index: number | string;
+  source_col_label: string;
+
+  franchise_id: number | string;
+
+  player_name: string;
+  yahoo_player_key: string | null;
+
+  season_year: number | string;
+  raw_value: string;
+
+  years_remaining: number | string | null;
+  contract_label: "FT" | "PT" | null;
+  event_flags: string[];
+  is_year_marker: boolean;
 };
 
 const HITTER_POSITIONS = new Set([
@@ -146,6 +191,7 @@ WITH draft_meta AS (
 ),
 team_order AS (
     SELECT
+        fst.franchise_id,
         dp.column_team_key AS team_key,
         COALESCE(t.team_name, dp.column_team_key)
             AS team_name,
@@ -153,6 +199,10 @@ team_order AS (
     FROM mlf.draft_pick AS dp
     JOIN draft_meta AS dm
       ON TRUE
+    JOIN public.franchise_season_team AS fst
+      ON fst.league_key = dm.league_key
+     AND fst.season_year = dm.season_year
+     AND fst.team_key = dp.column_team_key
     LEFT JOIN mlf.team AS t
       ON t.league_key = dm.league_key
      AND t.season_year = dm.season_year
@@ -188,6 +238,7 @@ roster AS (
     WHERE dka.draft_key = $1
 )
 SELECT
+    team_order.franchise_id,
     team_order.draft_slot,
     team_order.team_key,
     team_order.team_name,
@@ -647,6 +698,61 @@ export async function loadTeams(
         [draftKey],
       );
 
+    const historySource =
+      await client.query<{
+        source_id: string;
+      }>(
+        `
+        SELECT source_id
+        FROM mlf.contract_history_source
+        WHERE source_kind = 'xlsx'
+          AND is_active
+        `,
+      );
+
+    if (historySource.rows.length !== 1) {
+      throw new Error(
+        `Expected exactly one active XLSX Contract History source; received ${historySource.rows.length}.`,
+      );
+    }
+
+    const activeHistorySourceId =
+      historySource.rows[0].source_id;
+
+    const historyResult =
+      await client.query<RawContractHistoryRow>(
+        `
+        SELECT
+            source_id,
+            source_sheet_name,
+            source_row_number,
+            source_col_index,
+            source_col_label,
+            franchise_id,
+            player_name,
+            yahoo_player_key,
+            season_year,
+            raw_value,
+            years_remaining,
+            contract_label,
+            event_flags,
+            is_year_marker
+        FROM mlf.contract_history_cell
+        WHERE source_id = $1
+        ORDER BY
+            franchise_id,
+            source_row_number,
+            source_col_index
+        `,
+        [activeHistorySourceId],
+      );
+
+    if (historyResult.rows.length === 0) {
+      throw new Error(
+        "Active Contract History source contains no canonical rows.",
+      );
+    }
+
     await client.query("ROLLBACK");
 
     const teamMap =
@@ -658,11 +764,14 @@ export async function loadTeams(
 
       if (!team) {
         team = {
+          franchiseId:
+            Number(row.franchise_id),
           teamKey: row.team_key,
           teamName: row.team_name,
           draftSlot:
             Number(row.draft_slot),
           players: [],
+          contractHistory: [],
         };
 
         teamMap.set(
@@ -755,6 +864,148 @@ export async function loadTeams(
       throw new Error(
         `Expected 16 MLF teams; received ${teams.length}.`,
       );
+    }
+
+    const franchiseIds =
+      teams.map(
+        (team) =>
+          team.franchiseId,
+      );
+
+    if (
+      franchiseIds.some(
+        (franchiseId) =>
+          !Number.isInteger(franchiseId) ||
+          franchiseId <= 0,
+      )
+    ) {
+      throw new Error(
+        "Teams projection contains an invalid franchise ID.",
+      );
+    }
+
+    if (
+      new Set(franchiseIds).size !==
+      teams.length
+    ) {
+      throw new Error(
+        "Teams projection does not contain one unique franchise per team.",
+      );
+    }
+
+    const currentFranchiseIds =
+      new Set(franchiseIds);
+
+    const historyByFranchise =
+      new Map<
+        number,
+        ContractHistoryCell[]
+      >();
+
+    for (const row of historyResult.rows) {
+      const franchiseId =
+        Number(row.franchise_id);
+
+      if (
+        !Number.isInteger(franchiseId) ||
+        franchiseId <= 0
+      ) {
+        throw new Error(
+          "Contract History contains an invalid franchise ID.",
+        );
+      }
+
+      if (
+        !currentFranchiseIds.has(
+          franchiseId,
+        )
+      ) {
+        throw new Error(
+          `Contract History source contains unknown current franchise ${franchiseId}.`,
+        );
+      }
+
+      let history =
+        historyByFranchise.get(
+          franchiseId,
+        );
+
+      if (!history) {
+        history = [];
+
+        historyByFranchise.set(
+          franchiseId,
+          history,
+        );
+      }
+
+      history.push({
+        sourceId:
+          row.source_id,
+        sourceSheetName:
+          row.source_sheet_name,
+        sourceRowNumber:
+          Number(
+            row.source_row_number,
+          ),
+        sourceColIndex:
+          Number(
+            row.source_col_index,
+          ),
+        sourceColLabel:
+          row.source_col_label,
+
+        franchiseId,
+
+        playerName:
+          row.player_name,
+        yahooPlayerKey:
+          row.yahoo_player_key,
+
+        seasonYear:
+          Number(row.season_year),
+        rawValue:
+          row.raw_value,
+
+        yearsRemaining:
+          toNumber(
+            row.years_remaining,
+          ),
+        contractLabel:
+          row.contract_label,
+        eventFlags:
+          [...row.event_flags],
+        isYearMarker:
+          row.is_year_marker,
+      });
+    }
+
+    if (
+      historyByFranchise.size !==
+      teams.length
+    ) {
+      throw new Error(
+        `Expected Contract History for ${teams.length} franchises; received ${historyByFranchise.size}.`,
+      );
+    }
+
+    for (const team of teams) {
+      const history =
+        historyByFranchise.get(
+          team.franchiseId,
+        );
+
+      if (
+        !history ||
+        history.length === 0
+      ) {
+        throw new Error(
+          `${team.teamName} has no canonical Contract History rows.`,
+        );
+      }
+
+      team.contractHistory =
+        history;
     }
 
     const playerKeys =
