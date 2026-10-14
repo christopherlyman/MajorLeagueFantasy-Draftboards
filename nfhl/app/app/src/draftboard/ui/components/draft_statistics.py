@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 
 from datetime import (
     date,
@@ -20,7 +18,7 @@ from draftboard.data.db import (
     get_live_draft_board,
 )
 from draftboard.state.runtime import (
-    get_season_year,
+    get_draft_config,
 )
 
 
@@ -43,24 +41,7 @@ def _opening_day() -> date:
                 f"is invalid: {raw!r}"
             ) from exc
 
-    season_year = get_season_year()
-
-    config_path = Path(
-        "/league_runtime/config"
-    ) / f"nfhl_{season_year}.json"
-
-    try:
-        config = json.loads(
-            config_path.read_text(
-                encoding="utf-8"
-            )
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Unable to read NFHL season config: "
-            f"{config_path}"
-        ) from exc
-
+    config = get_draft_config()
     draft_config = config.get("draft") or {}
 
     raw = str(
@@ -72,17 +53,17 @@ def _opening_day() -> date:
 
     if not raw:
         raise RuntimeError(
-            "NFHL season config is missing "
-            "draft.opening_day_date."
+            "NFHL draft config missing opening_day_date."
         )
 
     try:
-        return date.fromisoformat(raw)
+        return date.fromisoformat(
+            raw
+        )
     except ValueError as exc:
         raise RuntimeError(
-            "NFHL season config has invalid "
-            "draft.opening_day_date: "
-            f"{raw!r}"
+            "NFHL draft config opening_day_date "
+            f"is invalid: {raw!r}"
         ) from exc
 
 
