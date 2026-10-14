@@ -11,6 +11,7 @@ from draftboard.state.runtime import (
     get_league_key,
     get_postgres_dsn,
     get_season_year,
+    get_runtime_context,
 )
 
 
@@ -4525,9 +4526,17 @@ def refresh_yahoo_players_live(
 
     import requests
 
-    league_key = get_league_key()
-    season_year = get_season_year()
-    draft_key = get_draft_key()
+    runtime_context = get_runtime_context()
+
+    league_key = str(
+        runtime_context["league_key"]
+    )
+    season_year = int(
+        runtime_context["season_year"]
+    )
+    draft_key = str(
+        runtime_context["draft_key"]
+    )
 
     actor = str(
         actor or ""
@@ -4543,15 +4552,10 @@ def refresh_yahoo_players_live(
         "auth.py"
     )
 
-    config_path = Path(
-        f"/league_runtime/config/"
-        f"nfhl_{season_year}.json"
-    )
 
     for required in (
         sync_path,
         auth_path,
-        config_path,
     ):
         if not required.exists():
             raise RuntimeError(
@@ -4599,23 +4603,6 @@ def refresh_yahoo_players_live(
 
     sys.modules[auth_spec.name] = auth
     auth_spec.loader.exec_module(auth)
-
-    ctx = sync.load_config(config_path)
-
-    if str(ctx["league_key"]) != str(league_key):
-        raise RuntimeError(
-            "NFHL Yahoo config league_key does not match runtime."
-        )
-
-    if int(ctx["season_year"]) != int(season_year):
-        raise RuntimeError(
-            "NFHL Yahoo config season_year does not match runtime."
-        )
-
-    if str(ctx["draft_key"]) != str(draft_key):
-        raise RuntimeError(
-            "NFHL Yahoo config draft_key does not match runtime."
-        )
 
     access_token = auth.get_access_token()
 
@@ -5479,9 +5466,17 @@ def refresh_yahoo_teams_live(
 
     import requests
 
-    league_key = get_league_key()
-    season_year = get_season_year()
-    draft_key = get_draft_key()
+    runtime_context = get_runtime_context()
+
+    league_key = str(
+        runtime_context["league_key"]
+    )
+    season_year = int(
+        runtime_context["season_year"]
+    )
+    draft_key = str(
+        runtime_context["draft_key"]
+    )
 
     sync_path = Path(
         "/league_runtime/scripts/yahoo/"
@@ -5493,15 +5488,10 @@ def refresh_yahoo_teams_live(
         "auth.py"
     )
 
-    config_path = Path(
-        f"/league_runtime/config/"
-        f"nfhl_{season_year}.json"
-    )
 
     for required in (
         sync_path,
         auth_path,
-        config_path,
     ):
         if not required.exists():
             raise RuntimeError(
@@ -5579,39 +5569,8 @@ def refresh_yahoo_teams_live(
         auth
     )
 
-    ctx = sync.load_config(
-        config_path
-    )
-
-    if (
-        str(ctx["league_key"])
-        != str(league_key)
-    ):
-        raise RuntimeError(
-            "NFHL Yahoo config league_key "
-            "does not match runtime."
-        )
-
-    if (
-        int(ctx["season_year"])
-        != int(season_year)
-    ):
-        raise RuntimeError(
-            "NFHL Yahoo config season_year "
-            "does not match runtime."
-        )
-
-    if (
-        str(ctx["draft_key"])
-        != str(draft_key)
-    ):
-        raise RuntimeError(
-            "NFHL Yahoo config draft_key "
-            "does not match runtime."
-        )
-
     target_count = int(
-        ctx["target_teams"]
+        runtime_context["manager_count"]
     )
 
     # get_access_token() reuses a valid stored
