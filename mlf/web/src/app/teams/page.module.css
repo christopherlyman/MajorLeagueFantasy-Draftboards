@@ -397,3 +397,269 @@
 .rosterNotice strong {
   color: #f1df9a;
 }
+
+/* Contract History */
+
+.historySection {
+  margin: 21px 0 18px;
+}
+
+.historyTitle {
+  margin: 0 0 12px;
+  color: #f8fafc;
+  font-size: 1.05rem;
+  font-weight: 850;
+}
+
+.historyGuide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #f3f4f6;
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.historyGuide strong {
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.historyYearsKey {
+  white-space: nowrap;
+}
+
+.historyLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.historyLegend > span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.historySwatch {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  border: 1px solid #687485;
+  border-radius: 2px;
+}
+
+.historySwatchFt {
+  background: #23497d;
+}
+
+.historySwatchPt {
+  background: #8a6c16;
+}
+
+.historySwatchTrade {
+  background: #20553f;
+}
+
+.historySwatchExpiring {
+  background: #7d2d31;
+}
+
+.historySwatchWaiver {
+  background: #71421f;
+}
+
+.historySwatchFa {
+  background: #64274f;
+}
+
+.historySwatchStart {
+  background: #3a4452;
+}
+
+.historyScroller {
+  width: 100%;
+  overflow-x: auto;
+  border-top: 1px solid #38424f;
+  border-bottom: 1px solid #38424f;
+  background: #0d1117;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.historyScroller:focus-visible {
+  outline: 2px solid #ef3340;
+  outline-offset: 2px;
+}
+
+.historyTable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: #0d1117;
+  color: #f8fafc;
+  font-size: 0.72rem;
+}
+
+.historyTable th,
+.historyTable td {
+  min-width: 104px;
+  height: 39px;
+  padding: 7px 10px;
+  border-right: 1px solid #303946;
+  border-bottom: 1px solid #303946;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.historyTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 40px;
+  background: #0d1117;
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.historyTable thead th:first-child {
+  left: 0;
+  z-index: 5;
+  min-width: 220px;
+  text-align: left;
+}
+
+.historyTable th:last-child,
+.historyTable td:last-child {
+  border-right: 0;
+}
+
+.historyPlayer {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 220px;
+  max-width: 260px;
+  overflow: hidden;
+  background: #0d1117;
+  text-align: left !important;
+  text-overflow: ellipsis;
+}
+
+.historyPlayerCurrent {
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.historyPlayerPast {
+  color: #61758d;
+  font-weight: 500;
+}
+
+.historyCell {
+  background: #1d222a;
+  color: #ffffff;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.historyEmpty {
+  background: #0d1117;
+  color: transparent;
+}
+
+.historyYears {
+  background: #1d222a;
+  color: #ffffff;
+}
+
+.historyExpiring {
+  background: #7d2d31 !important;
+  color: #ffffff !important;
+}
+
+.historyYearMarker {
+  background: #3a4452 !important;
+  color: #d9e2ec !important;
+  font-size: 0.62rem;
+  font-weight: 800 !important;
+  text-transform: uppercase;
+}
+
+.historyFt {
+  background: #23497d !important;
+  color: #ffffff !important;
+}
+
+.historyPt {
+  background: #8a6c16 !important;
+  color: #ffffff !important;
+}
+
+.historyTrade {
+  background: #20553f !important;
+  color: #ffffff !important;
+}
+
+.historyWaiver {
+  background: #71421f !important;
+  color: #ffffff !important;
+}
+
+.historyFa {
+  background: #64274f !important;
+  color: #ffffff !important;
+}
+
+.historyPastStart th,
+.historyPastStart td {
+  border-top: 2px solid #46515f;
+}
+
+@media (max-width: 700px) {
+  .historySection {
+    margin-top: 17px;
+  }
+
+  .historyTitle {
+    margin-bottom: 9px;
+    font-size: 0.96rem;
+  }
+
+  .historyGuide {
+    gap: 5px 12px;
+    font-size: 0.56rem;
+  }
+
+  .historyLegend {
+    gap: 5px 9px;
+  }
+
+  .historySwatch {
+    width: 10px;
+    height: 10px;
+  }
+
+  .historyTable {
+    font-size: 0.65rem;
+  }
+
+  .historyTable th,
+  .historyTable td {
+    min-width: 76px;
+    height: 34px;
+    padding: 6px 7px;
+  }
+
+  .historyTable thead th:first-child,
+  .historyPlayer {
+    min-width: 154px;
+    max-width: 154px;
+  }
+}

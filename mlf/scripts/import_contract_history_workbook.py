@@ -679,6 +679,12 @@ def parse_workbook(
                 ):
                     continue
 
+                source_section = (
+                    "current"
+                    if row_number < past_contract_row
+                    else "past"
+                )
+
                 row_has_history = False
 
                 for (
@@ -778,6 +784,8 @@ def parse_workbook(
                                 column_label(
                                     column_number
                                 ),
+                            "source_section":
+                                source_section,
                             "franchise_id":
                                 franchise_id,
                             "player_name":
@@ -806,8 +814,8 @@ def parse_workbook(
                     )
 
                     if (
-                        row_number
-                        < past_contract_row
+                        source_section
+                        == "current"
                     ):
                         current_episode_rows.add(
                             episode_key
@@ -1067,6 +1075,7 @@ HISTORY_DB_COLUMNS = (
     "source_row_number",
     "source_col_index",
     "source_col_label",
+    "source_section",
     "franchise_id",
     "player_name",
     "yahoo_player_key",
@@ -1088,6 +1097,7 @@ INSERT INTO mlf.contract_history_cell (
     source_row_number,
     source_col_index,
     source_col_label,
+    source_section,
     franchise_id,
     player_name,
     yahoo_player_key,
@@ -1102,7 +1112,8 @@ VALUES (
     %s, %s, %s, %s,
     %s, %s, %s, %s,
     %s, %s, %s, %s,
-    %s, %s, %s, %s
+    %s, %s, %s, %s,
+    %s
 )
 """
 
@@ -1163,11 +1174,9 @@ def load_migration_statements(
         encoding="utf-8"
     )
 
-    # Migration 011 is hash-pinned above.
-    # Its SQL intentionally contains no
-    # procedural bodies or semicolons inside
-    # string literals. This is not intended
-    # to be a general SQL parser.
+    # Contract History migrations are hash-pinned
+    # inputs with simple SQL statement bodies.
+    # This intentionally is not a general SQL parser.
     sql_without_comments = "\n".join(
         line
         for line in sql_text.splitlines()
@@ -1183,22 +1192,21 @@ def load_migration_statements(
         if statement.strip()
     ]
 
-    if len(statements) != 7:
+    if len(statements) < 3:
         raise ValueError(
-            "Migration 011 statement shape "
-            f"changed: {len(statements)}"
+            "Migration must contain BEGIN, "
+            "at least one body statement, "
+            "and COMMIT."
         )
 
     if statements[0].upper() != "BEGIN":
         raise ValueError(
-            "Migration 011 must begin "
-            "with BEGIN."
+            "Migration must begin with BEGIN."
         )
 
     if statements[-1].upper() != "COMMIT":
         raise ValueError(
-            "Migration 011 must end "
-            "with COMMIT."
+            "Migration must end with COMMIT."
         )
 
     body = statements[1:-1]
@@ -1231,6 +1239,7 @@ def fetch_database_rows(
             source_row_number,
             source_col_index,
             source_col_label,
+            source_section,
             franchise_id,
             player_name,
             yahoo_player_key,
@@ -1274,13 +1283,23 @@ def verify_persistent_schema(
             ) IS NOT NULL,
             to_regclass(
                 'mlf.contract_history_source'
-            ) IS NOT NULL
+            ) IS NOT NULL,
+            EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'mlf'
+                  AND table_name =
+                      'contract_history_cell'
+                  AND column_name =
+                      'source_section'
+            )
         """
     )
 
     (
         history_exists,
         source_exists,
+        source_section_exists,
     ) = cursor.fetchone()
 
     if not history_exists:
@@ -1295,13 +1314,21 @@ def verify_persistent_schema(
             "mlf.contract_history_source is absent."
         )
 
+    if not source_section_exists:
+        raise RuntimeError(
+            "Migration 013 is not deployed: "
+            "contract_history_cell.source_section "
+            "is absent."
+        )
+
     cursor.execute(
         """
         SELECT migration_version
         FROM mlf.schema_migration
         WHERE migration_version IN (
             '011',
-            '012'
+            '012',
+            '013'
         )
         ORDER BY migration_version
         """
@@ -1312,10 +1339,14 @@ def verify_persistent_schema(
         for row in cursor.fetchall()
     ]
 
-    if versions != ["011", "012"]:
+    if versions != [
+        "011",
+        "012",
+        "013",
+    ]:
         raise RuntimeError(
             "Persistent import requires exactly "
-            "migrations 011 and 012."
+            "migrations 011, 012, and 013."
         )
 
 
@@ -1353,6 +1384,31 @@ def verify_history_rows(
 
     cursor.execute(
         """
+        SELECT
+            source_section,
+            count(
+                DISTINCT (
+                    source_sheet_name,
+                    source_row_number
+                )
+            )
+        FROM mlf.contract_history_cell
+        WHERE source_id = %s
+        GROUP BY source_section
+        ORDER BY source_section
+        """,
+        (source_id,),
+    )
+
+    database_section_counts = {
+        str(section):
+            int(count)
+        for section, count
+        in cursor.fetchall()
+    }
+
+    cursor.execute(
+        """
         SELECT count(*)
         FROM mlf.contract_history_cell
         WHERE source_id = %s
@@ -1377,6 +1433,32 @@ def verify_history_rows(
     ):
         raise RuntimeError(
             "Database episode-count mismatch."
+        )
+
+    expected_section_counts = {
+        "current":
+            int(
+                stats[
+                    "current_episode_rows"
+                ]
+            ),
+        "past":
+            int(
+                stats[
+                    "past_episode_rows"
+                ]
+            ),
+    }
+
+    if (
+        database_section_counts
+        != expected_section_counts
+    ):
+        raise RuntimeError(
+            "Database source-section episode "
+            "count mismatch: "
+            f"expected={expected_section_counts} "
+            f"actual={database_section_counts}"
         )
 
     if (
@@ -1687,8 +1769,8 @@ def run_database_apply(
 def run_database_dry_run(
     rows: list[dict[str, object]],
     stats: dict[str, object],
-    migration_path: Path,
-    expected_migration_sha256: str,
+    migration_paths: list[Path],
+    expected_migration_sha256s: list[str],
     dsn_env: str,
 ) -> None:
     try:
@@ -1698,6 +1780,38 @@ def run_database_dry_run(
             "psycopg is required only for "
             "db-dry-run mode."
         ) from exc
+
+    if (
+        len(migration_paths) != 3
+        or len(expected_migration_sha256s)
+        != 3
+    ):
+        raise RuntimeError(
+            "db-dry-run requires exactly "
+            "migrations 011, 012, and 013."
+        )
+
+    expected_versions = (
+        "011",
+        "012",
+        "013",
+    )
+
+    migration_bodies = [
+        load_migration_statements(
+            migration_path,
+            expected_sha256,
+        )
+        for (
+            migration_path,
+            expected_sha256,
+        )
+        in zip(
+            migration_paths,
+            expected_migration_sha256s,
+            strict=True,
+        )
+    ]
 
     dsn = os.environ.get(
         dsn_env
@@ -1709,19 +1823,14 @@ def run_database_dry_run(
             f"{dsn_env!r} is not set."
         )
 
-    statements = load_migration_statements(
-        migration_path,
-        expected_migration_sha256,
-    )
-
     print(
         "DB_DRY_RUN_DSN_ENV|"
         + dsn_env
     )
 
     print(
-        "DB_DRY_RUN_MIGRATION_STATEMENTS|"
-        + str(len(statements))
+        "DB_DRY_RUN_MIGRATION_COUNT|"
+        + str(len(migration_bodies))
     )
 
     conn = psycopg.connect(dsn)
@@ -1734,215 +1843,148 @@ def run_database_dry_run(
                 SELECT
                     to_regclass(
                         'mlf.contract_history_cell'
+                    ),
+                    to_regclass(
+                        'mlf.contract_history_source'
                     )
                 """
             )
 
-            if cursor.fetchone()[0] is not None:
+            (
+                pre_history_table,
+                pre_source_table,
+            ) = cursor.fetchone()
+
+            if (
+                pre_history_table is not None
+                or pre_source_table is not None
+            ):
                 raise RuntimeError(
-                    "contract_history_cell "
-                    "already exists before dry run."
+                    "Contract History tables already "
+                    "exist before full-stack dry run."
                 )
 
             cursor.execute(
                 """
                 SELECT count(*)
                 FROM mlf.schema_migration
-                WHERE migration_version = '011'
+                WHERE migration_version IN (
+                    '011',
+                    '012',
+                    '013'
+                )
                 """
             )
 
             if cursor.fetchone()[0] != 0:
                 raise RuntimeError(
-                    "Migration 011 already exists "
-                    "before dry run."
+                    "Contract History migration "
+                    "ledger rows already exist "
+                    "before full-stack dry run."
                 )
 
             print(
                 "DB_DRY_RUN_PRECONDITION=PASS"
             )
 
-            for statement in statements:
+            for (
+                version,
+                statements,
+            ) in zip(
+                expected_versions,
+                migration_bodies,
+                strict=True,
+            ):
+                for statement in statements:
+                    cursor.execute(
+                        statement
+                    )
+
                 cursor.execute(
-                    statement
+                    """
+                    SELECT count(*)
+                    FROM mlf.schema_migration
+                    WHERE migration_version = %s
+                    """,
+                    (version,),
                 )
 
-            cursor.execute(
-                """
-                SELECT
-                    to_regclass(
-                        'mlf.contract_history_cell'
-                    ) IS NOT NULL
-                """
+                if cursor.fetchone()[0] != 1:
+                    raise RuntimeError(
+                        "Migration ledger row "
+                        f"{version} missing inside "
+                        "dry-run transaction."
+                    )
+
+                print(
+                    "DB_DRY_RUN_MIGRATION_"
+                    + version
+                    + "=PASS"
+                )
+
+            verify_persistent_schema(
+                cursor
             )
-
-            table_exists = cursor.fetchone()[0]
-
-            if not table_exists:
-                raise RuntimeError(
-                    "Migration did not create "
-                    "contract_history_cell."
-                )
-
-            cursor.execute(
-                """
-                SELECT count(*)
-                FROM mlf.schema_migration
-                WHERE migration_version = '011'
-                """
-            )
-
-            if cursor.fetchone()[0] != 1:
-                raise RuntimeError(
-                    "Migration 011 ledger row "
-                    "not present inside transaction."
-                )
 
             print(
-                "DB_DRY_RUN_MIGRATION_011=PASS"
+                "DB_DRY_RUN_SCHEMA_STACK=PASS"
             )
 
-            values = [
-                tuple(
-                    row[column]
-                    for column
-                    in HISTORY_DB_COLUMNS
+            database_rows_sha256 = (
+                write_history_source(
+                    cursor,
+                    rows,
+                    stats,
                 )
-                for row in rows
-            ]
-
-            cursor.executemany(
-                HISTORY_INSERT_SQL,
-                values,
             )
 
             source_id = str(
                 stats["source_id"]
             )
 
-            cursor.execute(
-                """
-                SELECT count(*)
-                FROM mlf.contract_history_cell
-                WHERE source_id = %s
-                """,
-                (source_id,),
-            )
-
-            database_row_count = (
-                cursor.fetchone()[0]
-            )
-
-            cursor.execute(
-                """
-                SELECT count(
-                    DISTINCT (
-                        source_sheet_name,
-                        source_row_number
-                    )
-                )
-                FROM mlf.contract_history_cell
-                WHERE source_id = %s
-                """,
-                (source_id,),
-            )
-
-            database_episode_count = (
-                cursor.fetchone()[0]
-            )
-
-            cursor.execute(
-                """
-                SELECT count(*)
-                FROM mlf.contract_history_cell
-                WHERE source_id = %s
-                  AND is_year_marker
-                """,
-                (source_id,),
-            )
-
-            database_marker_count = (
-                cursor.fetchone()[0]
-            )
-
-            if (
-                database_row_count
-                != int(stats["cell_count"])
-            ):
-                raise RuntimeError(
-                    "Database row-count mismatch."
-                )
-
-            if (
-                database_episode_count
-                != int(stats["episode_rows"])
-            ):
-                raise RuntimeError(
-                    "Database episode-count "
-                    "mismatch."
-                )
-
-            if (
-                database_marker_count
-                != int(
-                    stats[
-                        "year_marker_count"
-                    ]
-                )
-            ):
-                raise RuntimeError(
-                    "Database marker-count "
-                    "mismatch."
-                )
-
-            database_rows = (
-                fetch_database_rows(
-                    cursor,
-                    source_id,
-                )
-            )
-
-            database_rows_sha256 = (
-                canonical_rows_sha256(
-                    database_rows
-                )
-            )
-
-            expected_rows_sha256 = str(
-                stats["rows_sha256"]
-            )
-
-            if (
-                database_rows_sha256
-                != expected_rows_sha256
-            ):
-                raise RuntimeError(
-                    "Database round-trip row "
-                    "hash mismatch: "
-                    f"expected="
-                    f"{expected_rows_sha256} "
-                    f"actual="
-                    f"{database_rows_sha256}"
-                )
-
             print(
                 "DB_DRY_RUN_HISTORY_ROWS|"
-                + str(database_row_count)
+                + str(stats["cell_count"])
             )
 
             print(
                 "DB_DRY_RUN_EPISODES|"
-                + str(database_episode_count)
+                + str(stats["episode_rows"])
+            )
+
+            print(
+                "DB_DRY_RUN_CURRENT_EPISODES|"
+                + str(
+                    stats[
+                        "current_episode_rows"
+                    ]
+                )
+            )
+
+            print(
+                "DB_DRY_RUN_PAST_EPISODES|"
+                + str(
+                    stats[
+                        "past_episode_rows"
+                    ]
+                )
             )
 
             print(
                 "DB_DRY_RUN_YEAR_MARKERS|"
-                + str(database_marker_count)
+                + str(
+                    stats["year_marker_count"]
+                )
             )
 
             print(
                 "DB_DRY_RUN_ROWS_SHA256|"
                 + database_rows_sha256
+            )
+
+            print(
+                "DB_DRY_RUN_ACTIVE_SOURCE|"
+                + source_id
             )
 
             print(
@@ -1980,17 +2022,30 @@ def run_database_dry_run(
                             'mlf.contract_history_cell'
                         )::text,
                         'ABSENT'
+                    ),
+                    COALESCE(
+                        to_regclass(
+                            'mlf.contract_history_source'
+                        )::text,
+                        'ABSENT'
                     )
                 """
             )
 
-            post_table = cursor.fetchone()[0]
+            (
+                post_history_table,
+                post_source_table,
+            ) = cursor.fetchone()
 
             cursor.execute(
                 """
                 SELECT count(*)
                 FROM mlf.schema_migration
-                WHERE migration_version = '011'
+                WHERE migration_version IN (
+                    '011',
+                    '012',
+                    '013'
+                )
                 """
             )
 
@@ -2002,25 +2057,36 @@ def run_database_dry_run(
         verify_conn.close()
 
     print(
-        "POST_ROLLBACK_TABLE|"
-        + str(post_table)
+        "POST_ROLLBACK_HISTORY_TABLE|"
+        + str(post_history_table)
     )
 
     print(
-        "POST_ROLLBACK_MIGRATION_011|"
+        "POST_ROLLBACK_SOURCE_TABLE|"
+        + str(post_source_table)
+    )
+
+    print(
+        "POST_ROLLBACK_MIGRATION_ROWS|"
         + str(post_migration_rows)
     )
 
-    if post_table != "ABSENT":
+    if post_history_table != "ABSENT":
         raise RuntimeError(
-            "Dry-run table persisted "
-            "after rollback."
+            "Contract History cell table "
+            "persisted after rollback."
+        )
+
+    if post_source_table != "ABSENT":
+        raise RuntimeError(
+            "Contract History source table "
+            "persisted after rollback."
         )
 
     if post_migration_rows != 0:
         raise RuntimeError(
-            "Migration 011 persisted "
-            "after rollback."
+            "Contract History migration ledger "
+            "rows persisted after rollback."
         )
 
     print(
@@ -2053,10 +2119,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--migration",
+        action="append",
     )
 
     parser.add_argument(
         "--expected-migration-sha256",
+        action="append",
     )
 
     parser.add_argument(
@@ -2102,39 +2170,76 @@ def main() -> None:
         )
         return
 
-    if not args.migration:
-        raise ValueError(
-            "--migration is required "
-            "for db-dry-run mode."
-        )
-
-    if not args.expected_migration_sha256:
-        raise ValueError(
-            "--expected-migration-sha256 "
-            "is required for db-dry-run mode."
-        )
-
-    migration_path = Path(
+    migrations = (
         args.migration
+        if args.migration is not None
+        else []
     )
 
-    if not migration_path.is_file():
-        raise FileNotFoundError(
-            migration_path
+    migration_hashes = (
+        args.expected_migration_sha256
+        if args.expected_migration_sha256
+        is not None
+        else []
+    )
+
+    if (
+        len(migrations) != 3
+        or len(migration_hashes) != 3
+    ):
+        raise ValueError(
+            "db-dry-run requires exactly three "
+            "--migration values and three "
+            "--expected-migration-sha256 values "
+            "for migrations 011, 012, and 013."
         )
 
-    expected_migration_sha256 = (
+    migration_paths = [
+        Path(value)
+        for value in migrations
+    ]
+
+    expected_versions = (
+        "011",
+        "012",
+        "013",
+    )
+
+    for (
+        version,
+        migration_path,
+    ) in zip(
+        expected_versions,
+        migration_paths,
+        strict=True,
+    ):
+        if not migration_path.is_file():
+            raise FileNotFoundError(
+                migration_path
+            )
+
+        if not migration_path.name.startswith(
+            version + "_"
+        ):
+            raise ValueError(
+                "Migration order mismatch: "
+                f"expected {version}, "
+                f"received {migration_path.name!r}."
+            )
+
+    expected_migration_sha256s = [
         validate_sha256(
-            args.expected_migration_sha256,
+            value,
             "expected migration SHA256",
         )
-    )
+        for value in migration_hashes
+    ]
 
     run_database_dry_run(
         rows,
         stats,
-        migration_path,
-        expected_migration_sha256,
+        migration_paths,
+        expected_migration_sha256s,
         args.dsn_env,
     )
 

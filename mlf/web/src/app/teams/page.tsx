@@ -6,6 +6,7 @@ import {
   buildTeamLineup,
   isPitcher,
   loadTeams,
+  type ContractHistoryCell,
   type LineupRow,
   type TeamPlayer,
 } from "../../lib/teams";
@@ -410,6 +411,415 @@ function MobileSection({
   );
 }
 
+
+type ContractHistoryEpisode = {
+  key: string;
+  playerName: string;
+  sourceSection: "current" | "past";
+  sourceRowNumber: number;
+  cells: Map<number, ContractHistoryCell>;
+};
+
+function buildContractHistoryEpisodes(
+  history: ContractHistoryCell[],
+): ContractHistoryEpisode[] {
+  const episodes =
+    new Map<string, ContractHistoryEpisode>();
+
+  for (const cell of history) {
+    const key =
+      `${cell.sourceSheetName}:${cell.sourceRowNumber}`;
+
+    let episode =
+      episodes.get(key);
+
+    if (!episode) {
+      episode = {
+        key,
+        playerName: cell.playerName,
+        sourceSection: cell.sourceSection,
+        sourceRowNumber: cell.sourceRowNumber,
+        cells: new Map(),
+      };
+
+      episodes.set(key, episode);
+    }
+
+    if (
+      episode.playerName !== cell.playerName ||
+      episode.sourceSection !== cell.sourceSection
+    ) {
+      throw new Error(
+        `Inconsistent Contract History episode ${key}.`,
+      );
+    }
+
+    if (
+      episode.cells.has(
+        cell.seasonYear,
+      )
+    ) {
+      throw new Error(
+        `Duplicate Contract History season ${cell.seasonYear} in ${key}.`,
+      );
+    }
+
+    episode.cells.set(
+      cell.seasonYear,
+      cell,
+    );
+  }
+
+  return Array.from(
+    episodes.values(),
+  ).sort((left, right) => {
+    if (
+      left.sourceSection !==
+      right.sourceSection
+    ) {
+      return left.sourceSection ===
+        "current"
+        ? -1
+        : 1;
+    }
+
+    return (
+      left.sourceRowNumber -
+      right.sourceRowNumber
+    );
+  });
+}
+
+function historyCellClass(
+  cell: ContractHistoryCell | undefined,
+): string {
+  if (!cell) {
+    return `${styles.historyCell} ${styles.historyEmpty}`;
+  }
+
+  const classes = [
+    styles.historyCell,
+  ];
+
+  if (cell.yearsRemaining !== null) {
+    classes.push(
+      styles.historyYears,
+    );
+  }
+
+  if (cell.yearsRemaining === 1) {
+    classes.push(
+      styles.historyExpiring,
+    );
+  }
+
+  if (cell.isYearMarker) {
+    classes.push(
+      styles.historyYearMarker,
+    );
+  }
+
+  if (cell.contractLabel === "FT") {
+    classes.push(
+      styles.historyFt,
+    );
+  }
+
+  if (cell.contractLabel === "PT") {
+    classes.push(
+      styles.historyPt,
+    );
+  }
+
+  if (
+    cell.eventFlags.includes("to") ||
+    cell.eventFlags.includes("from")
+  ) {
+    classes.push(
+      styles.historyTrade,
+    );
+  }
+
+  if (
+    cell.eventFlags.includes("waiver")
+  ) {
+    classes.push(
+      styles.historyWaiver,
+    );
+  }
+
+  if (
+    cell.eventFlags.includes("fa")
+  ) {
+    classes.push(
+      styles.historyFa,
+    );
+  }
+
+  return classes.join(" ");
+}
+
+function historyCellValue(
+  cell: ContractHistoryCell | undefined,
+): string {
+  if (!cell) {
+    return "";
+  }
+
+  if (cell.isYearMarker) {
+    return "Start";
+  }
+
+  return cell.rawValue;
+}
+
+function ContractHistorySection({
+  history,
+}: {
+  history: ContractHistoryCell[];
+}) {
+  const seasons =
+    Array.from(
+      new Set(
+        history.map(
+          (cell) =>
+            cell.seasonYear,
+        ),
+      ),
+    ).sort(
+      (left, right) =>
+        right - left,
+    );
+
+  const episodes =
+    buildContractHistoryEpisodes(
+      history,
+    );
+
+  const firstPastKey =
+    episodes.find(
+      (episode) =>
+        episode.sourceSection === "past",
+    )?.key;
+
+  return (
+    <section
+      className={
+        styles.historySection
+      }
+      data-contract-history
+    >
+      <h2
+        className={
+          styles.historyTitle
+        }
+      >
+        Contract History
+      </h2>
+
+      <div
+        className={
+          styles.historyGuide
+        }
+      >
+        <span
+          className={
+            styles.historyYearsKey
+          }
+        >
+          <strong>5/4/3/2/1</strong>
+          {" "}
+          Years remaining
+        </span>
+
+        <span>
+          <strong>Player names:</strong>
+          {" "}
+          bright = current
+          {" · "}
+          gray = past
+        </span>
+
+        <div
+          className={
+            styles.historyLegend
+          }
+          aria-label="Contract History legend"
+        >
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchFt}`}
+              aria-hidden="true"
+            />
+            Franchise Tag
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchPt}`}
+              aria-hidden="true"
+            />
+            Prospect Tag
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchTrade}`}
+              aria-hidden="true"
+            />
+            Trade
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchExpiring}`}
+              aria-hidden="true"
+            />
+            1-year
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchWaiver}`}
+              aria-hidden="true"
+            />
+            Waiver Pickup
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchFa}`}
+              aria-hidden="true"
+            />
+            Free Agent
+          </span>
+
+          <span>
+            <i
+              className={`${styles.historySwatch} ${styles.historySwatchStart}`}
+              aria-hidden="true"
+            />
+            Episode Start
+          </span>
+        </div>
+      </div>
+
+      <div
+        className={
+          styles.historyScroller
+        }
+        role="region"
+        aria-label="Historical contracts by season"
+        tabIndex={0}
+      >
+        <table
+          className={
+            styles.historyTable
+          }
+        >
+          <thead>
+            <tr>
+              <th>Players</th>
+
+              {seasons.map(
+                (season) => (
+                  <th key={season}>
+                    {season}
+                  </th>
+                ),
+              )}
+            </tr>
+          </thead>
+
+          <tbody>
+            {episodes.map(
+              (episode) => {
+                const rowClasses = [
+                  episode.sourceSection ===
+                  "current"
+                    ? styles.historyCurrentRow
+                    : styles.historyPastRow,
+                ];
+
+                if (
+                  episode.key ===
+                  firstPastKey
+                ) {
+                  rowClasses.push(
+                    styles.historyPastStart,
+                  );
+                }
+
+                return (
+                  <tr
+                    key={episode.key}
+                    className={
+                      rowClasses.join(" ")
+                    }
+                    data-history-episode
+                    data-history-section={
+                      episode.sourceSection
+                    }
+                    data-history-source-row={
+                      episode.sourceRowNumber
+                    }
+                  >
+                    <th
+                      scope="row"
+                      className={
+                        episode.sourceSection ===
+                        "current"
+                          ? `${styles.historyPlayer} ${styles.historyPlayerCurrent}`
+                          : `${styles.historyPlayer} ${styles.historyPlayerPast}`
+                      }
+                    >
+                      {episode.playerName}
+                    </th>
+
+                    {seasons.map(
+                      (season) => {
+                        const cell =
+                          episode.cells.get(
+                            season,
+                          );
+
+                        return (
+                          <td
+                            key={season}
+                            className={
+                              historyCellClass(
+                                cell,
+                              )
+                            }
+                            data-history-season={
+                              season
+                            }
+                            data-history-marker={
+                              cell?.isYearMarker
+                                ? "true"
+                                : undefined
+                            }
+                          >
+                            {
+                              historyCellValue(
+                                cell,
+                              )
+                            }
+                          </td>
+                        );
+                      },
+                    )}
+                  </tr>
+                );
+              },
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default async function TeamsPage({
   searchParams,
 }: TeamsPageProps) {
@@ -584,6 +994,12 @@ export default async function TeamsPage({
           pitcher
         />
       </div>
+
+      <ContractHistorySection
+        history={
+          selectedTeam.contractHistory
+        }
+      />
     </AppShell>
   );
 }

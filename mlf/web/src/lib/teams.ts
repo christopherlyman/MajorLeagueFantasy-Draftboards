@@ -49,6 +49,7 @@ export type ContractHistoryCell = {
   sourceRowNumber: number;
   sourceColIndex: number;
   sourceColLabel: string;
+  sourceSection: "current" | "past";
 
   franchiseId: number;
 
@@ -124,6 +125,7 @@ type RawContractHistoryRow = {
   source_row_number: number | string;
   source_col_index: number | string;
   source_col_label: string;
+  source_section: "current" | "past";
 
   franchise_id: number | string;
 
@@ -728,6 +730,7 @@ export async function loadTeams(
             source_row_number,
             source_col_index,
             source_col_label,
+            source_section,
             franchise_id,
             player_name,
             yahoo_player_key,
@@ -954,6 +957,8 @@ export async function loadTeams(
           ),
         sourceColLabel:
           row.source_col_label,
+        sourceSection:
+          row.source_section,
 
         franchiseId,
 
