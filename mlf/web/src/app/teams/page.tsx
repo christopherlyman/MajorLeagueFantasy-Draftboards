@@ -567,7 +567,7 @@ function historyCellValue(
   }
 
   if (cell.isYearMarker) {
-    return "Start";
+    return `START ${cell.seasonYear}`;
   }
 
   return cell.rawValue;
