@@ -68,7 +68,7 @@ services:
       - mlf_net
 
   next:
-    image: mlf-next:cee6e10
+    image: mlf-next:cd3d2cc
     container_name: mlf_next
     env_file:
       - /Volume1/Bots/fantasy/DraftBoards/mlf/.env
