@@ -618,16 +618,10 @@ def get_commissioner_checklist_state(
         draft_phase = "ACTIVE"
 
     elif draft_complete:
-        draft_phase = "Complete"
+        draft_phase = "Season Active"
 
     else:
         draft_phase = "Not started"
-
-    post_phase = (
-        "Ready for closeout"
-        if draft_complete
-        else ""
-    )
 
     if draft_status == "ACTIVE":
         next_action = {
@@ -647,15 +641,15 @@ def get_commissioner_checklist_state(
     elif draft_complete:
         next_action = {
             "title":
-                "Validate Final Draft Results",
+                "Season Active",
             "kind":
-                "action",
+                "waiting",
             "section":
-                "Post-Draft",
+                "Season Status",
             "detail":
                 (
-                    "Review the final Draft Board and complete "
-                    "league handoff."
+                    "The draft is complete. No Commissioner action "
+                    "is required until the current season ends."
                 ),
         }
 
@@ -723,8 +717,6 @@ def get_commissioner_checklist_state(
             total_checks,
         "draft_phase":
             draft_phase,
-        "post_phase":
-            post_phase,
         "draft_complete":
             draft_complete,
         "offseason_complete":
@@ -1173,31 +1165,3 @@ def render_commissioner_checklist(
             "adjustments remain under Draft Operations."
         )
     # ------------------------------------------------------------
-    # POST-DRAFT — ONLY WHEN ACTIONABLE
-    # ------------------------------------------------------------
-
-    if state[
-        "draft_complete"
-    ]:
-        with st.expander(
-            "Post-Draft Checklist — Ready for closeout",
-            expanded=True,
-        ):
-            _render_check(
-                "Draft completion",
-                state="complete",
-                detail=(
-                    f"{state['completed_selection_count']}/"
-                    f"{state['expected_picks']} "
-                    "selections complete"
-                ),
-            )
-
-            _render_check(
-                "Post-draft closeout",
-                state="action",
-                detail=(
-                    "Validate final draft results and "
-                    "complete league handoff"
-                ),
-            )
