@@ -1409,3 +1409,140 @@ def commissioner_prospect_tags_delete(
             principal["email"]
         ),
     )
+
+# MLF_COMMISSIONER_CONTRACT_OVERRIDE_V1
+
+from mlf_api.contract_override_store import (
+    ContractOverrideConflict,
+    ContractOverrideRequestError,
+    get_commissioner_contract_override_state,
+    remove_commissioner_contract_override,
+    save_commissioner_contract_override,
+)
+from mlf_api.models import (
+    CommissionerContractOverrideMutationResponse,
+    CommissionerContractOverrideState,
+    CommissionerContractOverrideUpdateRequest,
+)
+
+
+@app.get(
+    "/gateway/commissioner/contract-overrides",
+    response_model=CommissionerContractOverrideState,
+)
+def commissioner_contract_overrides(
+    request: Request,
+) -> CommissionerContractOverrideState:
+    _require_commissioner_workspace(
+        request
+    )
+
+    try:
+        state = (
+            get_commissioner_contract_override_state()
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerContractOverrideState(
+        **state
+    )
+
+
+@app.post(
+    "/gateway/commissioner/contract-overrides/{yahoo_player_key}",
+    response_model=CommissionerContractOverrideMutationResponse,
+)
+def commissioner_contract_overrides_update(
+    yahoo_player_key: str,
+    payload: CommissionerContractOverrideUpdateRequest,
+    request: Request,
+) -> CommissionerContractOverrideMutationResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            save_commissioner_contract_override(
+                yahoo_player_key=
+                    yahoo_player_key,
+                team_key=
+                    payload.team_key,
+                years_remaining=
+                    payload.years_remaining,
+                note=
+                    payload.note,
+            )
+        )
+    except ContractOverrideRequestError:
+        raise _bad_request(
+            "invalid_contract_override"
+        ) from None
+    except ContractOverrideConflict:
+        raise _conflict(
+            "contract_override_state_conflict"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerContractOverrideMutationResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )
+
+
+@app.delete(
+    "/gateway/commissioner/contract-overrides/{yahoo_player_key}",
+    response_model=CommissionerContractOverrideMutationResponse,
+)
+def commissioner_contract_overrides_delete(
+    yahoo_player_key: str,
+    request: Request,
+) -> CommissionerContractOverrideMutationResponse:
+    _require_json_content_type(request)
+    _require_same_origin(request)
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            remove_commissioner_contract_override(
+                yahoo_player_key=
+                    yahoo_player_key,
+            )
+        )
+    except ContractOverrideRequestError:
+        raise _bad_request(
+            "invalid_contract_override"
+        ) from None
+    except ContractOverrideConflict:
+        raise _conflict(
+            "contract_override_state_conflict"
+        ) from None
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerContractOverrideMutationResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

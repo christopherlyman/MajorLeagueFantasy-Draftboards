@@ -236,3 +236,71 @@ class CommissionerProspectMutationResponse(BaseModel):
     keeper_assignments: int
     performed_by: str
     state: CommissionerProspectState
+
+class CommissionerContractTeam(BaseModel):
+    team_key: str
+    team_name: str
+
+
+class CommissionerContractPlayer(BaseModel):
+    yahoo_player_key: str
+    name: str
+    mlb_team: str
+    positions: list[str]
+    rank_value: float | None
+
+    active_contract_team_key: str | None
+    active_contract_team_name: str | None
+    active_contract_years_remaining: int | None
+    effective_source: str | None
+
+    prospect_team_key: str | None
+    prospect_team_name: str | None
+
+    override_exists: bool
+    override_team_key: str | None
+    override_years_remaining: int | None
+    override_note: str | None
+
+    base_contract_team_key: str | None
+    base_contract_years_remaining: int | None
+
+
+class CommissionerContractOverrideRow(BaseModel):
+    yahoo_player_key: str
+    player_name: str
+    team_key: str | None
+    team_name: str | None
+    years_remaining: int
+    note: str | None
+    updated_at_utc: str | None
+
+
+class CommissionerContractOverrideState(BaseModel):
+    draft_key: str
+    draft_status: str
+    selection_count: int
+    can_edit: bool
+    lock_reason: str | None
+    active_contract_count: int
+    override_count: int
+    void_override_count: int
+    teams: list[CommissionerContractTeam]
+    players: list[CommissionerContractPlayer]
+    overrides: list[CommissionerContractOverrideRow]
+
+
+class CommissionerContractOverrideUpdateRequest(BaseModel):
+    team_key: str | None = None
+    years_remaining: int
+    note: str | None = None
+
+
+class CommissionerContractOverrideMutationResponse(BaseModel):
+    action: str
+    team_key: str | None
+    yahoo_player_key: str
+    years_remaining: int | None
+    keeper_assignments: int
+    performed_by: str
+    state: CommissionerContractOverrideState

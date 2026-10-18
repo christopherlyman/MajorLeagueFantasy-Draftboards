@@ -28,6 +28,10 @@ import {
   CommissionerProspectTags,
 } from "../../components/CommissionerProspectTags";
 
+import {
+  CommissionerContractOverrides,
+} from "../../components/CommissionerContractOverrides";
+
 import styles from "./page.module.css";
 
 
@@ -740,20 +744,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 6
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Contract Overrides
-                </strong>
-
-                <span>
-                  Handle Commissioner contract
-                  corrections and exceptions.
-                </span>
+                <CommissionerContractOverrides />
               </div>
             </li>
 
