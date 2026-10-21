@@ -1416,7 +1416,6 @@ from mlf_api.contract_override_store import (
     ContractOverrideConflict,
     ContractOverrideRequestError,
     get_commissioner_contract_override_state,
-    remove_commissioner_contract_override,
     save_commissioner_contract_override,
 )
 from mlf_api.models import (
@@ -1481,52 +1480,6 @@ def commissioner_contract_overrides_update(
                     payload.years_remaining,
                 note=
                     payload.note,
-            )
-        )
-    except ContractOverrideRequestError:
-        raise _bad_request(
-            "invalid_contract_override"
-        ) from None
-    except ContractOverrideConflict:
-        raise _conflict(
-            "contract_override_state_conflict"
-        ) from None
-    except Exception:
-        raise _service_unavailable() from None
-
-    return CommissionerContractOverrideMutationResponse(
-        **result,
-        performed_by=str(
-            principal["email"]
-        ),
-    )
-
-
-@app.delete(
-    "/gateway/commissioner/contract-overrides/{yahoo_player_key}",
-    response_model=CommissionerContractOverrideMutationResponse,
-)
-def commissioner_contract_overrides_delete(
-    yahoo_player_key: str,
-    request: Request,
-) -> CommissionerContractOverrideMutationResponse:
-    _require_json_content_type(request)
-    _require_same_origin(request)
-    _require_commissioner_workspace(
-        request
-    )
-
-    principal = (
-        _require_commissioner_write_principal(
-            request
-        )
-    )
-
-    try:
-        result = (
-            remove_commissioner_contract_override(
-                yahoo_player_key=
-                    yahoo_player_key,
             )
         )
     except ContractOverrideRequestError:

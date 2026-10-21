@@ -7,7 +7,6 @@ from draftboard.data.db_players import (
     load_available_players,
 )
 from draftboard.data.draft_runtime import (
-    delete_contract_override_atomic,
     upsert_contract_override_atomic,
 )
 from draftboard.state.runtime import (
@@ -802,108 +801,6 @@ def save_commissioner_contract_override(
             player_key,
         "years_remaining":
             years,
-        "keeper_assignments":
-            int(keeper_assignments),
-        "state":
-            get_commissioner_contract_override_state(),
-    }
-
-
-def remove_commissioner_contract_override(
-    *,
-    yahoo_player_key: str,
-) -> dict[str, object]:
-    (
-        dsn,
-        draft_key,
-        _league_key,
-        _season_year,
-    ) = _context()
-
-    state = (
-        get_commissioner_contract_override_state()
-    )
-
-    player_key = str(
-        yahoo_player_key or ""
-    ).strip()
-
-    if not player_key:
-        raise ContractOverrideRequestError(
-            "Player is required."
-        )
-
-    override = next(
-        (
-            row
-            for row in state["overrides"]
-            if str(
-                row["yahoo_player_key"]
-            ) == player_key
-        ),
-        None,
-    )
-
-    if override is None:
-        raise ContractOverrideRequestError(
-            "Player does not have a "
-            "contract override."
-        )
-
-    player = _find_player(
-        state,
-        player_key,
-    )
-
-    if (
-        player is not None
-        and player[
-            "prospect_team_key"
-        ] is not None
-        and (
-            player[
-                "base_contract_years_remaining"
-            ]
-            or 0
-        ) > 0
-    ):
-        raise ContractOverrideConflict(
-            "Deleting this override would "
-            "reactivate a base contract for "
-            "a Prospect Tag player. Remove "
-            "the PT in Step 5 first."
-        )
-
-    try:
-        keeper_assignments = (
-            delete_contract_override_atomic(
-                dsn=dsn,
-                draft_key=draft_key,
-                yahoo_player_key=
-                    player_key,
-            )
-        )
-    except ValueError as exc:
-        raise ContractOverrideRequestError(
-            str(exc)
-        ) from exc
-    except (
-        RuntimeError,
-        psycopg.Error,
-    ) as exc:
-        raise ContractOverrideConflict(
-            str(exc)
-        ) from exc
-
-    return {
-        "action":
-            "delete",
-        "team_key":
-            override["team_key"],
-        "yahoo_player_key":
-            player_key,
-        "years_remaining":
-            None,
         "keeper_assignments":
             int(keeper_assignments),
         "state":

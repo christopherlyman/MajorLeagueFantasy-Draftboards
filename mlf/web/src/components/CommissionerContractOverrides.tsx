@@ -90,6 +90,41 @@ type MutationResponse = {
 type ActionMode = "set" | "void";
 
 
+const MLB_TEAM_SEARCH_ALIASES: Record<string, string> = {
+  AZ: "arizona diamondbacks dbacks",
+  ATH: "athletics sacramento oakland",
+  OAK: "oakland athletics",
+  ATL: "atlanta braves",
+  BAL: "baltimore orioles",
+  BOS: "boston red sox",
+  CHC: "chicago cubs",
+  CWS: "chicago white sox",
+  CIN: "cincinnati reds",
+  CLE: "cleveland guardians",
+  COL: "colorado rockies",
+  DET: "detroit tigers",
+  HOU: "houston astros",
+  KC: "kansas city royals",
+  LAA: "los angeles angels",
+  LAD: "los angeles dodgers",
+  MIA: "miami marlins",
+  MIL: "milwaukee brewers",
+  MIN: "minnesota twins",
+  NYM: "new york mets",
+  NYY: "new york yankees",
+  PHI: "philadelphia phillies",
+  PIT: "pittsburgh pirates",
+  SD: "san diego padres",
+  SF: "san francisco giants",
+  SEA: "seattle mariners",
+  STL: "st louis cardinals",
+  TB: "tampa bay rays",
+  TEX: "texas rangers",
+  TOR: "toronto blue jays",
+  WSH: "washington nationals",
+};
+
+
 const CONTRACT_YEARS = [
   1,
   2,
@@ -342,6 +377,9 @@ export function CommissionerContractOverrides() {
               const haystack = [
                 player.name,
                 player.mlb_team,
+                MLB_TEAM_SEARCH_ALIASES[
+                  player.mlb_team
+                ] ?? "",
                 ...player.positions,
                 player.yahoo_player_key,
                 player.active_contract_team_name
@@ -569,7 +607,7 @@ export function CommissionerContractOverrides() {
               + "keeper assignments rebuilt."
             )
           : (
-              "Contract override saved and "
+              "Contract correction saved and "
               + "keeper assignments rebuilt."
             ),
       );
@@ -592,153 +630,12 @@ export function CommissionerContractOverrides() {
     }
   }
 
-
-  async function deleteOverride(
-    playerKey: string,
-  ) {
-    if (
-      !state
-      || !playerKey
-      || busy
-    ) {
-      return;
-    }
-
-    const currentWriteStatus =
-      await loadWriteStatus();
-
-    if (
-      currentWriteStatus?.write_enabled
-      !== true
-    ) {
-      setMessage(
-        "Commissioner writes are locked. "
-        + "Enable the named write identity "
-        + "in Step 2 first.",
-      );
-
-      return;
-    }
-
-    const player =
-      playersByKey.get(playerKey);
-
-    const override =
-      state.overrides.find(
-        (row) => (
-          row.yahoo_player_key
-          === playerKey
-        ),
-      );
-
-    const accepted = window.confirm(
-      "Delete the Commissioner override for "
-      + `${
-          player?.name
-          ?? override?.player_name
-          ?? playerKey
-        }? `
-      + "Underlying base-contract truth, if any, "
-      + "will become effective again. "
-      + "Keeper assignments will be rebuilt.",
-    );
-
-    if (!accepted) {
-      return;
-    }
-
-    setBusy(true);
-    setMessage("");
-
-    try {
-      const response = await fetch(
-        "/gateway/commissioner/"
-        + "contract-overrides/"
-        + encodeURIComponent(
-            playerKey,
-          ),
-        {
-          method: "DELETE",
-          credentials: "same-origin",
-          headers: {
-            "content-type":
-              "application/json",
-          },
-          body: "{}",
-        },
-      );
-
-      const body =
-        await response.json();
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error(
-            "Commissioner write authorization "
-            + "expired. Enable writes again.",
-          );
-        }
-
-        if (response.status === 409) {
-          throw new Error(
-            "Deleting this override would "
-            + "create an invalid control state. "
-            + "Resolve the Prospect Tag first.",
-          );
-        }
-
-        if (response.status === 400) {
-          throw new Error(
-            "That contract override no longer exists.",
-          );
-        }
-
-        throw new Error(
-          "Contract Override deletion failed.",
-        );
-      }
-
-      const result =
-        body as MutationResponse;
-
-      setState(result.state);
-
-      if (
-        selectedPlayer === playerKey
-      ) {
-        setSelectedPlayer("");
-      }
-
-      setMessage(
-        "Contract override deleted and "
-        + "keeper assignments rebuilt.",
-      );
-
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Contract Override deletion failed.",
-      );
-
-      try {
-        await loadState();
-      } catch {
-        // Preserve original error.
-      }
-
-    } finally {
-      setBusy(false);
-    }
-  }
-
-
   if (loading) {
     return (
       <>
         <div className={styles.stepTitleRow}>
           <strong>
-            Contract Overrides
+            Contract Corrections
           </strong>
 
           <span
@@ -768,7 +665,7 @@ export function CommissionerContractOverrides() {
     <>
       <div className={styles.stepTitleRow}>
         <strong>
-          Contract Overrides
+          Contract Corrections
         </strong>
 
         <span
@@ -793,9 +690,7 @@ export function CommissionerContractOverrides() {
       </div>
 
       <span>
-        Correct contract ownership or years,
-        void an effective contract, or remove a
-        prior Commissioner override.
+        Correct contract ownership or years, or void an effective contract. Saved changes stay in effect until you make another correction.
       </span>
 
       {state && (
@@ -809,9 +704,12 @@ export function CommissionerContractOverrides() {
             </span>
 
             <span>
-              Overrides
+              Contract corrections
               <strong>
-                {state.override_count}
+                {
+                  state.override_count
+                  - state.void_override_count
+                }
               </strong>
             </span>
 
@@ -831,10 +729,7 @@ export function CommissionerContractOverrides() {
           </div>
 
           <div className={styles.tradeNotice}>
-            Contract years are 1-5. A void writes
-            years_remaining=0 and affects contract
-            control only. Prospect Tags remain
-            separate in Step 5.
+            Contract years are 1-5. Voiding a contract makes that player not under contract. Prospect Tags remain separate in Step 5.
           </div>
 
           {state.lock_reason && (
@@ -1082,27 +977,6 @@ export function CommissionerContractOverrides() {
           )}
 
           <div className={styles.ptActions}>
-            <button
-              type="button"
-              className={
-                styles.writeSecondaryButton
-              }
-              disabled={
-                !selectedPlayerState
-                  ?.override_exists
-                || busy
-                || !writeEnabled
-              }
-              onClick={() => {
-                if (selectedPlayer) {
-                  void deleteOverride(
-                    selectedPlayer,
-                  );
-                }
-              }}
-            >
-              Delete Override
-            </button>
 
             <button
               type="button"
@@ -1124,7 +998,7 @@ export function CommissionerContractOverrides() {
                 : (
                     mode === "void"
                       ? "Void Contract"
-                      : "Save Contract Override"
+                      : "Save Contract Change"
                   )}
             </button>
           </div>
@@ -1147,7 +1021,7 @@ export function CommissionerContractOverrides() {
 
           <div className={styles.ptCurrent}>
             <span>
-              Existing overrides
+              Current manual changes
             </span>
 
             <strong>
@@ -1157,7 +1031,7 @@ export function CommissionerContractOverrides() {
 
           {state.overrides.length === 0 ? (
             <div className={styles.tradeNotice}>
-              No Commissioner contract overrides
+              No manual contract changes
               are currently saved.
             </div>
           ) : (
@@ -1176,9 +1050,6 @@ export function CommissionerContractOverrides() {
                     </th>
                     <th>
                       Note
-                    </th>
-                    <th>
-                      Action
                     </th>
                   </tr>
                 </thead>
@@ -1213,25 +1084,6 @@ export function CommissionerContractOverrides() {
                           {row.note ?? "-"}
                         </td>
 
-                        <td>
-                          <button
-                            type="button"
-                            className={
-                              styles.writeSecondaryButton
-                            }
-                            disabled={
-                              busy
-                              || !writeEnabled
-                            }
-                            onClick={() => {
-                              void deleteOverride(
-                                row.yahoo_player_key,
-                              );
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </td>
                       </tr>
                     ),
                   )}
