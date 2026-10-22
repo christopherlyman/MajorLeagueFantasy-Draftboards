@@ -32,6 +32,10 @@ import {
   CommissionerContractOverrides,
 } from "../../components/CommissionerContractOverrides";
 
+import {
+  CommissionerDraftTools,
+} from "../../components/CommissionerDraftTools";
+
 import styles from "./page.module.css";
 
 
@@ -756,20 +760,15 @@ export default async function CommissionerPage() {
               </div>
             </li>
 
-            <li className={styles.operationStep}>
+            <li
+              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+            >
               <span className={styles.stepNumber}>
                 7
               </span>
 
               <div className={styles.stepContent}>
-                <strong>
-                  Draft Tools
-                </strong>
-
-                <span>
-                  Run live-draft controls and
-                  Commissioner corrections.
-                </span>
+                <CommissionerDraftTools />
               </div>
             </li>
           </ol>

@@ -1499,3 +1499,229 @@ def commissioner_contract_overrides_update(
             principal["email"]
         ),
     )
+
+
+# MLF_COMMISSIONER_DRAFT_TOOLS_V1
+
+from mlf_api.draft_tools_store import (
+    clear_commissioner_draft_selection,
+    get_commissioner_draft_tools_state,
+    set_commissioner_current_pick,
+    update_commissioner_draft_clock,
+)
+from mlf_api.models import (
+    CommissionerDraftToolsClearPickRequest,
+    CommissionerDraftToolsClockRequest,
+    CommissionerDraftToolsCurrentPickRequest,
+    CommissionerDraftToolsMutationResponse,
+    CommissionerDraftToolsState,
+)
+
+
+@app.get(
+    "/gateway/commissioner/draft-tools",
+    response_model=CommissionerDraftToolsState,
+)
+def commissioner_draft_tools(
+    request: Request,
+) -> CommissionerDraftToolsState:
+    _require_commissioner_workspace(
+        request
+    )
+
+    try:
+        state = (
+            get_commissioner_draft_tools_state()
+        )
+    except Exception:
+        raise _service_unavailable() from None
+
+    return CommissionerDraftToolsState(
+        **state
+    )
+
+
+@app.post(
+    "/gateway/commissioner/"
+    "draft-tools/current-pick",
+    response_model=
+        CommissionerDraftToolsMutationResponse,
+)
+def commissioner_draft_tools_current_pick(
+    payload:
+        CommissionerDraftToolsCurrentPickRequest,
+    request: Request,
+) -> CommissionerDraftToolsMutationResponse:
+    _require_json_content_type(
+        request
+    )
+    _require_same_origin(
+        request
+    )
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            set_commissioner_current_pick(
+                pick_id=payload.pick_id,
+            )
+        )
+
+    except ValueError:
+        raise _bad_request(
+            "invalid_draft_tool_request"
+        ) from None
+
+    except psycopg.errors.RaiseException:
+        raise _conflict(
+            "draft_tool_state_conflict"
+        ) from None
+
+    except (
+        psycopg.Error,
+        RuntimeError,
+    ):
+        raise _service_unavailable() from None
+
+    return (
+        CommissionerDraftToolsMutationResponse(
+            **result,
+            performed_by=str(
+                principal["email"]
+            ),
+        )
+    )
+
+
+@app.post(
+    "/gateway/commissioner/"
+    "draft-tools/clock",
+    response_model=
+        CommissionerDraftToolsMutationResponse,
+)
+def commissioner_draft_tools_clock(
+    payload:
+        CommissionerDraftToolsClockRequest,
+    request: Request,
+) -> CommissionerDraftToolsMutationResponse:
+    _require_json_content_type(
+        request
+    )
+    _require_same_origin(
+        request
+    )
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            update_commissioner_draft_clock(
+                action=payload.action,
+                seconds_per_pick=
+                    payload.seconds_per_pick,
+                weekends_count=
+                    payload.weekends_count,
+            )
+        )
+
+    except ValueError:
+        raise _bad_request(
+            "invalid_draft_tool_request"
+        ) from None
+
+    except psycopg.errors.RaiseException:
+        raise _conflict(
+            "draft_tool_state_conflict"
+        ) from None
+
+    except (
+        psycopg.Error,
+        RuntimeError,
+    ):
+        raise _service_unavailable() from None
+
+    return (
+        CommissionerDraftToolsMutationResponse(
+            **result,
+            performed_by=str(
+                principal["email"]
+            ),
+        )
+    )
+
+
+@app.post(
+    "/gateway/commissioner/"
+    "draft-tools/clear-pick",
+    response_model=
+        CommissionerDraftToolsMutationResponse,
+)
+def commissioner_draft_tools_clear_pick(
+    payload:
+        CommissionerDraftToolsClearPickRequest,
+    request: Request,
+) -> CommissionerDraftToolsMutationResponse:
+    _require_json_content_type(
+        request
+    )
+    _require_same_origin(
+        request
+    )
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            clear_commissioner_draft_selection(
+                pick_id=payload.pick_id,
+                rewind_clock=
+                    payload.rewind_clock,
+            )
+        )
+
+    except ValueError:
+        raise _bad_request(
+            "invalid_draft_tool_request"
+        ) from None
+
+    except psycopg.errors.RaiseException:
+        raise _conflict(
+            "draft_tool_state_conflict"
+        ) from None
+
+    except (
+        psycopg.Error,
+        RuntimeError,
+    ):
+        raise _service_unavailable() from None
+
+    return (
+        CommissionerDraftToolsMutationResponse(
+            **result,
+            performed_by=str(
+                principal["email"]
+            ),
+        )
+    )

@@ -304,3 +304,76 @@ class CommissionerContractOverrideMutationResponse(BaseModel):
     keeper_assignments: int
     performed_by: str
     state: CommissionerContractOverrideState
+
+
+# MLF_COMMISSIONER_DRAFT_TOOLS_V1
+
+
+class CommissionerDraftToolPick(BaseModel):
+    pick_id: str
+    round_number: int
+    slot_number: int
+
+    current_owner_team_key: str
+    current_owner_team_name: str
+
+    selected_player_key: str | None = None
+    selected_player_name: str | None = None
+    pick_kind: str | None = None
+    selected_at_utc: str | None = None
+
+
+class CommissionerDraftToolsState(BaseModel):
+    draft_key: str
+    draft_status: str
+
+    current_pick_id: str | None
+
+    is_running: bool
+    pick_started_at_utc: str | None
+    pick_paused_at_utc: str | None
+    elapsed_paused_seconds: int
+
+    seconds_per_pick: int
+    weekends_count: bool
+    timezone_name: str
+
+    selection_count: int
+    open_pick_count: int
+
+    open_picks: list[
+        CommissionerDraftToolPick
+    ]
+    selected_picks: list[
+        CommissionerDraftToolPick
+    ]
+
+
+class CommissionerDraftToolsCurrentPickRequest(
+    BaseModel
+):
+    pick_id: str
+
+
+class CommissionerDraftToolsClockRequest(
+    BaseModel
+):
+    action: str
+    seconds_per_pick: int | None = None
+    weekends_count: bool | None = None
+
+
+class CommissionerDraftToolsClearPickRequest(
+    BaseModel
+):
+    pick_id: str
+    rewind_clock: bool = True
+
+
+class CommissionerDraftToolsMutationResponse(
+    BaseModel
+):
+    action: str
+    result: str
+    performed_by: str
+    state: CommissionerDraftToolsState
