@@ -848,6 +848,112 @@ def render_commissioner_checklist(
         )
 
     # ------------------------------------------------------------
+    # SEASON TRANSITION GUIDE
+    # ------------------------------------------------------------
+
+    with st.expander(
+        "Season Transition Guide - End of Season -> Next Draft",
+        expanded=False,
+    ):
+        st.markdown(
+            """
+**Use this sequence after the current fantasy season ends and before the next draft begins.**
+
+**1. Finish the current season**
+
+**External action - Yahoo**
+- Confirm final standings, champion, and final rosters in Yahoo.
+
+**Draft Board action - NONE**
+- Do not change anything in NFHL.
+- Leave the current season in **Season Active**.
+- Do not initialize or start a new Draft Board.
+
+**2. Refresh next-season league membership**
+
+**External action - Yahoo**
+- Make sure the new-season Yahoo league contains the expected teams.
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner**.
+2. Open **League Setup & Roll Call**.
+3. Click **Refresh Yahoo League Teams**.
+
+**Done when:** Yahoo Membership shows the expected team count.
+
+**3. Resolve managers and team assignments**
+
+**Draft Board action - DO THIS ONLY IF NEEDED**
+1. In **Commissioner -> League Setup & Roll Call**, click **Refresh Yahoo League Teams**. This also performs the automatic team matching.
+2. If an exception remains, use **Resolve Roll Call Exception** to associate the current Yahoo manager with the correct prior-season slot.
+3. Open **Manager Access** and verify each team has an active manager link.
+
+**Done when:** Roll Call is complete and Manager Access is ready.
+
+**4. Refresh player data**
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner -> League Setup & Roll Call**.
+2. Click **Refresh Available Players**.
+3. Wait for the refresh to complete.
+
+**Done when:** the player universe is populated with current-season Yahoo data.
+
+**5. Verify the new draft configuration**
+
+**Draft Board action - VERIFY ONLY**
+1. Open **Commissioner -> Draft Setup**.
+2. Verify:
+   - **Teams** = expected number.
+   - **Rounds** = expected number.
+   - **Order** = approved draft order mode.
+   - **Draft Board** = `0 / expected picks`.
+
+**Done when:** the configuration matches the league rules.
+
+**If something is wrong:** stop here. Do not proceed to the lottery.
+
+**6. Run and finalize the draft lottery**
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner -> Draft Setup**.
+2. If lottery status is **Not started**, click **Initialize Draft Lottery**.
+3. Reveal each position using the displayed **Reveal Pick N** button.
+4. When all positions are revealed, check the confirmation that you approve the fully revealed lottery order and want to build the production Draft Board.
+5. Click **Finalize Lottery & Build Draft Board**.
+
+**Done when:** the lottery is finalized and the production Draft Board is initialized.
+
+**7. Verify the new Draft Board**
+
+**Draft Board action - DO THIS**
+1. In **Commissioner -> Draft Setup**, verify the board shows the expected number of picks and that the production Draft Board is initialized.
+2. Open the **Draft Board** tab.
+3. Verify:
+   - Every team is present.
+   - Draft order is correct.
+   - Number of rounds/picks is correct.
+   - First pick is correct.
+
+**Important:** Do not look for a separate "Initialize NFHL Draft Board" action. Finalizing the lottery builds the production Draft Board.
+
+**8. Start the new draft**
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner -> Draft Operations**.
+2. Under **NFHL Slow Draft Clock**, set **Pick duration** to **24 hours**.
+3. Click **Save Clock Rule**.
+4. Verify the message **Draft clock configuration is active.**
+5. Check the confirmation that the Draft Board is correct and you want to start the NFHL draft.
+6. Click **Start NFHL Draft**.
+
+**Done when:** the draft enters **ACTIVE** and the first pick is on the clock.
+
+> **Important:** Completing the current draft does **not** mean the next season should be started automatically. The current season remains **Season Active** until the commissioner deliberately begins the next-season preparation process.
+"""
+        )
+
+    # ------------------------------------------------------------
     # OFFSEASON
     # ------------------------------------------------------------
 
