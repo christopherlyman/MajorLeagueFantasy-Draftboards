@@ -377,3 +377,22 @@ class CommissionerDraftToolsMutationResponse(
     result: str
     performed_by: str
     state: CommissionerDraftToolsState
+
+
+# MLF_COMMISSIONER_RECOVERY_V1
+
+
+class CommissionerDraftResetRequest(
+    BaseModel
+):
+    confirmation: str
+
+
+class CommissionerDraftResetResponse(
+    BaseModel
+):
+    action: str
+    result: str
+    cleared_selection_count: int
+    performed_by: str
+    state: CommissionerDraftToolsState

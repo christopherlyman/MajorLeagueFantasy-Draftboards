@@ -1725,3 +1725,73 @@ def commissioner_draft_tools_clear_pick(
             ),
         )
     )
+
+
+# MLF_COMMISSIONER_RECOVERY_V1
+
+from mlf_api.models import (
+    CommissionerDraftResetRequest,
+    CommissionerDraftResetResponse,
+)
+from mlf_api.recovery_store import (
+    reset_commissioner_draft,
+)
+
+
+@app.post(
+    "/gateway/commissioner/"
+    "recovery/reset-draft",
+    response_model=
+        CommissionerDraftResetResponse,
+)
+def commissioner_reset_draft(
+    payload:
+        CommissionerDraftResetRequest,
+    request: Request,
+) -> CommissionerDraftResetResponse:
+    _require_json_content_type(
+        request
+    )
+    _require_same_origin(
+        request
+    )
+    _require_commissioner_workspace(
+        request
+    )
+
+    principal = (
+        _require_commissioner_write_principal(
+            request
+        )
+    )
+
+    try:
+        result = (
+            reset_commissioner_draft(
+                confirmation=
+                    payload.confirmation,
+            )
+        )
+
+    except ValueError:
+        raise _bad_request(
+            "reset_confirmation_required"
+        ) from None
+
+    except psycopg.errors.RaiseException:
+        raise _conflict(
+            "draft_reset_conflict"
+        ) from None
+
+    except (
+        psycopg.Error,
+        RuntimeError,
+    ):
+        raise _service_unavailable() from None
+
+    return CommissionerDraftResetResponse(
+        **result,
+        performed_by=str(
+            principal["email"]
+        ),
+    )

@@ -36,6 +36,10 @@ import {
   CommissionerDraftTools,
 } from "../../components/CommissionerDraftTools";
 
+import {
+  CommissionerRecoveryDangerZone,
+} from "../../components/CommissionerRecoveryDangerZone";
+
 import styles from "./page.module.css";
 
 
@@ -788,12 +792,7 @@ export default async function CommissionerPage() {
           </summary>
 
           <div className={styles.toolBody}>
-            <p className={styles.toolIntro}>
-              Destructive and recovery actions
-              remain unavailable here until their
-              authenticated mutation boundaries
-              are migrated and proven.
-            </p>
+            <CommissionerRecoveryDangerZone />
           </div>
         </details>
       </section>
