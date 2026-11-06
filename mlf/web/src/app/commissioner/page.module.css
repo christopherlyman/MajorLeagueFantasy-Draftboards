@@ -641,10 +641,6 @@
 }
 /* Set Draft Order state panel */
 
-.operationStepExpanded {
-  padding-bottom: 24px;
-}
-
 .stepTitleRow {
   display: flex;
   align-items: center;
@@ -1484,4 +1480,16 @@
     align-items: stretch;
     flex-direction: column;
   }
+}
+
+/* Collapsible Commissioner Operations */
+
+.operationDisclosure {
+  width: 100%;
+  min-width: 0;
+}
+
+.operationDisclosureBody {
+  padding: 18px;
+  background: #11161c;
 }

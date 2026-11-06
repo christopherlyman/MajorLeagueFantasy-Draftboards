@@ -597,12 +597,22 @@ export default async function CommissionerPage() {
 
           <ol className={styles.operationSteps}>
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 1
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Set Draft Order
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <div className={styles.stepTitleRow}>
                   <strong>
@@ -702,78 +712,152 @@ export default async function CommissionerPage() {
                   </div>
                 )}
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 2
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Yahoo Player Universe & Commissioner Writes
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerYahooRefresh />
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 3
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Trade Builder
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerTradeBuilder />
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 4
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Qualifying Offers
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerQualifyingOffers />
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 5
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Prospect Tags
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerProspectTags />
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 6
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Contract Corrections
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerContractOverrides />
               </div>
+                </div>
+              </details>
             </li>
 
             <li
-              className={`${styles.operationStep} ${styles.operationStepExpanded}`}
+              className={styles.operationStep}
             >
               <span className={styles.stepNumber}>
                 7
               </span>
 
+              <details
+                className={`${styles.tool} ${styles.operationDisclosure}`}
+              >
+                <summary>
+                  <span>
+                    Draft Tools
+                  </span>
+                </summary>
+
+                <div className={styles.operationDisclosureBody}>
               <div className={styles.stepContent}>
                 <CommissionerDraftTools />
               </div>
+                </div>
+              </details>
             </li>
           </ol>
         </section>
