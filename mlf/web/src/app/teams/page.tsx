@@ -1,5 +1,9 @@
 import Link from "next/link";
 
+import {
+  cookies,
+} from "next/headers";
+
 import { AppShell } from "../../components/AppShell";
 
 import {
@@ -18,6 +22,21 @@ export const dynamic = "force-dynamic";
 const DRAFT_KEY =
   process.env.DRAFTBOARD_DRAFT_KEY ??
   "mlf_2026_preseason";
+
+
+const API_BASE_URL =
+  (
+    process.env.MLF_API_INTERNAL_URL
+    ?? "http://mlf_api:8000"
+  ).replace(/\/+$/, "");
+
+
+type GatewayPrincipal = {
+  is_authenticated: boolean;
+  role: "public" | "manager";
+  team_key: string | null;
+};
+
 
 type SearchParams = {
   team?: string | string[];
@@ -820,11 +839,67 @@ function ContractHistorySection({
   );
 }
 
+async function loadManagerTeamKey(): Promise<string> {
+  try {
+    const cookieStore = await cookies();
+
+    const cookieHeader = cookieStore
+      .getAll()
+      .map(
+        ({ name, value }) =>
+          `${name}=${value}`,
+      )
+      .join("; ");
+
+    if (!cookieHeader) {
+      return "";
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/auth/me`,
+      {
+        method: "GET",
+        headers: {
+          cookie: cookieHeader,
+        },
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return "";
+    }
+
+    const principal =
+      await response.json() as GatewayPrincipal;
+
+    if (
+      principal.is_authenticated !== true
+      || principal.role !== "manager"
+      || !principal.team_key
+    ) {
+      return "";
+    }
+
+    return principal.team_key;
+  } catch {
+    return "";
+  }
+}
+
+
 export default async function TeamsPage({
   searchParams,
 }: TeamsPageProps) {
   const params = await searchParams;
-  const teams = await loadTeams(DRAFT_KEY);
+
+  const [
+    teams,
+    managerTeamKey,
+  ] = await Promise.all([
+    loadTeams(DRAFT_KEY),
+    loadManagerTeamKey(),
+  ]);
 
   const requestedTeam =
     first(params.team);
@@ -833,6 +908,10 @@ export default async function TeamsPage({
     teams.find(
       (team) =>
         team.teamKey === requestedTeam,
+    ) ??
+    teams.find(
+      (team) =>
+        team.teamKey === managerTeamKey,
     ) ??
     teams[0];
 
