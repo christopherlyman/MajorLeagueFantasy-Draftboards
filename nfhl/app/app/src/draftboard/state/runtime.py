@@ -339,6 +339,284 @@ def get_runtime_context() -> dict[str, Any]:
     )
 
 
+
+_RUNTIME_SWITCHABLE_STATUSES = {
+    "PREP",
+    "SETUP",
+    "ACTIVE",
+    "COMPLETE",
+}
+
+
+def get_runtime_drafts() -> list[dict[str, Any]]:
+    """
+    Return validated persisted NFHL drafts that may be selected
+    as the application runtime.
+
+    Archived drafts are excluded.
+    """
+    with psycopg.connect(
+        get_postgres_dsn(),
+        row_factory=dict_row,
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    d.draft_key,
+                    d.league_key,
+                    d.season_year,
+                    d.draft_label,
+                    d.manager_count,
+                    d.rounds_total,
+                    d.draft_order_mode,
+                    d.status AS draft_status,
+
+                    dc.config_version,
+                    dc.config_json
+
+                FROM nfhl.draft d
+
+                JOIN nfhl.draft_config dc
+                  ON dc.draft_key = d.draft_key
+
+                WHERE d.status <> 'ARCHIVED'
+
+                ORDER BY
+                    d.season_year DESC,
+                    d.draft_key DESC
+                """
+            )
+
+            rows = list(
+                cur.fetchall()
+            )
+
+    return [
+        _validate_runtime_row(
+            dict(row)
+        )
+        for row in rows
+    ]
+
+
+def switch_runtime_context(
+    draft_key: str,
+    *,
+    actor: str = "commissioner",
+) -> dict[str, Any]:
+    """
+    Explicitly switch the NFHL application runtime pointer.
+
+    This is pointer-only:
+      - nfhl.draft status is never changed.
+      - draft selections are never changed.
+      - draft configuration is never changed.
+
+    Forward activation requires the current runtime draft to be
+    COMPLETE.
+
+    Rollback to an older season requires the target draft to be
+    COMPLETE, allowing a future PREP/SETUP/ACTIVE season to be
+    abandoned operationally while preserving its persisted state.
+    """
+    target_key = str(
+        draft_key or ""
+    ).strip()
+
+    if not target_key:
+        raise ValueError(
+            "A target NFHL draft_key is required."
+        )
+
+    actor_value = (
+        str(
+            actor or ""
+        ).strip()
+        or "commissioner"
+    )
+
+    with psycopg.connect(
+        get_postgres_dsn(),
+        row_factory=dict_row,
+    ) as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+
+                # Serialize all NFHL runtime switches.
+                cur.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended(%s, 0)
+                    )
+                    """,
+                    (
+                        _CONTEXT_KEY,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    SELECT
+                        active_draft_key
+                    FROM nfhl.runtime_context
+                    WHERE context_key = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        _CONTEXT_KEY,
+                    ),
+                )
+
+                current_row = cur.fetchone()
+
+                if current_row is None:
+                    raise RuntimeError(
+                        "NFHL runtime context row does not exist."
+                    )
+
+                current_key = str(
+                    current_row["active_draft_key"]
+                ).strip()
+
+                if current_key == target_key:
+                    raise ValueError(
+                        "The requested NFHL draft is already active."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT
+                        d.draft_key,
+                        d.league_key,
+                        d.season_year,
+                        d.draft_label,
+                        d.manager_count,
+                        d.rounds_total,
+                        d.draft_order_mode,
+                        d.status AS draft_status,
+
+                        dc.config_version,
+                        dc.config_json
+
+                    FROM nfhl.draft d
+
+                    JOIN nfhl.draft_config dc
+                      ON dc.draft_key = d.draft_key
+
+                    WHERE d.draft_key = %s
+
+                    FOR UPDATE OF d, dc
+                    """,
+                    (
+                        target_key,
+                    ),
+                )
+
+                target_row = cur.fetchone()
+
+                if target_row is None:
+                    raise ValueError(
+                        "Target NFHL draft does not have a valid "
+                        "draft/config pair."
+                    )
+
+                target_context = _validate_runtime_row(
+                    dict(target_row)
+                )
+
+                target_status = str(
+                    target_context["draft_status"]
+                ).strip().upper()
+
+                if target_status not in _RUNTIME_SWITCHABLE_STATUSES:
+                    raise ValueError(
+                        "Target NFHL draft status is not switchable: "
+                        f"{target_status or 'UNKNOWN'}."
+                    )
+
+                cur.execute(
+                    """
+                    SELECT
+                        season_year,
+                        status
+                    FROM nfhl.draft
+                    WHERE draft_key = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        current_key,
+                    ),
+                )
+
+                current_draft = cur.fetchone()
+
+                if current_draft is None:
+                    raise RuntimeError(
+                        "Current NFHL runtime draft no longer exists."
+                    )
+
+                current_year = int(
+                    current_draft["season_year"]
+                )
+
+                current_status = str(
+                    current_draft["status"]
+                    or ""
+                ).strip().upper()
+
+                target_year = int(
+                    target_context["season_year"]
+                )
+
+                if target_year > current_year:
+                    if current_status != "COMPLETE":
+                        raise ValueError(
+                            "Forward NFHL season activation requires "
+                            "the current runtime draft to be COMPLETE."
+                        )
+
+                elif target_year < current_year:
+                    if target_status != "COMPLETE":
+                        raise ValueError(
+                            "NFHL rollback requires the target prior "
+                            "season draft to be COMPLETE."
+                        )
+
+                else:
+                    raise ValueError(
+                        "NFHL runtime switching between drafts in the "
+                        "same season is not supported."
+                    )
+
+                cur.execute(
+                    """
+                    UPDATE nfhl.runtime_context
+                    SET
+                        active_draft_key = %s,
+                        updated_at_utc = now(),
+                        updated_by = %s
+                    WHERE context_key = %s
+                    """,
+                    (
+                        target_key,
+                        actor_value,
+                        _CONTEXT_KEY,
+                    ),
+                )
+
+    clear_runtime_context_cache()
+
+    return {
+        "previous_draft_key": current_key,
+        "previous_season_year": current_year,
+        "draft_key": target_context["draft_key"],
+        "season_year": target_context["season_year"],
+        "draft_label": target_context["draft_label"],
+        "draft_status": target_context["draft_status"],
+    }
+
+
 def clear_runtime_context_cache() -> None:
     """
     Invalidate process-local season context after a supported rollover.

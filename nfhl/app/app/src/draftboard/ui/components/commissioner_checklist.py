@@ -19,6 +19,12 @@ from draftboard.data.season_team_slots import (
     get_season_team_slots,
 )
 
+from draftboard.state.runtime import (
+    get_runtime_context,
+    get_runtime_drafts,
+    switch_runtime_context,
+)
+
 
 _COMPLETE_STATUSES = {
     "COMPLETE",
@@ -848,6 +854,186 @@ def render_commissioner_checklist(
         )
 
     # ------------------------------------------------------------
+    # SEASON RUNTIME
+    # ------------------------------------------------------------
+
+    runtime_notice = st.session_state.pop(
+        "nfhl_runtime_switch_notice",
+        None,
+    )
+
+    if runtime_notice:
+        st.success(
+            str(runtime_notice)
+        )
+
+    with st.expander(
+        "Season Runtime",
+        expanded=False,
+    ):
+        current_runtime = get_runtime_context()
+        runtime_drafts = get_runtime_drafts()
+
+        st.markdown(
+            "**Current runtime season:** "
+            f"**{current_runtime['season_year']}** — "
+            f"{current_runtime['draft_label']} "
+            f"(`{current_runtime['draft_status']}`)"
+        )
+
+        st.caption(
+            "Changing the runtime season changes only which "
+            "persisted draft the Draft Board serves. Draft "
+            "lifecycle status and historical draft data are not "
+            "changed."
+        )
+
+        draft_keys = [
+            draft["draft_key"]
+            for draft in runtime_drafts
+        ]
+
+        if len(draft_keys) <= 1:
+            st.info(
+                "No other persisted NFHL season is available "
+                "to activate or restore."
+            )
+
+        else:
+            draft_by_key = {
+                draft["draft_key"]: draft
+                for draft in runtime_drafts
+            }
+
+            current_key = current_runtime[
+                "draft_key"
+            ]
+
+            selected_key = st.selectbox(
+                "Target season",
+                options=draft_keys,
+                index=(
+                    draft_keys.index(current_key)
+                    if current_key in draft_keys
+                    else 0
+                ),
+                format_func=lambda key: (
+                    f"{draft_by_key[key]['season_year']} — "
+                    f"{draft_by_key[key]['draft_label']} "
+                    f"({draft_by_key[key]['draft_status']})"
+                ),
+                key="nfhl_runtime_target_draft",
+            )
+
+            target = draft_by_key[
+                selected_key
+            ]
+
+            if selected_key != current_key:
+                target_year = int(
+                    target["season_year"]
+                )
+                current_year = int(
+                    current_runtime["season_year"]
+                )
+                target_status = str(
+                    target["draft_status"]
+                    or ""
+                ).strip().upper()
+
+                if target_year > current_year:
+                    action_label = "Activate Season"
+                    allowed = (
+                        str(
+                            current_runtime["draft_status"]
+                            or ""
+                        ).strip().upper()
+                        == "COMPLETE"
+                    )
+
+                    if not allowed:
+                        st.warning(
+                            "Forward activation is locked until "
+                            "the current runtime draft is COMPLETE."
+                        )
+
+                    confirmation_text = (
+                        f"I confirm I want to activate the "
+                        f"{target_year} NFHL season."
+                    )
+
+                elif target_year < current_year:
+                    action_label = (
+                        "Return to Previous Season"
+                    )
+                    allowed = (
+                        target_status == "COMPLETE"
+                    )
+
+                    if not allowed:
+                        st.warning(
+                            "Rollback is available only to a "
+                            "completed prior season."
+                        )
+
+                    confirmation_text = (
+                        f"I confirm I want to return the NFHL "
+                        f"runtime to {target_year}."
+                    )
+
+                else:
+                    action_label = "Switch Season"
+                    allowed = False
+                    confirmation_text = ""
+
+                    st.warning(
+                        "Runtime switching between drafts in "
+                        "the same season is not supported."
+                    )
+
+                if allowed:
+                    confirmed = st.checkbox(
+                        confirmation_text,
+                        key=(
+                            "nfhl_confirm_runtime_switch_"
+                            f"{selected_key}"
+                        ),
+                    )
+
+                    if st.button(
+                        action_label,
+                        type="primary",
+                        use_container_width=True,
+                        disabled=not confirmed,
+                        key="nfhl_runtime_switch",
+                    ):
+                        try:
+                            result = (
+                                switch_runtime_context(
+                                    selected_key,
+                                    actor="commissioner_link",
+                                )
+                            )
+
+                        except Exception as exc:
+                            st.error(
+                                "NFHL season runtime switch failed: "
+                                f"{exc}"
+                            )
+
+                        else:
+                            st.cache_data.clear()
+
+                            st.session_state[
+                                "nfhl_runtime_switch_notice"
+                            ] = (
+                                "NFHL runtime switched to "
+                                f"{result['season_year']}."
+                            )
+
+                            st.rerun()
+
+    # ------------------------------------------------------------
     # SEASON TRANSITION GUIDE
     # ------------------------------------------------------------
 
@@ -911,9 +1097,31 @@ def render_commissioner_checklist(
 
 **Done when:** the configuration matches the league rules.
 
-**If something is wrong:** stop here. Do not proceed to the lottery.
+**If something is wrong:** stop here. Do not proceed to runtime activation or the lottery.
 
-**6. Run and finalize the draft lottery**
+**6. Activate the new season runtime**
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner -> Season Runtime**.
+2. Select the new season under **Target season**.
+3. Check the confirmation that you want to activate the new season.
+4. Click **Activate Season**.
+5. Verify that **Current runtime season** now shows the new season.
+
+**Done when:** the new season is the current runtime season.
+
+**Rollback if needed**
+
+**Draft Board action - DO THIS**
+1. Open **Commissioner -> Season Runtime**.
+2. Select the prior completed season under **Target season**.
+3. Check the confirmation that you want to return to that season.
+4. Click **Return to Previous Season**.
+5. Verify that **Current runtime season** shows the prior season again.
+
+**Important:** Runtime switching changes only the active runtime pointer. It does not change draft status, draft selections, or historical draft data.
+
+**7. Run and finalize the draft lottery**
 
 **Draft Board action - DO THIS**
 1. Open **Commissioner -> Draft Setup**.
@@ -924,7 +1132,7 @@ def render_commissioner_checklist(
 
 **Done when:** the lottery is finalized and the production Draft Board is initialized.
 
-**7. Verify the new Draft Board**
+**8. Verify the new Draft Board**
 
 **Draft Board action - DO THIS**
 1. In **Commissioner -> Draft Setup**, verify the board shows the expected number of picks and that the production Draft Board is initialized.
@@ -937,7 +1145,7 @@ def render_commissioner_checklist(
 
 **Important:** Do not look for a separate "Initialize NFHL Draft Board" action. Finalizing the lottery builds the production Draft Board.
 
-**8. Start the new draft**
+**9. Start the new draft**
 
 **Draft Board action - DO THIS**
 1. Open **Commissioner -> Draft Operations**.
