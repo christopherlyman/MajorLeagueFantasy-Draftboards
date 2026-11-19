@@ -11,60 +11,72 @@
 }
 
 .appHeader {
-  min-height: 64px;
+  min-height: 92px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 10px 18px;
-  border-bottom: 1px solid #2c3038;
+  gap: 24px;
+  padding: 15px 24px;
+  border-bottom: 1px solid #343942;
   background:
+    radial-gradient(
+      circle at 18% -80%,
+      rgb(217 20 27 / 18%) 0%,
+      transparent 46%
+    ),
     linear-gradient(
       180deg,
-      #17191d 0%,
+      #1b1e23 0%,
       #101216 100%
     );
+  box-shadow:
+    inset 0 3px 0 #d9141b,
+    0 8px 24px rgb(0 0 0 / 24%);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 17px;
 }
 
 .brandMark {
-  width: 42px;
-  height: 42px;
+  width: 62px;
+  height: 62px;
   display: grid;
   place-items: center;
-  border: 2px solid #d9141b;
-  border-radius: 9px;
-  background: #27282c;
+  border: 2px solid #e11d26;
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      145deg,
+      #32353b 0%,
+      #1a1d22 100%
+    );
   color: #ffffff;
-  font-size: 0.86rem;
+  font-size: 1.08rem;
   font-weight: 950;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.07em;
   box-shadow:
-    inset 0 -3px 0 #a90c12,
-    0 2px 8px rgb(0 0 0 / 35%);
+    inset 0 -4px 0 #a90c12,
+    0 5px 16px rgb(0 0 0 / 42%);
 }
 
 .brandTitle {
-  font-size: 1rem;
-  line-height: 1.1;
+  font-size: 1.38rem;
+  line-height: 1.06;
   font-weight: 900;
+  letter-spacing: 0.01em;
 }
 
 .brandSubtitle {
-  margin-top: 3px;
-  color: #9ca3af;
-  font-size: 0.73rem;
+  margin-top: 6px;
+  color: #b6beca;
+  font-size: 0.75rem;
   line-height: 1;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
 }
 
-.previewBadge,
 .readOnly {
   flex: 0 0 auto;
   border: 1px solid #475569;
@@ -75,10 +87,6 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-}
-
-.previewBadge {
-  padding: 6px 9px;
 }
 
 .tabs {
@@ -436,10 +444,6 @@
     font-size: 0.9rem;
   }
 
-  .previewBadge {
-    font-size: 0.6rem;
-  }
-
   .content {
     padding-top: 14px;
   }
@@ -502,11 +506,6 @@
 
   .brandSubtitle {
     font-size: 0.62rem;
-  }
-
-  .previewBadge {
-    padding: 5px 6px;
-    font-size: 0.55rem;
   }
 
   .tabs {

@@ -172,7 +172,7 @@ export default async function DraftLotteryPage() {
 
       <div className={styles.note}>
         Draft-order changes are commissioner-only and are
-        intentionally excluded from this read-only preview.
+        intentionally excluded from this view.
       </div>
     </AppShell>
   );

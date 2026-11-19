@@ -119,7 +119,7 @@ export async function AppShell({
   activePath,
   title,
   subtitle,
-  badge = "Read-only preview",
+  badge = "2026 Season",
   children,
 }: AppShellProps) {
   const commissioner =
@@ -150,14 +150,11 @@ export async function AppShell({
             </div>
 
             <div className={styles.brandSubtitle}>
-              Draft Board
+              Fantasy Baseball · 2026
             </div>
           </div>
         </div>
 
-        <div className={styles.previewBadge}>
-          Next.js Preview
-        </div>
       </header>
 
       <nav

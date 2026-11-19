@@ -432,7 +432,7 @@ export default async function Home() {
       activePath="/"
       title="Draft Board"
       subtitle={"2026 MLF \u00b7 16 teams \u00b7 25 rounds"}
-      badge="Read-only preview"
+      badge="2026 Season"
     >
         <div
           className={
